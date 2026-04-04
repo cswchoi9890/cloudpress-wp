@@ -143,7 +143,7 @@ async function loadSites(){
   }
   el.innerHTML=sites.map(s=>{
     const st=CP.statusBadge(s.status);
-    const url=s.custom_domain?`https://${s.custom_domain}`:(s.cms_url||`https://${s.subdomain}.cloudpress.site`);
+    const url=s.custom_domain?`https://${s.custom_domain}`:(s.cms_url||`https://${s.subdomain}.pages.dev`);
     const adminUrl=s.cms_admin_url||url+'/cms-admin';
     const ver=s.cms_version?`<span class="ver-badge">v${CP.escHtml(s.cms_version)}</span>`:'';
     return `<div class="site-card">
