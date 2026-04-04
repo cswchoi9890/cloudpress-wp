@@ -29,7 +29,7 @@ function detectPersonalInfo(str) {
 }
 
 /* ── DB 자동 초기화 ── */
-async function ensureSchema(DB) {
+async function ensureSchema(DB, env) {
   const stmts = [
     `CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY,name TEXT NOT NULL,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,role TEXT NOT NULL DEFAULT 'user',plan TEXT NOT NULL DEFAULT 'free',plan_expires_at INTEGER,cf_global_api_key TEXT,cf_account_email TEXT,cf_account_id TEXT,twofa_type TEXT DEFAULT NULL,twofa_secret TEXT DEFAULT NULL,twofa_enabled INTEGER DEFAULT 0,twofa_pending_code TEXT DEFAULT NULL,twofa_code_expires INTEGER DEFAULT NULL,created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
     `CREATE TABLE IF NOT EXISTS sites (id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,name TEXT NOT NULL,subdomain TEXT UNIQUE NOT NULL,custom_domain TEXT,cms_url TEXT,cms_admin_url TEXT,cms_username TEXT DEFAULT 'admin',cms_password TEXT,cms_version TEXT DEFAULT 'latest',cf_zone_id TEXT,cf_pages_project TEXT,cf_kv_namespace TEXT,cf_d1_database TEXT,vps_container_id TEXT,db_name TEXT,db_user TEXT,db_password TEXT,status TEXT NOT NULL DEFAULT 'provisioning',php_version TEXT DEFAULT '8.3',region TEXT DEFAULT 'auto',plan TEXT NOT NULL DEFAULT 'free',disk_usage_mb INTEGER DEFAULT 0,created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
@@ -68,6 +68,27 @@ async function ensureSchema(DB) {
   for (const sql of stmts) {
     try { await DB.prepare(sql).run(); } catch (_) { /* 이미 존재하면 무시 */ }
   }
+
+  /* ── 어드민 계정 자동 시드 (최초 1회) ── */
+  try {
+    const adminEmail = ((env && env.ADMIN_EMAIL) || 'choichoi3227@gmail.com').toLowerCase().trim();
+    const adminPw    = (env && env.ADMIN_PASSWORD) || 'Swsh120327!';
+    const exists = await DB.prepare('SELECT id FROM users WHERE email=?').bind(adminEmail).first();
+    if (!exists) {
+      const hash    = await hashPw(adminPw);
+      const adminId = 'adm_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+      await DB.prepare(
+        'INSERT OR IGNORE INTO users (id,name,email,password_hash,role,plan) VALUES (?,?,?,?,?,?)'
+      ).bind(adminId, '관리자', adminEmail, hash, 'admin', 'enterprise').run();
+    } else {
+      /* 비밀번호가 변경됐을 수 있으므로 env.ADMIN_PASSWORD가 있으면 항상 동기화 */
+      if (env && env.ADMIN_PASSWORD) {
+        const hash = await hashPw(env.ADMIN_PASSWORD);
+        await DB.prepare('UPDATE users SET password_hash=?,role=?,plan=? WHERE email=?')
+          .bind(hash, 'admin', 'enterprise', adminEmail).run();
+      }
+    }
+  } catch (_) { /* 어드민 시드 실패는 무시 */ }
 }
 /* ── end schema ── */
 
@@ -79,7 +100,7 @@ export async function onRequest({ request, env, params }) {
   if (!env.DB)       return err('서버 설정 오류: DB 바인딩 없음 (wrangler.toml 확인)', 503);
   if (!env.SESSIONS) return err('서버 설정 오류: SESSIONS KV 바인딩 없음 (wrangler.toml 확인)', 503);
 
-  try { await ensureSchema(env.DB); } catch (_) {}
+  try { await ensureSchema(env.DB, env); } catch (_) {}
 
   const method = request.method.toUpperCase();
 
