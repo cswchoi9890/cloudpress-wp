@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#ec4899"/>
+    </linearGradient>
+  </defs>
+  <!-- Hexagon background -->
+  <path d="M16 1.5L29 8.75V23.25L16 30.5L3 23.25V8.75L16 1.5Z" fill="url(#grad)"/>
+  <!-- Inner hexagon outline -->
+  <path d="M16 7L24 11.5V20.5L16 25L8 20.5V11.5L16 7Z" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="1"/>
+  <!-- Center dot -->
+  <circle cx="16" cy="16" r="3.5" fill="white" opacity="0.9"/>
+  <!-- Corner dots -->
+  <circle cx="16" cy="9" r="1.5" fill="white" opacity="0.6"/>
+  <circle cx="22.5" cy="12.5" r="1.5" fill="white" opacity="0.6"/>
+  <circle cx="22.5" cy="19.5" r="1.5" fill="white" opacity="0.6"/>
+  <circle cx="16" cy="23" r="1.5" fill="white" opacity="0.6"/>
+  <circle cx="9.5" cy="19.5" r="1.5" fill="white" opacity="0.6"/>
+  <circle cx="9.5" cy="12.5" r="1.5" fill="white" opacity="0.6"/>
+</svg>
