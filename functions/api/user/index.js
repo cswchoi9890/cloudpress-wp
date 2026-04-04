@@ -36,18 +36,37 @@ function deobfuscate(str, salt) {
   } catch { return ''; }
 }
 
-/* Cloudflare Global API 키 유효성 검증 */
+/* Cloudflare Global API 키 유효성 검증 + 실제 Account ID 획득 */
 async function verifyCfApiKey(apiKey, email) {
   try {
-    const r = await fetch('https://api.cloudflare.com/client/v4/user', {
-      headers: {
-        'X-Auth-Email': email,
-        'X-Auth-Key': apiKey,
-        'Content-Type': 'application/json',
-      }
-    });
-    const data = await r.json();
-    return { valid: data.success === true, accountId: data.result?.id };
+    const headers = {
+      'X-Auth-Email': email,
+      'X-Auth-Key': apiKey,
+      'Content-Type': 'application/json',
+    };
+
+    // Step 1: 사용자 인증 확인
+    const userResp = await fetch('https://api.cloudflare.com/client/v4/user', { headers });
+    const userData = await userResp.json();
+    if (!userData.success) {
+      return { valid: false, error: userData.errors?.[0]?.message || '인증 실패' };
+    }
+
+    // Step 2: 실제 Account ID 가져오기 (user.id ≠ account.id)
+    const accountsResp = await fetch('https://api.cloudflare.com/client/v4/accounts?per_page=1', { headers });
+    const accountsData = await accountsResp.json();
+
+    let accountId = null;
+    if (accountsData.success && accountsData.result?.length > 0) {
+      accountId = accountsData.result[0].id;
+    }
+
+    // Account ID가 없으면 실패 처리
+    if (!accountId) {
+      return { valid: false, error: 'Cloudflare Account ID를 가져올 수 없습니다. 계정 권한을 확인해주세요.' };
+    }
+
+    return { valid: true, accountId, userEmail: userData.result?.email };
   } catch (e) {
     return { valid: false, error: e.message };
   }
