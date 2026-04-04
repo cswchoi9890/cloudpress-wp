@@ -76,14 +76,7 @@
             <div class="field">
               <label>사이트 이름</label>
               <input type="text" id="siteName" placeholder="예: 내 블로그" maxlength="60"/>
-            </div>
-            <div class="field">
-              <label>서브도메인 <span style="color:var(--accent);font-size:.8em">사이트 주소</span></label>
-              <div style="display:flex;align-items:center">
-                <input type="text" id="subdomain" placeholder="myblog" maxlength="30" style="border-radius:9px 0 0 9px;flex:1" oninput="this.value=this.value.toLowerCase().replace(/[^a-z0-9-]/g,'')"/>
-                <div id="domSuffix" style="padding:10px 13px;background:var(--surface2);border:1px solid var(--border2);border-left:none;border-radius:0 9px 9px 0;color:var(--muted);font-size:.86rem;white-space:nowrap">.cloudpress.site</div>
-              </div>
-              <div class="hint">3~30자, 영소문자·숫자·하이픈만 가능</div>
+              <div class="hint" style="margin-top:6px">사이트 이름으로 <strong>.pages.dev</strong> 도메인이 자동 생성됩니다</div>
             </div>
 
             <!-- CMS 버전 선택 -->
@@ -97,12 +90,13 @@
             <div style="background:rgba(34,197,94,.05);border:1px solid rgba(34,197,94,.15);border-radius:10px;padding:14px;margin-bottom:20px">
               <div style="font-size:.82rem;color:var(--success);font-weight:600;margin-bottom:6px">✅ 자동 구축 포함 사항</div>
               <div style="font-size:.8rem;color:var(--muted);line-height:1.9">
+                • Cloudflare Pages 프로젝트 자동 생성 (<strong>.pages.dev</strong> 도메인)<br>
                 • Cloudflare D1 데이터베이스 자동 생성<br>
                 • Cloudflare KV 스토리지 자동 생성<br>
-                • DNS CNAME 레코드 자동 등록<br>
+                • CMS 사이트 템플릿 자동 배포<br>
                 • CMS 데이터베이스 스키마 자동 초기화<br>
                 • 관리자 계정 자동 생성<br>
-                • SSL 인증서 자동 적용 (Cloudflare Proxy)
+                • SSL 인증서 자동 적용 (Cloudflare 자동 발급)
               </div>
             </div>
             <div id="stepErr" style="color:var(--error);font-size:.83rem;margin-bottom:14px;display:none"></div>
@@ -181,11 +175,8 @@ function selectVersion(id,ver){
 
 async function doCreate(){
   const name=document.getElementById('siteName').value.trim();
-  const subdomain=document.getElementById('subdomain').value.trim();
   const errEl=document.getElementById('stepErr');errEl.style.display='none';
   if(!name){errEl.textContent='사이트 이름을 입력해주세요.';errEl.style.display='';return}
-  if(!subdomain||subdomain.length<3){errEl.textContent='서브도메인을 3자 이상 입력해주세요.';errEl.style.display='';return}
-  if(!/^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(subdomain)){errEl.textContent='서브도메인 형식이 올바르지 않습니다.';errEl.style.display='';return}
 
   document.getElementById('step1').style.display='none';
   document.getElementById('step2').style.display='';
@@ -197,10 +188,9 @@ async function doCreate(){
 
   addLog('① Cloudflare API 연결 확인 중...','cur');
 
-  const r=await CP.createSite({name,subdomain,cms_version:selVersion||'1.0.0'});
+  const r=await CP.createSite({name,cms_version:selVersion||'1.0.0'});
 
   if(r.ok){
-    // 서버 로그 표시
     if(r.logs&&r.logs.length){
       logBox.innerHTML='';
       r.logs.forEach(l=>addLog(l, l.startsWith('✅')?'ok':l.startsWith('   ⚠')?'warn':'cur'));
@@ -211,7 +201,8 @@ async function doCreate(){
     setTimeout(async()=>{
       const creds=await CP.getSiteCreds(r.site.id);
       const site=creds.ok?creds.site:r.site;
-      const adminUrl=site.cms_admin_url||`https://${subdomain}.cloudpress.site/cms-admin`;
+      const siteUrl=site.cms_url||'';
+      const adminUrl=site.cms_admin_url||siteUrl+'/wp-admin/';
 
       document.getElementById('provView').style.display='none';
       document.getElementById('okView').style.display='';
@@ -219,7 +210,7 @@ async function doCreate(){
       document.getElementById('s2i').className='stp done';
 
       document.getElementById('credBox').innerHTML=`
-        <div class="cred-row"><span class="cred-label">사이트 URL</span><span class="cred-val"><a href="${CP.escHtml(site.cms_url||'https://'+subdomain+'.cloudpress.site')}" target="_blank" style="color:var(--accent)">${CP.escHtml(site.cms_url||'https://'+subdomain+'.cloudpress.site')}</a></span><button class="copy-btn" onclick="copyText('${CP.escHtml(site.cms_url||'')}',this)">복사</button></div>
+        <div class="cred-row"><span class="cred-label">사이트 URL</span><span class="cred-val"><a href="${CP.escHtml(siteUrl)}" target="_blank" style="color:var(--accent)">${CP.escHtml(siteUrl)}</a></span><button class="copy-btn" onclick="copyText('${CP.escHtml(siteUrl)}',this)">복사</button></div>
         <div class="cred-row"><span class="cred-label">관리자 URL</span><span class="cred-val"><a href="${CP.escHtml(adminUrl)}" target="_blank" style="color:var(--accent)">${CP.escHtml(adminUrl)}</a></span><button class="copy-btn" onclick="copyText('${CP.escHtml(adminUrl)}',this)">복사</button></div>
         <div class="cred-row"><span class="cred-label">아이디</span><span class="cred-val">${CP.escHtml(site.cms_username||'admin')}</span><button class="copy-btn" onclick="copyText('${CP.escHtml(site.cms_username||'admin')}',this)">복사</button></div>
         <div class="cred-row"><span class="cred-label">비밀번호</span><span class="cred-val" id="pwVal">••••••••</span><button class="copy-btn" id="pwBtn" onclick="toggleCredPw('${CP.escHtml(site.cms_password||'')}')">보기</button></div>
