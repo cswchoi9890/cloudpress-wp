@@ -328,6 +328,14 @@ async function provisionCmsSite(env, { siteId, siteName, projectName, userPlan, 
   const verifiedHeaders = { 'X-Auth-Email': email, 'X-Auth-Key': apiKey, 'Content-Type': 'application/json' };
   const cfAuth = { apiKey, email, accountId: verifiedAccountId };
 
+  // 미리 선언할 변수들
+  const adminPassword = genPw(16);
+  const dashboardUrl = `https://cloudpress.pages.dev/dashboard.html`;
+  const kvTitle = `cp-kv-${projectName}`;
+  const dbName = `cp-db-${projectName}`;
+  let cfKvNamespace = null;
+  let cfD1Database = null;
+
   try {
     /* Step 1: Cloudflare Pages 프로젝트 생성 (최대 3회 재시도) */
     logs.push(`② Cloudflare Pages 프로젝트 생성 중... (${projectName})`);
@@ -345,7 +353,7 @@ async function provisionCmsSite(env, { siteId, siteName, projectName, userPlan, 
       ).then(r => r.json()).catch(e => ({ success: false, errors: [{ message: `네트워크 오류: ${e.message}` }] }));
 
       if (pagesResp.success) {
-        logs.push(`   ✓ Pages 프로젝트 생성 완료 → ${siteUrl}`);
+        logs.push(`   ✓ Pages 프로젝트 생성 완료 → https://${currentProjectName}.pages.dev`);
         break;
       }
 
