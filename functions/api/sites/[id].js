@@ -143,7 +143,7 @@ async function deleteSite(params, request, env) {
     const creds = await getUserCfCreds(env, user.id).catch(() => null);
     if (creds) {
       const cfHeaders = { 'X-Auth-Email': creds.email, 'X-Auth-Key': creds.apiKey, 'Content-Type': 'application/json' };
-      const domain = env.SITE_DOMAIN || 'cloudpress.site';
+      const domain = env.SITE_DOMAIN || 'pages.dev';
       const fqdn = `${site.subdomain}.${domain}`;
 
       // 비동기 삭제 (결과 무관)
@@ -185,7 +185,7 @@ async function updateSite(params, request, env) {
       const creds = await getUserCfCreds(env, user.id).catch(() => null);
       if (creds && site.cf_zone_id) {
         const cfHeaders = { 'X-Auth-Email': creds.email, 'X-Auth-Key': creds.apiKey, 'Content-Type': 'application/json' };
-        const domain = env.SITE_DOMAIN || 'cloudpress.site';
+        const domain = env.SITE_DOMAIN || 'pages.dev';
         await fetch(`https://api.cloudflare.com/client/v4/zones/${site.cf_zone_id}/dns_records`, {
           method: 'POST',
           headers: cfHeaders,
