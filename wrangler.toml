@@ -13,7 +13,7 @@ id = "98dd2527afed40d3a7f00d859fa3d547"
 
 [vars]
 SITE_DOMAIN   = "cloudpress.site"
-ADMIN_EMAIL   = "choichoi3227@gmail.com"
+ADMIN_EMAIL   = "cseongwon233@gmail.com"
 # CF_API_TOKEN / CF_ZONE_ID / CF_ACCOUNT_ID 는 Cloudflare Pages > Settings > Environment Variables 에서 설정
 CF_API_TOKEN  = ""
 CF_ZONE_ID    = ""
