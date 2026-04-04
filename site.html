@@ -68,7 +68,7 @@ async function init(){
 function render(){
   document.getElementById('pageTitle').textContent=site.name;
   const st=CP.statusBadge(site.status);
-  const url=site.custom_domain?`https://${site.custom_domain}`:(site.cms_url||`https://${site.subdomain}.cloudpress.site`);
+  const url=site.custom_domain?`https://${site.custom_domain}`:(site.cms_url||`https://${site.subdomain}.pages.dev`);
   const adminUrl=site.cms_admin_url||(url+'/cms-admin');
 
   document.getElementById('mainContent').innerHTML=`
@@ -103,7 +103,7 @@ function render(){
     </div>
     <div class="section-card">
       <div class="section-title">커스텀 도메인 연결</div>
-      <p style="font-size:.83rem;color:var(--muted);margin-bottom:12px">도메인 DNS에서 <code style="background:var(--bg);padding:2px 6px;border-radius:4px;font-size:.82rem">${CP.escHtml(site.subdomain)}.cloudpress.site</code>로 CNAME 설정 후 입력하세요.</p>
+      <p style="font-size:.83rem;color:var(--muted);margin-bottom:12px">사용자 정의 도메인 DNS에서 <code style="background:var(--bg);padding:2px 6px;border-radius:4px;font-size:.82rem">${CP.escHtml(site.subdomain)}.pages.dev</code>로 CNAME 설정 후 입력하세요.</p>
       ${site.custom_domain?`<div class="cred-row" style="margin-bottom:12px"><span class="cred-label">연결된 도메인</span><span class="cred-val"><a href="https://${CP.escHtml(site.custom_domain)}" target="_blank" style="color:var(--accent);text-decoration:none">${CP.escHtml(site.custom_domain)}</a></span></div>`:''}
       <div style="display:flex;gap:8px">
         <input type="text" id="cdInput" placeholder="www.myblog.com" value="${CP.escHtml(site.custom_domain||'')}" style="flex:1;padding:9px 12px;background:var(--bg);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--font-body);font-size:.88rem;outline:none"/>
