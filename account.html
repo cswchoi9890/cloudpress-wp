@@ -79,9 +79,11 @@
           <input type="password" id="cfApiKey" placeholder="Cloudflare 대시보드 → 내 프로필 → API 토큰 → Global API Key"/>
         </div>
         <div id="cfApiErr" style="font-size:.82rem;color:var(--error);margin-bottom:10px;display:none"></div>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary btn-sm" id="cfSaveBtn" onclick="saveCfApi()">API 키 저장 및 검증</button>
+          <button class="btn btn-ghost btn-sm" id="cfChangeBtn" onclick="enableCfApiEdit()" style="display:none">변경</button>
           <button class="btn btn-ghost btn-sm" id="cfRemoveBtn" onclick="removeCfApi()" style="display:none">키 삭제</button>
+          <button class="btn btn-ghost btn-sm" id="cfCancelBtn" onclick="cancelCfApiEdit()" style="display:none">취소</button>
         </div>
         <div style="margin-top:12px;font-size:.78rem;color:var(--muted)">
           ⚠️ Global API 키는 매우 강력한 권한을 가집니다. 보안을 위해 반드시 아래 2단계 인증을 설정하세요.
@@ -163,6 +165,7 @@
 let currentUser=null;
 let selectedTwofaType=null;
 let personalInfoDetected=false;
+let savedCfEmail=''; // 저장된 이메일 추적
 
 async function init(){
   currentUser=await CP.requireAuth();if(!currentUser)return;
@@ -177,14 +180,18 @@ async function init(){
   const plan=CP.planInfo(u.plan);
   document.getElementById('planInfo').innerHTML=`<span class="plan-badge" style="background:${plan.color}18;color:${plan.color}">${plan.name}</span>${u.plan!=='free'?` <a href="/pricing.html" style="font-size:.78rem;color:var(--accent);text-decoration:none;margin-left:8px">변경 →</a>`:'<a href="/pricing.html" style="font-size:.78rem;color:var(--accent);text-decoration:none;margin-left:8px">업그레이드 →</a>'}`;
 
-  // CF API 상태 표시
+  // 🔧 CF API 상태 표시 개선
   if(u.has_cf_api){
+    savedCfEmail = u.cf_account_email || '';
     document.getElementById('cfApiStatus').textContent='✓ 연결됨';
     document.getElementById('cfApiStatus').className='cf-api-status connected';
-    document.getElementById('cfRemoveBtn').style.display='';
-    document.getElementById('cfEmail').value=u.cf_account_email||'';
+    document.getElementById('cfEmail').value=savedCfEmail;
     document.getElementById('cfEmail').disabled=true;
-    document.getElementById('cfApiKey').placeholder='**** 저장됨 (변경하려면 새로 입력)';
+    document.getElementById('cfApiKey').disabled=true;
+    document.getElementById('cfApiKey').placeholder='●●●●●●●● (저장됨)';
+    document.getElementById('cfSaveBtn').style.display='none';
+    document.getElementById('cfChangeBtn').style.display='';
+    document.getElementById('cfRemoveBtn').style.display='';
   }
 
   // 2FA 상태 표시
@@ -208,6 +215,33 @@ async function saveProfile(){
   if(r.ok){CP.setUser(r.user);showToast('저장 완료','success');}else showToast(r.error||'실패','error');
 }
 
+// 🔧 CF API 편집 모드 활성화
+function enableCfApiEdit(){
+  document.getElementById('cfEmail').disabled=false;
+  document.getElementById('cfApiKey').disabled=false;
+  document.getElementById('cfApiKey').value='';
+  document.getElementById('cfApiKey').placeholder='새 API 키를 입력하세요';
+  document.getElementById('cfSaveBtn').style.display='';
+  document.getElementById('cfChangeBtn').style.display='none';
+  document.getElementById('cfRemoveBtn').style.display='none';
+  document.getElementById('cfCancelBtn').style.display='';
+}
+
+// 🔧 CF API 편집 취소
+function cancelCfApiEdit(){
+  document.getElementById('cfEmail').value=savedCfEmail;
+  document.getElementById('cfEmail').disabled=true;
+  document.getElementById('cfApiKey').disabled=true;
+  document.getElementById('cfApiKey').value='';
+  document.getElementById('cfApiKey').placeholder='●●●●●●●● (저장됨)';
+  document.getElementById('cfSaveBtn').style.display='none';
+  document.getElementById('cfChangeBtn').style.display='';
+  document.getElementById('cfRemoveBtn').style.display='';
+  document.getElementById('cfCancelBtn').style.display='none';
+  const errEl=document.getElementById('cfApiErr');
+  errEl.style.display='none';
+}
+
 async function saveCfApi(){
   const email=document.getElementById('cfEmail').value.trim();
   const key=document.getElementById('cfApiKey').value.trim();
@@ -217,12 +251,18 @@ async function saveCfApi(){
   const r=await CP.saveCfApi({cf_account_email:email,cf_global_api_key:key});
   document.getElementById('cfSaveBtn').disabled=false;document.getElementById('cfSaveBtn').textContent='API 키 저장 및 검증';
   if(r.ok){
+    savedCfEmail = email;
     document.getElementById('cfApiStatus').textContent='✓ 연결됨';
     document.getElementById('cfApiStatus').className='cf-api-status connected';
-    document.getElementById('cfRemoveBtn').style.display='';
+    document.getElementById('cfEmail').value=email;
     document.getElementById('cfEmail').disabled=true;
+    document.getElementById('cfApiKey').disabled=true;
     document.getElementById('cfApiKey').value='';
-    document.getElementById('cfApiKey').placeholder='**** 저장됨 (변경하려면 새로 입력)';
+    document.getElementById('cfApiKey').placeholder='●●●●●●●● (저장됨)';
+    document.getElementById('cfSaveBtn').style.display='none';
+    document.getElementById('cfChangeBtn').style.display='';
+    document.getElementById('cfRemoveBtn').style.display='';
+    document.getElementById('cfCancelBtn').style.display='none';
     showToast('Cloudflare API 키가 저장되었습니다! 🎉','success');
   }else{errEl.textContent=r.error||'저장 실패';errEl.style.display='';}
 }
@@ -231,11 +271,18 @@ async function removeCfApi(){
   if(!confirm('Cloudflare API 키를 삭제하면 새 사이트를 구축할 수 없습니다. 계속하시겠습니까?'))return;
   const r=await CP.removeCfApi();
   if(r.ok){
+    savedCfEmail='';
     document.getElementById('cfApiStatus').textContent='미설정';
     document.getElementById('cfApiStatus').className='cf-api-status disconnected';
+    document.getElementById('cfEmail').disabled=false;
+    document.getElementById('cfEmail').value='';
+    document.getElementById('cfApiKey').disabled=false;
+    document.getElementById('cfApiKey').value='';
+    document.getElementById('cfApiKey').placeholder='Cloudflare 대시보드 → 내 프로필 → API 토큰 → Global API Key';
+    document.getElementById('cfSaveBtn').style.display='';
+    document.getElementById('cfChangeBtn').style.display='none';
     document.getElementById('cfRemoveBtn').style.display='none';
-    document.getElementById('cfEmail').disabled=false;document.getElementById('cfEmail').value='';
-    document.getElementById('cfApiKey').value='';document.getElementById('cfApiKey').placeholder='Cloudflare 대시보드 → 내 프로필 → API 토큰 → Global API Key';
+    document.getElementById('cfCancelBtn').style.display='none';
     showToast('API 키가 삭제되었습니다.','success');
   }else showToast(r.error||'실패','error');
 }
