@@ -108,18 +108,34 @@
         <div id="step2" style="display:none">
           <div class="card" id="provView" style="padding:32px;text-align:center">
             <div class="spin"></div>
-            <h2 style="font-family:var(--font-head);font-size:1.05rem;font-weight:700;margin-bottom:8px">CloudPress CMS 구축 중...</h2>
-            <p style="color:var(--muted);font-size:.86rem">Cloudflare D1 DB · KV · DNS 자동 설정 중</p>
-            <div class="log" id="logBox"><div class="cur">▶ Cloudflare 연결 중...</div></div>
+            <h2 style="font-family:var(--font-head);font-size:1.05rem;font-weight:700;margin-bottom:6px">CloudPress CMS 구축 중...</h2>
+            <p style="color:var(--muted);font-size:.84rem;margin-bottom:4px">Cloudflare Pages · D1 DB · KV 자동 설정 중</p>
+            <p style="color:var(--muted);font-size:.78rem;margin-bottom:14px">⏱ 구축에 3~8분이 소요됩니다. 페이지를 닫지 마세요.</p>
+            <div id="elapsedTimer" style="font-size:.78rem;color:var(--accent);margin-bottom:10px;font-weight:600">경과: 0분 00초</div>
+            <div class="log" id="logBox"></div>
           </div>
           <div class="card" id="okView" style="padding:32px;display:none">
             <div class="success-icon"><svg width="34" height="34" viewBox="0 0 24 24" fill="none"><polyline points="20 6 9 17 4 12" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
             <h2 style="font-family:var(--font-head);font-size:1.15rem;font-weight:700;text-align:center;margin-bottom:6px">구축 완료! 🎉</h2>
-            <p style="color:var(--muted);font-size:.84rem;text-align:center;margin-bottom:22px">아래 정보로 CloudPress CMS 관리자에 접속하세요.</p>
+            <p style="color:var(--muted);font-size:.84rem;text-align:center;margin-bottom:4px">아래 정보로 CloudPress CMS 관리자에 접속하세요.</p>
+            <p style="color:var(--accent);font-size:.82rem;text-align:center;font-weight:600;margin-bottom:18px">⏱ <span id="dashCountdown">5</span>초 후 대시보드로 자동 이동합니다...</p>
             <div class="section-card" id="credBox"></div>
             <div style="display:flex;gap:10px;margin-top:18px;justify-content:center">
               <a id="adminLink" href="#" target="_blank" class="btn btn-primary">CMS 관리자 접속 →</a>
-              <a href="/dashboard.html" class="btn btn-ghost">대시보드로</a>
+              <a href="/dashboard.html" class="btn btn-ghost">대시보드로 바로 이동</a>
+            </div>
+          </div>
+          <div class="card" id="errView" style="padding:32px;display:none;text-align:center">
+            <div style="font-size:2rem;margin-bottom:12px">❌</div>
+            <h2 style="font-family:var(--font-head);font-size:1.05rem;font-weight:700;margin-bottom:12px">구축 실패</h2>
+            <div id="errMsg" style="color:var(--error);font-size:.85rem;line-height:1.7;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:14px;margin-bottom:6px;text-align:left;word-break:break-word;white-space:pre-line"></div>
+            <div style="color:var(--muted);font-size:.78rem;margin-bottom:18px;text-align:left">
+              💡 <strong>해결 방법:</strong> 내 계정 → Cloudflare API 설정에서 Global API 키와 이메일을 <strong>다시 저장</strong>해주세요.<br>
+              (저장 시 API 키와 Account ID가 자동으로 재검증됩니다)
+            </div>
+            <div style="display:flex;gap:10px;justify-content:center">
+              <a href="/create.html" class="btn btn-primary btn-sm">← 다시 시도</a>
+              <a href="/account.html" class="btn btn-ghost btn-sm">API 키 설정</a>
             </div>
           </div>
         </div>
@@ -184,40 +200,106 @@ async function doCreate(){
   document.getElementById('s2i').className='stp active';
 
   const logBox=document.getElementById('logBox');
-  const addLog=(msg,cls='')=>{ logBox.innerHTML+=`<div class="${cls}">${msg}</div>`; logBox.scrollTop=logBox.scrollHeight; };
+  logBox.innerHTML='';
+  const addLog=(msg,cls='')=>{
+    const div=document.createElement('div');
+    div.className=cls;
+    div.textContent=msg;
+    logBox.appendChild(div);
+    logBox.scrollTop=logBox.scrollHeight;
+  };
 
-  addLog('① Cloudflare API 연결 확인 중...','cur');
+  // 실시간 진행 상황 애니메이션 (API 응답 전까지 가상 단계 표시)
+  const fakeSteps=[
+    {msg:'① Cloudflare API 인증 확인 중...',delay:0},
+    {msg:'② Pages 프로젝트 생성 중...',delay:8000},
+    {msg:'③ KV Namespace 생성 중...',delay:18000},
+    {msg:'④ D1 데이터베이스 생성 중...',delay:28000},
+    {msg:'⑤ CMS 스키마 초기화 중...',delay:45000},
+    {msg:'⑥ CMS 설정 저장 중...',delay:70000},
+    {msg:'⑦ 사이트 템플릿 배포 중...',delay:100000},
+    {msg:'⑧ 사이트 구축 확인 중... (Cloudflare 전파 대기)',delay:150000},
+  ];
+  const fakeTimers=[];
+  fakeSteps.forEach(s=>{
+    const t=setTimeout(()=>{ addLog(s.msg,'cur'); },s.delay);
+    fakeTimers.push(t);
+  });
 
+  // 경과 시간 표시
+  const startTime=Date.now();
+  const timerEl=document.getElementById('elapsedTimer');
+  const timerInterval=setInterval(()=>{
+    const sec=Math.floor((Date.now()-startTime)/1000);
+    const m=Math.floor(sec/60), s=sec%60;
+    if(timerEl) timerEl.textContent=`경과: ${m}분 ${String(s).padStart(2,'0')}초`;
+  },1000);
+
+  // 실제 API 호출 (3~8분 소요 예상)
   const r=await CP.createSite({name,cms_version:selVersion||'1.0.0'});
 
+  // 가짜 타이머 모두 취소
+  fakeTimers.forEach(t=>clearTimeout(t));
+  clearInterval(timerInterval);
+
   if(r.ok){
+    // 실제 로그로 교체
+    logBox.innerHTML='';
     if(r.logs&&r.logs.length){
-      logBox.innerHTML='';
-      r.logs.forEach(l=>addLog(l, l.startsWith('✅')?'ok':l.startsWith('   ⚠')?'warn':'cur'));
+      r.logs.forEach(l=>{
+        const cls=l.startsWith('✅')?'ok':
+                  l.includes('⚠')||l.includes('warn')?'warn':
+                  l.startsWith('   ✓')||l.startsWith('✓')?'ok':'cur';
+        addLog(l,cls);
+      });
     }else{
       addLog('✅ 구축 완료!','ok');
     }
+    document.getElementById('s2i').className='stp done';
 
-    setTimeout(async()=>{
-      const creds=await CP.getSiteCreds(r.site.id);
-      const site=creds.ok?creds.site:r.site;
-      const siteUrl=site.cms_url||'';
-      const adminUrl=site.cms_admin_url||siteUrl+'/wp-admin/';
+    // 사이트 정보 표시 후 대시보드로 자동 이동
+    const site=r.site||{};
+    const siteUrl=site.cms_url||`https://${site.subdomain}.pages.dev`;
+    const adminUrl=site.cms_admin_url||(siteUrl+'/wp-admin/');
 
-      document.getElementById('provView').style.display='none';
-      document.getElementById('okView').style.display='';
-      document.getElementById('adminLink').href=adminUrl;
-      document.getElementById('s2i').className='stp done';
+    document.getElementById('provView').style.display='none';
+    document.getElementById('okView').style.display='';
+    document.getElementById('adminLink').href=adminUrl;
 
-      document.getElementById('credBox').innerHTML=`
-        <div class="cred-row"><span class="cred-label">사이트 URL</span><span class="cred-val"><a href="${CP.escHtml(siteUrl)}" target="_blank" style="color:var(--accent)">${CP.escHtml(siteUrl)}</a></span><button class="copy-btn" onclick="copyText('${CP.escHtml(siteUrl)}',this)">복사</button></div>
-        <div class="cred-row"><span class="cred-label">관리자 URL</span><span class="cred-val"><a href="${CP.escHtml(adminUrl)}" target="_blank" style="color:var(--accent)">${CP.escHtml(adminUrl)}</a></span><button class="copy-btn" onclick="copyText('${CP.escHtml(adminUrl)}',this)">복사</button></div>
-        <div class="cred-row"><span class="cred-label">아이디</span><span class="cred-val">${CP.escHtml(site.cms_username||'admin')}</span><button class="copy-btn" onclick="copyText('${CP.escHtml(site.cms_username||'admin')}',this)">복사</button></div>
-        <div class="cred-row"><span class="cred-label">비밀번호</span><span class="cred-val" id="pwVal">••••••••</span><button class="copy-btn" id="pwBtn" onclick="toggleCredPw('${CP.escHtml(site.cms_password||'')}')">보기</button></div>
-        <div class="cred-row"><span class="cred-label">CMS 버전</span><span class="cred-val">${CP.escHtml(site.cms_version||'1.0.0')}</span></div>`;
-    },800);
+    // 비밀번호 세션 저장 (대시보드에서 표시용)
+    try{ sessionStorage.setItem('cp_new_site_creds', JSON.stringify({
+      id:site.id, url:siteUrl, adminUrl, username:site.cms_username||'admin',
+      password:site.cms_password||'', version:site.cms_version||'1.0.0'
+    })); }catch(_){}
+
+    document.getElementById('credBox').innerHTML=`
+      <div class="cred-row"><span class="cred-label">사이트 URL</span><span class="cred-val"><a href="${CP.escHtml(siteUrl)}" target="_blank" style="color:var(--accent)">${CP.escHtml(siteUrl)}</a></span><button class="copy-btn" onclick="copyText('${CP.escHtml(siteUrl)}',this)">복사</button></div>
+      <div class="cred-row"><span class="cred-label">관리자 URL</span><span class="cred-val"><a href="${CP.escHtml(adminUrl)}" target="_blank" style="color:var(--accent)">${CP.escHtml(adminUrl)}</a></span><button class="copy-btn" onclick="copyText('${CP.escHtml(adminUrl)}',this)">복사</button></div>
+      <div class="cred-row"><span class="cred-label">아이디</span><span class="cred-val">${CP.escHtml(site.cms_username||'admin')}</span><button class="copy-btn" onclick="copyText('${CP.escHtml(site.cms_username||'admin')}',this)">복사</button></div>
+      <div class="cred-row"><span class="cred-label">비밀번호</span><span class="cred-val" id="pwVal">••••••••</span><button class="copy-btn" id="pwBtn" onclick="toggleCredPw('${CP.escHtml(site.cms_password||'')}')">보기</button></div>
+      <div class="cred-row"><span class="cred-label">CMS 버전</span><span class="cred-val">${CP.escHtml(site.cms_version||'1.0.0')}</span></div>`;
+
+    // 5초 후 대시보드로 자동 이동
+    let countdown=5;
+    const cdEl=document.getElementById('dashCountdown');
+    const cdInterval=setInterval(()=>{
+      countdown--;
+      if(cdEl) cdEl.textContent=countdown;
+      if(countdown<=0){
+        clearInterval(cdInterval);
+        window.location.href='/dashboard.html';
+      }
+    },1000);
+
   }else{
-    document.getElementById('provView').innerHTML=`<div style="color:var(--error);font-size:.9rem;line-height:1.6">❌ 구축 실패<br><br>${CP.escHtml(r.error||'알 수 없는 오류')}</div><div style="margin-top:16px"><a href="/create.html" class="btn btn-ghost btn-sm">← 다시 시도</a></div>`;
+    // 오류 시 실제 서버 로그 표시
+    logBox.innerHTML='';
+    if(r.logs&&r.logs.length){
+      r.logs.forEach(l=>addLog(l, l.includes('✗')||l.includes('❌')?'warn':'cur'));
+    }
+    document.getElementById('provView').style.display='none';
+    document.getElementById('errView').style.display='';
+    document.getElementById('errMsg').textContent=r.error||'알 수 없는 오류가 발생했습니다.';
   }
 }
 
