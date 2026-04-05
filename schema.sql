@@ -46,7 +46,6 @@ CREATE TABLE IF NOT EXISTS sites (
   db_user TEXT,
   db_password TEXT,
   status TEXT NOT NULL DEFAULT 'provisioning',
-  php_version TEXT DEFAULT '8.3',
   region TEXT DEFAULT 'auto',
   plan TEXT NOT NULL DEFAULT 'free',
   disk_usage_mb INTEGER DEFAULT 0,
