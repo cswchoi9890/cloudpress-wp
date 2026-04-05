@@ -5,7 +5,7 @@ pages_build_output_dir = "."
 [[d1_databases]]
 binding = "DB"
 database_name = "cloudpress-db"
-database_id = "c2ae6adb-a2f9-4076-b6d2-50a392023890"
+database_id = "0b38eb6c-9304-443a-bcb6-53e6275f6603"
 
 [[kv_namespaces]]
 binding = "SESSIONS"
