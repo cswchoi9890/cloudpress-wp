@@ -32,7 +32,7 @@ function detectPersonalInfo(str) {
 async function ensureSchema(DB, env) {
   const stmts = [
     `CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY,name TEXT NOT NULL,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,role TEXT NOT NULL DEFAULT 'user',plan TEXT NOT NULL DEFAULT 'free',plan_expires_at INTEGER,cf_global_api_key TEXT,cf_account_email TEXT,cf_account_id TEXT,twofa_type TEXT DEFAULT NULL,twofa_secret TEXT DEFAULT NULL,twofa_enabled INTEGER DEFAULT 0,twofa_pending_code TEXT DEFAULT NULL,twofa_code_expires INTEGER DEFAULT NULL,created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
-    `CREATE TABLE IF NOT EXISTS sites (id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,name TEXT NOT NULL,subdomain TEXT UNIQUE NOT NULL,custom_domain TEXT,cms_url TEXT,cms_admin_url TEXT,cms_username TEXT DEFAULT 'admin',cms_password TEXT,cms_version TEXT DEFAULT 'latest',cf_zone_id TEXT,cf_pages_project TEXT,cf_kv_namespace TEXT,cf_d1_database TEXT,vps_container_id TEXT,db_name TEXT,db_user TEXT,db_password TEXT,status TEXT NOT NULL DEFAULT 'provisioning',php_version TEXT DEFAULT '8.3',region TEXT DEFAULT 'auto',plan TEXT NOT NULL DEFAULT 'free',disk_usage_mb INTEGER DEFAULT 0,created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
+    `CREATE TABLE IF NOT EXISTS sites (id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,name TEXT NOT NULL,subdomain TEXT UNIQUE NOT NULL,custom_domain TEXT,cms_url TEXT,cms_admin_url TEXT,cms_username TEXT DEFAULT 'admin',cms_password TEXT,cms_email TEXT,cms_version TEXT DEFAULT 'latest',cf_zone_id TEXT,cf_pages_project TEXT,cf_kv_namespace TEXT,cf_d1_database TEXT,vps_container_id TEXT,db_name TEXT,db_user TEXT,db_password TEXT,status TEXT NOT NULL DEFAULT 'provisioning',php_version TEXT DEFAULT '8.3',region TEXT DEFAULT 'auto',plan TEXT NOT NULL DEFAULT 'free',disk_usage_mb INTEGER DEFAULT 0,created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
     `CREATE TABLE IF NOT EXISTS cms_versions (id TEXT PRIMARY KEY,version TEXT NOT NULL UNIQUE,label TEXT NOT NULL,description TEXT,is_stable INTEGER DEFAULT 1,is_latest INTEGER DEFAULT 0,release_notes TEXT,created_by TEXT REFERENCES users(id),created_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
     `CREATE TABLE IF NOT EXISTS payments (id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),order_id TEXT UNIQUE NOT NULL,payment_key TEXT,amount INTEGER NOT NULL,plan TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',method TEXT,card_company TEXT,receipt_url TEXT,created_at INTEGER NOT NULL DEFAULT (unixepoch()),confirmed_at INTEGER)`,
     `CREATE TABLE IF NOT EXISTS notices (id TEXT PRIMARY KEY,title TEXT NOT NULL,content TEXT NOT NULL,type TEXT NOT NULL DEFAULT 'info',is_active INTEGER NOT NULL DEFAULT 1,created_by TEXT REFERENCES users(id),created_at INTEGER NOT NULL DEFAULT (unixepoch()),updated_at INTEGER NOT NULL DEFAULT (unixepoch()))`,
@@ -50,6 +50,7 @@ async function ensureSchema(DB, env) {
     `ALTER TABLE sites ADD COLUMN cms_admin_url TEXT`,
     `ALTER TABLE sites ADD COLUMN cms_username TEXT DEFAULT 'admin'`,
     `ALTER TABLE sites ADD COLUMN cms_password TEXT`,
+    `ALTER TABLE sites ADD COLUMN cms_email TEXT`,
     `ALTER TABLE sites ADD COLUMN cms_version TEXT DEFAULT 'latest'`,
     `ALTER TABLE sites ADD COLUMN cf_zone_id TEXT`,
     `ALTER TABLE sites ADD COLUMN cf_pages_project TEXT`,
@@ -219,4 +220,4 @@ export async function onRequest({ request, env, params }) {
     console.error('auth error:', e);
     return err('서버 오류: ' + (e?.message ?? e), 500);
   }
-}
+    }
