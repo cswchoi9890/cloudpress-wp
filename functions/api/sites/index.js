@@ -46,6 +46,37 @@ function genPw(len = 16) {
   return pw;
 }
 
+/* ── DB 마이그레이션: sites 테이블에 필요한 컬럼 보장 ── */
+async function ensureSitesColumns(DB) {
+  const migrations = [
+    `ALTER TABLE sites ADD COLUMN hosting_provider TEXT`,
+    `ALTER TABLE sites ADD COLUMN hosting_email TEXT`,
+    `ALTER TABLE sites ADD COLUMN hosting_password TEXT`,
+    `ALTER TABLE sites ADD COLUMN hosting_domain TEXT`,
+    `ALTER TABLE sites ADD COLUMN subdomain TEXT`,
+    `ALTER TABLE sites ADD COLUMN cpanel_url TEXT`,
+    `ALTER TABLE sites ADD COLUMN wp_url TEXT`,
+    `ALTER TABLE sites ADD COLUMN wp_admin_url TEXT`,
+    `ALTER TABLE sites ADD COLUMN wp_username TEXT DEFAULT 'admin'`,
+    `ALTER TABLE sites ADD COLUMN wp_password TEXT`,
+    `ALTER TABLE sites ADD COLUMN wp_admin_email TEXT`,
+    `ALTER TABLE sites ADD COLUMN wp_version TEXT DEFAULT '6.x'`,
+    `ALTER TABLE sites ADD COLUMN breeze_installed INTEGER DEFAULT 0`,
+    `ALTER TABLE sites ADD COLUMN ssl_active INTEGER DEFAULT 0`,
+    `ALTER TABLE sites ADD COLUMN cloudflare_zone_id TEXT`,
+    `ALTER TABLE sites ADD COLUMN error_message TEXT`,
+    `ALTER TABLE sites ADD COLUMN suspended INTEGER DEFAULT 0`,
+    `ALTER TABLE sites ADD COLUMN suspension_reason TEXT`,
+    `ALTER TABLE sites ADD COLUMN disk_used INTEGER DEFAULT 0`,
+    `ALTER TABLE sites ADD COLUMN bandwidth_used INTEGER DEFAULT 0`,
+    `ALTER TABLE sites ADD COLUMN updated_at INTEGER DEFAULT (unixepoch())`,
+    `ALTER TABLE sites ADD COLUMN deleted_at INTEGER`,
+  ];
+  for (const sql of migrations) {
+    try { await DB.prepare(sql).run(); } catch (_) { /* 이미 존재하면 무시 */ }
+  }
+}
+
 /* 플랜별 최대 사이트 수 조회 */
 async function getMaxSites(env, plan) {
   try {
@@ -109,7 +140,6 @@ async function dispatchToWorker(env, siteId, payload) {
   const workerSecret = await getPuppeteerWorkerSecret(env);
 
   if (!workerUrl) {
-    console.error('[sites/index] Puppeteer worker URL이 설정되지 않았습니다.');
     await env.DB.prepare(
       "UPDATE sites SET status='failed',error_message='Worker URL 미설정',updated_at=unixepoch() WHERE id=?"
     ).bind(siteId).run().catch(() => {});
@@ -136,7 +166,7 @@ async function dispatchToWorker(env, siteId, payload) {
         return;
       }
 
-      // 프로비저닝 완료 → DB 업데이트 + WordPress 설치 단계로 전환
+      // 프로비저닝 완료 → DB 업데이트
       await env.DB.prepare(
         `UPDATE sites SET
           status='installing_wp',
@@ -190,7 +220,7 @@ async function dispatchToWorker(env, siteId, payload) {
             siteId,
           ).run().catch(() => {});
 
-          // 3단계: SSL 자동 설정 (설치 성공한 경우만)
+          // 3단계: SSL 자동 설정
           if (r2data.ok) {
             const autoSslRow = await env.DB.prepare(
               "SELECT value FROM settings WHERE key='auto_ssl'"
@@ -242,6 +272,9 @@ export const onRequestOptions = () => new Response(null, { status: 204, headers:
 
 /* GET /api/sites — 내 사이트 목록 조회 */
 export async function onRequestGet({ request, env }) {
+  // 컬럼 존재 보장 (기존 DB 호환)
+  await ensureSitesColumns(env.DB).catch(() => {});
+
   const user = await getUser(env, request);
   if (!user) return err('로그인이 필요합니다.', 401);
 
@@ -266,6 +299,9 @@ export async function onRequestGet({ request, env }) {
 
 /* POST /api/sites — 신규 사이트 생성 */
 export async function onRequestPost({ request, env }) {
+  // 컬럼 존재 보장 (기존 DB 호환) — INSERT 전에 반드시 실행
+  await ensureSitesColumns(env.DB).catch(() => {});
+
   const user = await getUser(env, request);
   if (!user) return err('로그인이 필요합니다.', 401);
 
@@ -274,7 +310,7 @@ export async function onRequestPost({ request, env }) {
 
   const { siteName, adminLogin } = body || {};
 
-  if (!siteName || !siteName.trim())   return err('사이트 이름을 입력해주세요.');
+  if (!siteName || !siteName.trim())        return err('사이트 이름을 입력해주세요.');
   if (!adminLogin || adminLogin.length < 3) return err('관리자 아이디는 3자 이상 입력해주세요.');
   if (!/^[a-zA-Z0-9_]+$/.test(adminLogin)) return err('관리자 아이디는 영문/숫자/언더바만 사용 가능합니다.');
 
@@ -316,18 +352,19 @@ export async function onRequestPost({ request, env }) {
   ).first().catch(() => null);
   const installBreeze = autoBreezeRow?.value === '1';
 
-  // DB에 사이트 레코드 생성 (provisioning 상태)
+  // DB에 사이트 레코드 생성
+  // hosting_* / wp_* 컬럼이 없는 구버전 DB는 ensureSitesColumns로 이미 추가됨
   try {
     await env.DB.prepare(
       `INSERT INTO sites (
-        id, user_id, name, hosting_provider,
-        hosting_email, hosting_password,
+        id, user_id, name,
+        hosting_provider, hosting_email, hosting_password,
         wp_username, wp_password, wp_admin_email,
         status, plan
       ) VALUES (?,?,?,?,?,?,?,?,?,'provisioning',?)`
     ).bind(
-      siteId, user.id, siteName.trim(), provider,
-      hostingEmail, hostingPw,
+      siteId, user.id, siteName.trim(),
+      provider, hostingEmail, hostingPw,
       adminLogin, wpAdminPw, wpAdminEmail,
       user.plan,
     ).run();
@@ -335,7 +372,7 @@ export async function onRequestPost({ request, env }) {
     return err('사이트 생성 실패: ' + e.message, 500);
   }
 
-  // Puppeteer Worker에 비동기 위임 (응답을 기다리지 않음)
+  // Puppeteer Worker에 비동기 위임
   dispatchToWorker(env, siteId, {
     provider,
     hostingEmail,

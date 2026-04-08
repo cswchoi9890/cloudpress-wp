@@ -30,12 +30,47 @@ async function getUser(env, req) {
   } catch { return null; }
 }
 
+
+/* ── DB 마이그레이션: sites 테이블에 필요한 컬럼 보장 ── */
+async function ensureSitesColumns(DB) {
+  const migrations = [
+    `ALTER TABLE sites ADD COLUMN hosting_provider TEXT`,
+    `ALTER TABLE sites ADD COLUMN hosting_email TEXT`,
+    `ALTER TABLE sites ADD COLUMN hosting_password TEXT`,
+    `ALTER TABLE sites ADD COLUMN hosting_domain TEXT`,
+    `ALTER TABLE sites ADD COLUMN subdomain TEXT`,
+    `ALTER TABLE sites ADD COLUMN cpanel_url TEXT`,
+    `ALTER TABLE sites ADD COLUMN wp_url TEXT`,
+    `ALTER TABLE sites ADD COLUMN wp_admin_url TEXT`,
+    `ALTER TABLE sites ADD COLUMN wp_username TEXT DEFAULT 'admin'`,
+    `ALTER TABLE sites ADD COLUMN wp_password TEXT`,
+    `ALTER TABLE sites ADD COLUMN wp_admin_email TEXT`,
+    `ALTER TABLE sites ADD COLUMN wp_version TEXT DEFAULT '6.x'`,
+    `ALTER TABLE sites ADD COLUMN breeze_installed INTEGER DEFAULT 0`,
+    `ALTER TABLE sites ADD COLUMN ssl_active INTEGER DEFAULT 0`,
+    `ALTER TABLE sites ADD COLUMN cloudflare_zone_id TEXT`,
+    `ALTER TABLE sites ADD COLUMN error_message TEXT`,
+    `ALTER TABLE sites ADD COLUMN suspended INTEGER DEFAULT 0`,
+    `ALTER TABLE sites ADD COLUMN suspension_reason TEXT`,
+    `ALTER TABLE sites ADD COLUMN disk_used INTEGER DEFAULT 0`,
+    `ALTER TABLE sites ADD COLUMN bandwidth_used INTEGER DEFAULT 0`,
+    `ALTER TABLE sites ADD COLUMN updated_at INTEGER DEFAULT (unixepoch())`,
+    `ALTER TABLE sites ADD COLUMN deleted_at INTEGER`,
+  ];
+  for (const sql of migrations) {
+    try { await DB.prepare(sql).run(); } catch (_) { /* 이미 존재하면 무시 */ }
+  }
+}
+
 export const onRequestOptions = () => new Response(null, { status: 204, headers: CORS });
 
 export async function onRequest({ request, env, params }) {
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS });
   }
+
+  // 컬럼 존재 보장 (기존 DB 호환)
+  await ensureSitesColumns(env.DB).catch(() => {});
 
   const user = await getUser(env, request);
   if (!user) return err('로그인이 필요합니다.', 401);
