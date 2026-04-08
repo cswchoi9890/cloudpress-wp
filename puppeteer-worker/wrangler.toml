@@ -8,7 +8,7 @@ compatibility_flags = ["nodejs_compat"]
 binding = "MYBROWSER"
 
 [vars]
-WORKER_SECRET = "cp_puppet_secret_v1_CHANGE_ME"
+WORKER_SECRET = "Swsh120327!"
 
 # 배포: wrangler deploy (puppeteer-worker/ 디렉토리에서)
 # 주의: Cloudflare Workers Browser Rendering은 유료 플랜 필요
