@@ -76,7 +76,7 @@ const CP = {
   createSite:  (b)     => CP.post('/sites', b),
   deleteSite:  (id)    => CP.del(`/sites/${id}`),
   updateSite:  (id, b) => CP.put(`/sites/${id}`, b),
-  pollSite:    (id)    => CP.get(`/sites/${id}/status`),
+  pollSite:    (id)    => CP.get(`/sites/${id}`),
   getSiteCreds:(id)    => CP.get(`/sites/${id}/credentials`),
 
   // User
