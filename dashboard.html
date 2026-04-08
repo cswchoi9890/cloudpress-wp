@@ -143,9 +143,9 @@ async function loadSites(){
   }
   el.innerHTML=sites.map(s=>{
     const st=CP.statusBadge(s.status);
-    const url=s.custom_domain?`https://${s.custom_domain}`:(s.cms_url||`https://${s.subdomain}.pages.dev`);
-    const adminUrl=s.cms_admin_url||url+'/cms-admin';
-    const ver=s.cms_version?`<span class="ver-badge">v${CP.escHtml(s.cms_version)}</span>`:'';
+    const url=s.wp_url||(s.custom_domain?`https://${s.custom_domain}`:'—');
+    const adminUrl=s.wp_admin_url||'';
+    const ver=s.wp_version?`<span class="ver-badge">v${CP.escHtml(s.wp_version)}</span>`:'';
     return `<div class="site-card">
       <div class="site-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M14 2L26 8V20L14 26L2 20V8L14 2Z" stroke="#f97316" stroke-width="1.5" viewBox="0 0 28 28"/><rect x="2" y="3" width="20" height="14" rx="2" stroke="#f97316" stroke-width="1.5"/><path d="M8 21h8M12 17v4" stroke="#f97316" stroke-width="1.5" stroke-linecap="round"/></svg></div>
       <div class="site-info">
@@ -166,7 +166,7 @@ async function loadSites(){
 
 async function pollStatus(id){
   const poll=async()=>{
-    const d=await CP.pollSite(id);
+    const d=await CP.getSite(id);
     if(!d.ok)return;
     if(d.site.status==='active'||d.site.status==='error'){
       await loadSites();
