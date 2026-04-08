@@ -98,8 +98,8 @@
     <h3 style="font-family:var(--font-head);font-size:1.05rem;font-weight:700;margin-bottom:10px">사이트 삭제</h3>
     <p id="delMsg" style="font-size:.87rem;color:var(--muted);margin-bottom:24px;line-height:1.6"></p>
     <div style="display:flex;gap:10px">
-      <button style="flex:1;padding:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer" onclick="document.getElementById('delModal').classList.remove('open')">취소</button>
-      <button id="delConfirmBtn" style="flex:1;padding:10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.2);border-radius:8px;color:var(--error);font-weight:600;cursor:pointer" onclick="confirmDel()">삭제</button>
+      <button class="btn btn-ghost" onclick="document.getElementById('delModal').classList.remove('open');delId=null">취소</button>
+      <button id="delConfirmBtn" class="btn btn-danger" onclick="confirmDel()">삭제</button>
     </div>
   </div>
 </div>
@@ -109,70 +109,98 @@
 let delId=null;
 
 async function init(){
-  const user=await CP.requireAuth();
-  if(!user)return;
-  document.getElementById('sbAvatar').textContent=user.name[0].toUpperCase();
-  document.getElementById('sbName').textContent=user.name;
-  document.getElementById('sbEmail').textContent=user.email;
-  document.getElementById('welcome').textContent=`안녕하세요, ${user.name}님!`;
-  document.getElementById('sPlan').textContent=CP.planInfo(user.plan).name;
-  if(user.role==='admin'||user.role==='manager') document.getElementById('adminMenu').style.display='';
-  if(!user.has_cf_api) document.getElementById('cfApiWarn').style.display='flex';
+  try {
+    const user=await CP.requireAuth();
+    if(!user)return;
+    document.getElementById('sbAvatar').textContent=user.name[0].toUpperCase();
+    document.getElementById('sbName').textContent=user.name;
+    document.getElementById('sbEmail').textContent=user.email;
+    document.getElementById('welcome').textContent=`안녕하세요, ${user.name}님!`;
+    document.getElementById('sPlan').textContent=CP.planInfo(user.plan).name;
+    if(user.role==='admin'||user.role==='manager') document.getElementById('adminMenu').style.display='';
+    if(!user.has_cf_api) document.getElementById('cfApiWarn').style.display='flex';
 
-  // 공지사항
-  const nd=await CP.get('/admin/notices?active=1');
-  if(nd.ok && nd.notices?.length){
-    document.getElementById('noticeArea').innerHTML=nd.notices.map(n=>
-      `<div class="notice-bar ${n.type}"><span>📢</span><span><strong>${CP.escHtml(n.title)}</strong> — ${CP.escHtml(n.content)}</span></div>`
-    ).join('');
+    // 공지사항
+    try {
+      const nd=await CP.get('/admin/notices?active=1');
+      if(nd.ok && nd.notices?.length){
+        document.getElementById('noticeArea').innerHTML=nd.notices.map(n=>
+          `<div class="notice-bar ${n.type}"><span>📢</span><span><strong>${CP.escHtml(n.title)}</strong> — ${CP.escHtml(n.content)}</span></div>`
+        ).join('');
+      }
+    } catch(e) {
+      console.error('공지사항 로드 실패:', e);
+    }
+    
+    await loadSites();
+  } catch(e) {
+    console.error('초기화 오류:', e);
+    showToast('초기화 중 오류가 발생했습니다.','error');
   }
-  await loadSites();
 }
 
 async function loadSites(){
-  const d=await CP.getSites();
-  if(!d.ok){showToast('사이트 로딩 실패','error');return;}
-  const sites=d.sites||[];
-  document.getElementById('sSites').textContent=sites.length;
-  document.getElementById('sActive').textContent=sites.filter(s=>s.status==='active').length;
+  try {
+    const d=await CP.getSites();
+    if(!d || !d.ok){
+      console.error('사이트 로딩 실패:', d);
+      const el=document.getElementById('sitesList');
+      el.innerHTML=`<div class="empty-state" style="color:var(--error)"><div style="width:56px;height:56px;background:rgba(239,68,68,.1);border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div><p style="font-weight:600;margin-bottom:6px;color:var(--error)">사이트 로딩 실패</p><p style="font-size:.83rem;margin-bottom:18px">${CP.escHtml(d?.error || '서버에서 사이트 목록을 가져올 수 없습니다.')}</p><button class="btn btn-primary btn-sm" onclick="loadSites()">다시 시도</button></div>`;
+      showToast(d?.error || '사이트 로딩 실패','error');
+      return;
+    }
+    
+    const sites=d.sites||[];
+    document.getElementById('sSites').textContent=sites.length;
+    document.getElementById('sActive').textContent=sites.filter(s=>s.status==='active').length;
 
-  const el=document.getElementById('sitesList');
-  if(!sites.length){
-    el.innerHTML=`<div class="empty-state"><div style="width:56px;height:56px;background:var(--surface2);border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px"><svg width="26" height="26" viewBox="0 0 24 24" fill="none"><rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 21h8M12 17v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div><p style="font-weight:600;margin-bottom:6px">사이트 없음</p><p style="font-size:.83rem;margin-bottom:18px">지금 바로 무료 CloudPress CMS 사이트를 구축하세요.</p><a href="/create.html" class="btn btn-primary btn-sm">첫 사이트 만들기</a></div>`;
-    return;
+    const el=document.getElementById('sitesList');
+    if(!sites.length){
+      el.innerHTML=`<div class="empty-state"><div style="width:56px;height:56px;background:var(--surface2);border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px"><svg width="26" height="26" viewBox="0 0 24 24" fill="none"><rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 21h8M12 17v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div><p style="font-weight:600;margin-bottom:6px">사이트 없음</p><p style="font-size:.83rem;margin-bottom:18px">지금 바로 무료 CloudPress CMS 사이트를 구축하세요.</p><a href="/create.html" class="btn btn-primary btn-sm">첫 사이트 만들기</a></div>`;
+      return;
+    }
+    el.innerHTML=sites.map(s=>{
+      const st=CP.statusBadge(s.status);
+      const url=s.wp_url||(s.custom_domain?`https://${s.custom_domain}`:'—');
+      const adminUrl=s.wp_admin_url||'';
+      const ver=s.wp_version?`<span class="ver-badge">v${CP.escHtml(s.wp_version)}</span>`:'';
+      return `<div class="site-card">
+        <div class="site-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M14 2L26 8V20L14 26L2 20V8L14 2Z" stroke="#f97316" stroke-width="1.5" viewBox="0 0 28 28"/><rect x="2" y="3" width="20" height="14" rx="2" stroke="#f97316" stroke-width="1.5"/><path d="M8 21h8M12 17v4" stroke="#f97316" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+        <div class="site-info">
+          <div class="site-name">${CP.escHtml(s.name)}${ver}</div>
+          <div class="site-url">${CP.escHtml(url)}</div>
+          <div style="margin-top:4px"><span class="badge" style="background:${st.color}18;color:${st.color}"><span class="status-dot" style="background:${st.color}"></span>${st.label}</span><span style="font-size:.72rem;color:var(--muted);margin-left:8px">${CP.formatDate(s.created_at)}</span></div>
+        </div>
+        <div class="site-actions">
+          ${s.status==='active'?`<a href="${CP.escHtml(adminUrl)}" target="_blank" class="btn-icon" title="CMS 관리자"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="15 3 21 3 21 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="10" y1="14" x2="21" y2="3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></a>`:''}
+          <a href="/site.html?id=${s.id}" class="btn-icon" title="관리"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="currentColor" stroke-width="1.5"/></svg></a>
+          <button class="btn-icon danger" onclick="openDel('${s.id}','${CP.escHtml(s.name)}')" title="삭제"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><polyline points="3 6 5 6 21 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M19 6l-1 14H6L5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M10 11v6M14 11v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+        </div>
+      </div>`;
+    }).join('');
+
+    sites.filter(s=>s.status==='provisioning').forEach(s=>pollStatus(s.id));
+  } catch(e) {
+    console.error('사이트 로딩 오류:', e);
+    const el=document.getElementById('sitesList');
+    el.innerHTML=`<div class="empty-state" style="color:var(--error)"><p style="font-weight:600;margin-bottom:6px;color:var(--error)">오류 발생</p><p style="font-size:.83rem;margin-bottom:18px">사이트 목록을 불러올 수 없습니다. 잠시 후 다시 시도해주세요.</p><button class="btn btn-primary btn-sm" onclick="loadSites()">다시 시도</button></div>`;
+    showToast('사이트 로딩 중 오류 발생','error');
   }
-  el.innerHTML=sites.map(s=>{
-    const st=CP.statusBadge(s.status);
-    const url=s.wp_url||(s.custom_domain?`https://${s.custom_domain}`:'—');
-    const adminUrl=s.wp_admin_url||'';
-    const ver=s.wp_version?`<span class="ver-badge">v${CP.escHtml(s.wp_version)}</span>`:'';
-    return `<div class="site-card">
-      <div class="site-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M14 2L26 8V20L14 26L2 20V8L14 2Z" stroke="#f97316" stroke-width="1.5" viewBox="0 0 28 28"/><rect x="2" y="3" width="20" height="14" rx="2" stroke="#f97316" stroke-width="1.5"/><path d="M8 21h8M12 17v4" stroke="#f97316" stroke-width="1.5" stroke-linecap="round"/></svg></div>
-      <div class="site-info">
-        <div class="site-name">${CP.escHtml(s.name)}${ver}</div>
-        <div class="site-url">${CP.escHtml(url)}</div>
-        <div style="margin-top:4px"><span class="badge" style="background:${st.color}18;color:${st.color}"><span class="status-dot" style="background:${st.color}"></span>${st.label}</span><span style="font-size:.72rem;color:var(--muted);margin-left:8px">${CP.formatDate(s.created_at)}</span></div>
-      </div>
-      <div class="site-actions">
-        ${s.status==='active'?`<a href="${CP.escHtml(adminUrl)}" target="_blank" class="btn-icon" title="CMS 관리자"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="15 3 21 3 21 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="10" y1="14" x2="21" y2="3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></a>`:''}
-        <a href="/site.html?id=${s.id}" class="btn-icon" title="관리"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="currentColor" stroke-width="1.5"/></svg></a>
-        <button class="btn-icon danger" onclick="openDel('${s.id}','${CP.escHtml(s.name)}')" title="삭제"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><polyline points="3 6 5 6 21 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M19 6l-1 14H6L5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M10 11v6M14 11v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
-      </div>
-    </div>`;
-  }).join('');
-
-  sites.filter(s=>s.status==='provisioning').forEach(s=>pollStatus(s.id));
 }
 
 async function pollStatus(id){
   const poll=async()=>{
-    const d=await CP.getSite(id);
-    if(!d.ok)return;
-    if(d.site.status==='active'||d.site.status==='error'){
-      await loadSites();
-      if(d.site.status==='active') showToast('CMS 구축 완료! 🎉','success');
-      else showToast('구축 중 오류 발생','error');
-    } else setTimeout(poll,5000);
+    try {
+      const d=await CP.getSite(id);
+      if(!d.ok)return;
+      if(d.site.status==='active'||d.site.status==='error'){
+        await loadSites();
+        if(d.site.status==='active') showToast('CMS 구축 완료! 🎉','success');
+        else showToast('구축 중 오류 발생','error');
+      } else setTimeout(poll,5000);
+    } catch(e) {
+      console.error('상태 폴링 오류:', e);
+    }
   };
   setTimeout(poll,5000);
 }
@@ -187,13 +215,25 @@ async function confirmDel(){
   if(!delId)return;
   document.getElementById('delConfirmBtn').textContent='삭제 중...';
   document.getElementById('delConfirmBtn').disabled=true;
-  const r=await CP.deleteSite(delId);
-  document.getElementById('delModal').classList.remove('open');
-  delId=null;
-  document.getElementById('delConfirmBtn').textContent='삭제';
-  document.getElementById('delConfirmBtn').disabled=false;
-  if(r.ok){showToast('삭제되었습니다.','success');await loadSites();}
-  else showToast(r.error||'삭제 실패','error');
+  try {
+    const r=await CP.deleteSite(delId);
+    document.getElementById('delModal').classList.remove('open');
+    delId=null;
+    document.getElementById('delConfirmBtn').textContent='삭제';
+    document.getElementById('delConfirmBtn').disabled=false;
+    if(r.ok){
+      showToast('삭제되었습니다.','success');
+      await loadSites();
+    }
+    else showToast(r.error||'삭제 실패','error');
+  } catch(e) {
+    console.error('삭제 오류:', e);
+    document.getElementById('delModal').classList.remove('open');
+    delId=null;
+    document.getElementById('delConfirmBtn').textContent='삭제';
+    document.getElementById('delConfirmBtn').disabled=false;
+    showToast('삭제 중 오류 발생','error');
+  }
 }
 
 init();
