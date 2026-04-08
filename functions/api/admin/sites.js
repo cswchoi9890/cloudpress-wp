@@ -23,6 +23,8 @@ async function requireAdmin(env, req) {
   } catch { return null; }
 }
 
+export const onRequestOptions = () => new Response(null, { status: 204, headers: CORS });
+
 export async function onRequest({ request, env }) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
 
@@ -37,7 +39,7 @@ export async function onRequest({ request, env }) {
       const page = parseInt(url.searchParams.get('page') || '1');
       const perPage = 30;
       const offset = (page - 1) * perPage;
-      const search = url.searchParams.get('search') || '';
+      const search = url.searchParams.get('search') || url.searchParams.get('q') || '';
       const status = url.searchParams.get('status') || '';
       const provider = url.searchParams.get('provider') || '';
 
@@ -84,26 +86,42 @@ export async function onRequest({ request, env }) {
 
     if (action === 'suspend') {
       await env.DB.prepare(
-        'UPDATE sites SET suspended=1,suspension_reason=?,updated_at=datetime(\'now\') WHERE id=?'
+        'UPDATE sites SET suspended=1,suspension_reason=?,updated_at=unixepoch() WHERE id=?'
       ).bind(reason || '관리자에 의해 일시 정지됨', siteId).run();
       return ok({ message: '사이트가 일시 정지되었습니다.' });
     }
 
     if (action === 'unsuspend') {
       await env.DB.prepare(
-        'UPDATE sites SET suspended=0,suspension_reason=NULL,updated_at=datetime(\'now\') WHERE id=?'
+        'UPDATE sites SET suspended=0,suspension_reason=NULL,updated_at=unixepoch() WHERE id=?'
       ).bind(siteId).run();
       return ok({ message: '사이트 정지가 해제되었습니다.' });
     }
 
     if (action === 'delete') {
       await env.DB.prepare(
-        "UPDATE sites SET status='deleted',deleted_at=datetime('now') WHERE id=?"
+        "UPDATE sites SET status='deleted',deleted_at=unixepoch() WHERE id=?"
       ).bind(siteId).run();
       return ok({ message: '사이트가 삭제되었습니다.' });
     }
 
     return err('알 수 없는 action');
+  }
+
+  // DELETE — 사이트 삭제 (CP.del('/admin/sites', {id}) 호출)
+  if (request.method === 'DELETE') {
+    let body;
+    try { body = await request.json(); } catch { return err('요청 형식 오류'); }
+    const { id: siteId } = body || {};
+    if (!siteId) return err('사이트 ID가 필요합니다.');
+
+    const site = await env.DB.prepare('SELECT id,status FROM sites WHERE id=?').bind(siteId).first();
+    if (!site) return err('사이트를 찾을 수 없습니다.', 404);
+
+    await env.DB.prepare(
+      "UPDATE sites SET status='deleted',deleted_at=unixepoch() WHERE id=?"
+    ).bind(siteId).run();
+    return ok({ message: '사이트가 삭제되었습니다.' });
   }
 
   return err('지원하지 않는 메서드', 405);
