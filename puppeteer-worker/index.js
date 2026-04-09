@@ -1208,38 +1208,226 @@ async function runWordPressInstaller(page, {
 }
 
 /* ═══════════════════════════════════════════════
-   cPanel File Manager로 인스톨러 업로드
+   인스톨러 업로드 — 3단계 폴백 전략
+   1) cPanel UAPI fileman (직접 API 호출)
+   2) Puppeteer File Manager UI (업로드 폼)
+   3) cPanel API2 file_put
 ═══════════════════════════════════════════════ */
 
 async function uploadInstallerViaCPanel(page, {
   cpanelUrl, accountUsername, password, installerContent,
 }) {
-  // iFastnet cPanel 로그인
-  const loginUrl = cpanelUrl.includes('infinityfree')
-    ? 'https://cpanel.infinityfree.net'
-    : cpanelUrl;
+  const fileName = 'cloudpress-installer.php';
 
-  await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await sleep(1500);
+  // ── 방법 1: cPanel UAPI fileman/save_file_content ──
+  try {
+    const cpBase = cpanelUrl.includes('infinityfree')
+      ? 'https://cpanel.infinityfree.net'
+      : cpanelUrl.replace(/\/+$/, '');
 
-  const needsLogin = await page.$('#user, input[name="user"], input[name="username"]').catch(() => null);
-  if (needsLogin) {
-    await safeType(page, '#user, input[name="user"], input[name="username"]', accountUsername);
-    await safeType(page, '#pass, input[name="pass"], input[name="password"]', password);
-    await page.click('input[type="submit"], button[type="submit"]').catch(() => {});
-    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+    const basicAuth = btoa(`${accountUsername}:${password}`);
+    const uapiUrl = `${cpBase}/execute/Fileman/save_file_content`;
+
+    const formData = new URLSearchParams({
+      dir: '/htdocs',
+      file: fileName,
+      content: installerContent,
+    });
+
+    const res = await fetch(uapiUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${basicAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: formData.toString(),
+    });
+
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data?.status === 1 || data?.result?.status === 1) {
+        return { ok: true, method: 'cpanel_uapi' };
+      }
+    }
+  } catch (_) {}
+
+  // ── 방법 2: Puppeteer로 cPanel 로그인 후 File Manager UI 파일 업로드 ──
+  try {
+    const loginUrl = cpanelUrl.includes('infinityfree')
+      ? 'https://cpanel.infinityfree.net'
+      : cpanelUrl.replace(/\/+$/, '');
+
+    await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await sleep(1500);
-  }
 
-  // File Manager 접근
-  await page.goto(`${loginUrl}/filemanager`, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(async () => {
-    await page.goto(`${loginUrl}/filemanager/index.html?dir=/htdocs`, {
-      waitUntil: 'domcontentloaded', timeout: 20000,
-    }).catch(() => {});
-  });
-  await sleep(2000);
+    // 로그인 폼이 있으면 로그인
+    const userInput = await page.$('#user, input[name="user"], input[name="username"]').catch(() => null);
+    if (userInput) {
+      await safeType(page, '#user, input[name="user"], input[name="username"]', accountUsername);
+      await safeType(page, '#pass, input[name="pass"], input[name="password"]', password);
+      await page.click('input[type="submit"], button[type="submit"]').catch(() => {});
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+      await sleep(2000);
+    }
 
-  return { ok: true, method: 'file_manager' };
+    // 로그인 후 cPanel 세션 쿠키를 이용해 UAPI 직접 호출
+    const cookies = await page.cookies();
+    const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+
+    const cpBase = loginUrl;
+    const uapiUrl = `${cpBase}/execute/Fileman/save_file_content`;
+    const formData = new URLSearchParams({
+      dir: '/htdocs',
+      file: fileName,
+      content: installerContent,
+    });
+
+    const apiRes = await fetch(uapiUrl, {
+      method: 'POST',
+      headers: {
+        'Cookie': cookieStr,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': cpBase,
+      },
+      body: formData.toString(),
+    });
+
+    if (apiRes.ok) {
+      const data = await apiRes.json().catch(() => null);
+      if (data?.status === 1 || data?.result?.status === 1) {
+        return { ok: true, method: 'cpanel_session_api' };
+      }
+    }
+
+    // ── 방법 2b: File Manager UI에서 New File → 파일명 입력 → 내용 붙여넣기 ──
+    const fmUrls = [
+      `${cpBase}/filemanager/index.html?dir=/htdocs`,
+      `${cpBase}/filemanager`,
+    ];
+    for (const fmUrl of fmUrls) {
+      await page.goto(fmUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+      await sleep(2000);
+
+      // "New File" 버튼
+      const newFileBtn = await waitForAny(page, [
+        '#newfile', 'a[title*="New File"]', 'button[title*="New File"]',
+        'li[data-action="newfile"] a', '#toolbar a[title*="New"]',
+      ], 8000);
+      if (!newFileBtn) continue;
+
+      await newFileBtn.el.click();
+      await sleep(1000);
+
+      // 파일명 입력 다이얼로그
+      const nameInput = await waitForAny(page, [
+        'input[name="newfilename"]', '#newfilename', 'input[placeholder*="file"]',
+        'input[type="text"]',
+      ], 6000);
+      if (!nameInput) continue;
+
+      await nameInput.el.click({ clickCount: 3 });
+      await page.keyboard.type(fileName, { delay: 30 });
+
+      // 확인 버튼
+      const confirmBtn = await waitForAny(page, [
+        'button[type="submit"]', 'input[type="submit"]', 'button.btn-primary',
+        '#createBtn', '.ui-dialog-buttonset button',
+      ], 5000);
+      if (confirmBtn) {
+        await confirmBtn.el.click();
+        await sleep(2000);
+      }
+
+      // 생성된 파일 편집 (Edit 버튼)
+      const editBtn = await waitForAny(page, [
+        `a[href*="${fileName}"]`, `tr[data-file*="${fileName}"] .edit`,
+        '#edit', 'a[title="Edit"]',
+      ], 6000);
+      if (!editBtn) continue;
+
+      await editBtn.el.click();
+      await sleep(2000);
+
+      // 코드 에디터에 내용 입력
+      const editor = await waitForAny(page, [
+        '#edit-area textarea', 'textarea#code', 'textarea.ace_text-input',
+        '.CodeMirror textarea', '#editorcontent',
+      ], 8000);
+      if (!editor) continue;
+
+      await editor.el.click({ clickCount: 3 });
+      await page.keyboard.down('Control');
+      await page.keyboard.press('a');
+      await page.keyboard.up('Control');
+      await page.keyboard.press('Backspace');
+
+      // 내용이 길면 JavaScript로 직접 주입
+      await page.evaluate((content) => {
+        const ta = document.querySelector('#edit-area textarea, textarea#code, #editorcontent');
+        if (ta) { ta.value = content; ta.dispatchEvent(new Event('input', { bubbles: true })); }
+        // CodeMirror
+        const cm = document.querySelector('.CodeMirror')?.CodeMirror;
+        if (cm) cm.setValue(content);
+        // Ace
+        if (window.ace) {
+          const ed = ace.edit(document.querySelector('.ace_editor'));
+          if (ed) ed.setValue(content, -1);
+        }
+      }, installerContent);
+
+      await sleep(500);
+
+      // 저장
+      const saveBtn = await waitForAny(page, [
+        '#saveBtn', 'button[title="Save"]', 'input[value="Save"]',
+        '#save', '.save-button', 'button.btn-primary',
+      ], 5000);
+      if (saveBtn) {
+        await saveBtn.el.click();
+        await sleep(2000);
+        return { ok: true, method: 'file_manager_ui' };
+      }
+    }
+  } catch (_) {}
+
+  // ── 방법 3: cPanel API2 file_put (iFastnet 일부 버전 지원) ──
+  try {
+    const cpBase = cpanelUrl.includes('infinityfree')
+      ? 'https://cpanel.infinityfree.net'
+      : cpanelUrl.replace(/\/+$/, '');
+
+    const basicAuth = btoa(`${accountUsername}:${password}`);
+    const encoded = btoa(unescape(encodeURIComponent(installerContent)));
+
+    const api2Url = `${cpBase}/json-api/cpanel?cpanel_jsonapi_module=Fileman&cpanel_jsonapi_func=viewfile&cpanel_jsonapi_version=2`;
+    const body2 = new URLSearchParams({
+      cpanel_jsonapi_module: 'Fileman',
+      cpanel_jsonapi_func: 'savefile',
+      cpanel_jsonapi_version: '2',
+      dir: '/htdocs',
+      file: fileName,
+      content: encoded,
+    });
+
+    const r2 = await fetch(`${cpBase}/json-api/cpanel`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${basicAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: body2.toString(),
+    });
+
+    if (r2.ok) {
+      const d2 = await r2.json().catch(() => null);
+      if (d2?.cpanelresult?.data?.[0]?.result === 1) {
+        return { ok: true, method: 'cpanel_api2' };
+      }
+    }
+  } catch (_) {}
+
+  // 모든 방법 실패
+  return { ok: false, error: '파일 업로드 방법 소진 (UAPI/FileManager UI/API2 모두 실패)' };
 }
 
 /* ═══════════════════════════════════════════════
@@ -1353,7 +1541,7 @@ export default {
         });
 
         if (!uploadResult.ok) {
-          return respond({ ok: false, error: '인스톨러 업로드 실패' });
+          return respond({ ok: false, error: '인스톨러 업로드 실패: ' + (uploadResult.error || '알 수 없는 오류') });
         }
 
         const installerUrl = `${wordpressUrl}/cloudpress-installer.php`;
