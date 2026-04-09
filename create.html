@@ -183,7 +183,7 @@
             <p style="color:var(--muted);font-size:.85rem;margin-bottom:20px">버튼 하나로 무료 호스팅에 WordPress가 자동으로 설치됩니다. 설치하는 동안 다른 탭으로 이동하셔도 됩니다.</p>
 
             <ul class="feature-list">
-              <li>자체 호스팅 서버 계정 자동 할당</li>
+              <li>WordPress 자동 설치 (별도 계정 생성 없음)</li>
               <li>WordPress 최신버전 자동 설치 (한국어 KR)</li>
               <li>PHP 8.3 최신버전 + 한국 시간(KST) 자동 설정</li>
               <li>MySQL timezone KST (+9:00) 자동 적용</li>
@@ -239,34 +239,30 @@
             <div style="margin:16px 0;text-align:left">
               <div class="provision-step" id="pstep1">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">1단계: 호스팅 서버 계정 할당 (자체)</span>
+                <span class="pstep-name">1단계: WordPress 설치 (PHP 8.3 + 한국어 + 반응형)</span>
               </div>
               <div class="provision-step" id="pstep2">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">2단계: WordPress 자체 설치 (PHP 8.3 + 한국어 + 반응형)</span>
+                <span class="pstep-name">2단계: 플러그인 설치 및 최적화</span>
               </div>
               <div class="provision-step" id="pstep3">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">3단계: Cron Job 활성화</span>
+                <span class="pstep-name">3단계: 속도 최적화 적용</span>
               </div>
               <div class="provision-step" id="pstep4">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">4단계: 서스펜드 억제 설정</span>
-              </div>
-              <div class="provision-step" id="pstep5">
-                <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">5단계: 속도 최적화</span>
+                <span class="pstep-name">4단계: 사이트 활성화 완료</span>
               </div>
             </div>
 
             <div class="status-polling">
               <div class="pulse-dot"></div>
-              <span id="statusText">호스팅 서버 계정 할당 중... (약 5~10분 소요)</span>
+              <span id="statusText">WordPress 설치 중... (약 5~10분 소요)</span>
             </div>
 
             <div class="log" id="logBox">
               <div class="cur">▶ 사이트 생성 요청 전송됨</div>
-              <div class="cur">▶ 호스팅 서버 계정 할당 중...</div>
+              <div class="cur">▶ WordPress 설치 준비 중...</div>
             </div>
           </div>
         </div>
@@ -535,13 +531,11 @@ async function startCreation() {
 
     currentSiteId = data.siteId;
     addLog(`✅ 사이트 생성 요청 완료 (ID: ${data.siteId})`);
-    addLog(`🎯 호스팅 업체: ${data.provider}`);
     addLog(`📋 플랜: ${data.plan || 'free'}`);
     addLog(`⚡ PHP: ${data.phpVersion || '8.3 (최신)'}`);
     addLog(`📦 WP: ${data.wpVersion || '최신버전 (한국어)'}`);
     addLog(`🕐 시간대: ${data.timezone || 'Asia/Seoul (KST)'}`);
-    addLog(`⏳ 백그라운드 설치 파이프라인 시작...`);
-    addLog(`🔄 Worker 연결 중... (최대 60초 대기)`);
+    addLog(`🚀 WordPress 자동 설치를 시작합니다...`);
 
     startPolling(data.siteId);
 
@@ -552,13 +546,13 @@ async function startCreation() {
 
 /* provision_step → 단계 UI 매핑 */
 const STEP_MAP = {
-  'initializing':       { step: 0, msg: '초기화 중...',                                    title: '⏳ Worker 연결 대기 중...' },
-  'hosting_account':    { step: 1, msg: '① 호스팅 서버 계정 할당 중...',                    title: '① 호스팅 서버 계정 할당 중...' },
-  'wordpress_install':  { step: 2, msg: '② WordPress 자체 설치 중 (PHP 8.3 + 한국어 + 반응형)...', title: '② WordPress 자체 설치 중...' },
-  'cron_setup':         { step: 3, msg: '③ Cron Job 활성화 중...',                         title: '③ Cron Job 활성화 중...' },
-  'suspend_protection': { step: 4, msg: '④ 서스펜드 억제 설정 중...',                      title: '④ 서스펜드 억제 설정 중...' },
-  'speed_optimization': { step: 5, msg: '⑤ 속도 최적화 적용 중...',                        title: '⑤ 속도 최적화 적용 중...' },
-  'completed':          { step: 6, msg: '✅ 모든 설치 완료!',                               title: '✅ 모든 설치 완료!' },
+  'initializing':       { step: 0, msg: '초기화 중...',                                         title: '⏳ 설치 준비 중...' },
+  'hosting_account':    { step: 1, msg: '① WordPress 설치 중...',                               title: '① WordPress 설치 중...' },
+  'wordpress_install':  { step: 1, msg: '① WordPress 설치 중 (PHP 8.3 + 한국어 + 반응형)...',   title: '① WordPress 설치 중...' },
+  'cron_setup':         { step: 2, msg: '② 플러그인 설치 및 최적화 중...',                      title: '② 플러그인 설치 중...' },
+  'suspend_protection': { step: 3, msg: '③ 속도 최적화 적용 중...',                             title: '③ 속도 최적화 적용 중...' },
+  'speed_optimization': { step: 3, msg: '③ 속도 최적화 적용 중...',                             title: '③ 속도 최적화 적용 중...' },
+  'completed':          { step: 4, msg: '✅ 사이트 생성 완료!',                                  title: '✅ 사이트 생성 완료!' },
 };
 
 function updateProvisionSteps(provisionStep, status) {
@@ -566,7 +560,7 @@ function updateProvisionSteps(provisionStep, status) {
   const info = STEP_MAP[provisionStep] || {};
   const currentStepNum = info.step || 0;
 
-  for (let i = 1; i <= 5; i++) {
+  for (let i = 1; i <= 4; i++) {
     const el = document.getElementById('pstep' + i);
     if (!el) continue;
     const icon = el.querySelector('.pstep-icon');
@@ -612,18 +606,16 @@ function startPolling(siteId) {
 
       if (provStep !== prevProvisionStep) {
         prevProvisionStep = provStep;
-        if (provStep === 'hosting_account')    addLog('🔧 [1/5] 호스팅 서버 계정 할당 중... (자체 처리)');
-        if (provStep === 'wordpress_install')  addLog('📦 [2/5] WordPress 자체 설치 중... (PHP 8.3 + 한국어 + 반응형)');
-        if (provStep === 'cron_setup')         addLog('⏰ [3/5] Cron Job 자동 활성화 중...');
-        if (provStep === 'suspend_protection') addLog('🛡️ [4/5] 서스펜드 억제 설정 중... (플랜: ' + (site.plan || 'free') + ')');
-        if (provStep === 'speed_optimization') addLog('⚡ [5/5] 속도 최적화 적용 중...');
+        if (provStep === 'wordpress_install' || provStep === 'hosting_account') addLog('📦 [1/4] WordPress 설치 중... (PHP 8.3 + 한국어 + 반응형)');
+        if (provStep === 'cron_setup')         addLog('🔧 [2/4] 플러그인 및 환경 설정 중...');
+        if (provStep === 'suspend_protection' || provStep === 'speed_optimization') addLog('⚡ [3/4] 속도 최적화 적용 중...');
       }
 
       if (status === 'active') {
         clearInterval(pollInterval);
         pollInterval = null;
 
-        for (let i = 1; i <= 5; i++) {
+        for (let i = 1; i <= 4; i++) {
           const el = document.getElementById('pstep' + i);
           if (el) {
             el.className = 'provision-step done';
@@ -791,9 +783,9 @@ function resetWizard() {
   const progressTitle = document.getElementById('progressTitle');
   const progressDesc  = document.getElementById('progressDesc');
   const statusText    = document.getElementById('statusText');
-  if (progressTitle) progressTitle.textContent = 'WordPress 설치 준비 중...';
+  if (progressTitle) progressTitle.textContent = 'WordPress 자동 설치 시작';
   if (progressDesc)  progressDesc.innerHTML = '자체 패널로 WordPress를 자동으로 설치합니다. 약 5~10분 소요됩니다.<br><small style="opacity:.7">다른 탭으로 이동해도 설치가 계속 진행됩니다.</small>';
-  if (statusText)    statusText.textContent = '호스팅 계정 생성 중... (약 5~10분 소요)';
+  if (statusText)    statusText.textContent = 'WordPress 설치 중... (약 5~10분 소요)';
 
   // 에러 메시지 초기화
   const errMsg = document.getElementById('errMsg');
