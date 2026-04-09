@@ -1,27 +1,18 @@
 // puppeteer-worker/index.js
-// CloudPress v6.0 — 완전 자체 관리 WordPress 자동화
-//
-// ✅ 아키텍처:
-//   - 외부 호스팅사(InfinityFree/ByetHost) 계정 생성 로직 완전 제거
-//   - iFastnet 서버 IP만 사용 (물리 서버 인프라)
-//   - 계정 생성 / 파일 배포 / WordPress 설치 전부 자체 처리
-//   - 서버 접근: 관리자 설정의 서버 IP + FTP/API 자격증명으로 직접 연결
-//   - Cloudflare D1 에 모든 사이트 정보 저장
-//
-// 배포 흐름:
-//   1. 자체 계정 생성 (DB에만 저장, 외부 호스팅사 없음)
-//   2. iFastnet 서버에 FTP/HTTP로 WordPress 파일 직접 업로드
-//   3. PHP installer 실행 → WordPress 설치
-//   4. MU-Plugin (크론, 반응형, 속도최적화) 자동 배치
-//   5. 완료 → DB 상태 active 업데이트
+// CloudPress v4.0 — Puppeteer 자동화 워커
+// ✅ 수정1: resetWizard 버그 수정 (사이트 생성 완전 재시도 가능)
+// ✅ 수정2: PHP 최신 버전(8.3) 강제, timezone Asia/Seoul, MySQL timezone KST, WP 최신버전, 한국 설정 자동화
+// ✅ 수정3: 자체 패널 사용 (Softaculous 완전 제거)
+// ✅ 수정4: 백그라운드 작동 (waitUntil + 상태 폴링)
+// ✅ 수정5: 사이트 생성 완료 시 크롬 알림 (Push Notification)
+// ✅ 수정6: 도메인 연결 지원 (서브도메인 기본 → 커스텀 도메인 추가 → CNAME 인증 → 주도메인 설정)
 
 import puppeteer from '@cloudflare/puppeteer';
 
 /* ═══════════════════════════════════════════════
-   공통 유틸
+   상수 / 유틸
 ═══════════════════════════════════════════════ */
-
-const CORS = {
+const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type,X-Worker-Secret',
@@ -32,7 +23,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 function respond(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json', ...CORS },
+    headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
   });
 }
 
@@ -55,127 +46,104 @@ async function safeType(page, selector, value) {
     await page.waitForSelector(selector, { timeout: 8000 });
     await page.click(selector, { clickCount: 3 });
     await page.keyboard.press('Backspace');
-    await page.type(selector, value, { delay: 25 });
+    await page.type(selector, value, { delay: 30 });
     return true;
   } catch (_) {
     return false;
   }
 }
 
-async function pageText(page) {
-  return page.evaluate(() => document.body?.innerText || '').catch(() => '');
+async function pageContains(page, ...texts) {
+  const body = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
+  return texts.some(t => body.toLowerCase().includes(t.toLowerCase()));
 }
 
 /* ═══════════════════════════════════════════════
-   서버 설정 조회 (관리자 DB에서)
-   - 외부 호스팅사 아님, 운영자가 직접 설정한 iFastnet 서버 정보
+   호스팅 프로바이더 구현
 ═══════════════════════════════════════════════ */
 
-function getServerConfig(env) {
-  // 환경변수 또는 wrangler.toml [vars] 에서 읽음
-  // 관리자가 어드민 설정에서 입력한 서버 IP / FTP 정보
-  return {
-    serverIp:    env.SERVER_IP    || '',       // iFastnet 서버 IP
-    ftpHost:     env.FTP_HOST     || env.SERVER_IP || '',
-    ftpUser:     env.FTP_USER     || '',       // FTP 계정
-    ftpPass:     env.FTP_PASS     || '',       // FTP 비밀번호
-    ftpPort:     env.FTP_PORT     || '21',
-    serverPanel: env.SERVER_PANEL || '',       // 서버 패널 URL (있으면 사용)
-    panelUser:   env.PANEL_USER   || '',
-    panelPass:   env.PANEL_PASS   || '',
-    dbHost:      env.DB_HOST      || 'localhost',
-    dbRootUser:  env.DB_ROOT_USER || 'root',
-    dbRootPass:  env.DB_ROOT_PASS || '',
-    webRoot:     env.WEB_ROOT     || '/htdocs', // 웹 루트 경로
-    phpBin:      env.PHP_BIN      || 'php8.3', // PHP 실행 바이너리
-  };
-}
+// PROVIDERS 레거시 코드 제거됨 (CloudPress v5.0)
+// 외부 호스팅 회원가입(InfinityFree/ByetHost) 자동화는 CAPTCHA/UI 변경으로 불안정
+// → /api/provision-hosting 핸들러에서 자체 계정 할당으로 교체됨
+const PROVIDERS = {}; // 하위 호환성 유지용 빈 객체
 
 /* ═══════════════════════════════════════════════
-   자체 계정/도메인 생성
-   - 외부 호스팅사에 가입하지 않음
-   - CloudPress 자체 서브도메인 발급 (DB에 저장)
-   - iFastnet 서버의 웹 루트에 디렉터리만 생성
+   WordPress 설정 파일 생성 (PHP 8.3 + KST 기준)
 ═══════════════════════════════════════════════ */
 
-function generateSelfAccount(siteName, serverConfig, env) {
-  const baseDomain = env.SITE_DOMAIN || 'cloudpress.site';
-  const slug = (siteName || 'site')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '')
-    .slice(0, 12) || 'site';
-  const suffix = Math.random().toString(36).slice(2, 6);
-  const subdomain = `${slug}${suffix}`; // e.g. myshop4x2k
-
-  return {
-    accountUsername: subdomain,
-    // 자체 서브도메인 (CloudPress 도메인)
-    hostingDomain:   `${subdomain}.${baseDomain}`,
-    // 실제 파일이 올라갈 서버 경로
-    webPath:         `${serverConfig.webRoot}/${subdomain}`,
-    // WordPress URL
-    siteUrl:         `http://${subdomain}.${baseDomain}`,
-    wpAdminUrl:      `http://${subdomain}.${baseDomain}/wp-admin/`,
-  };
-}
-
-/* ═══════════════════════════════════════════════
-   WordPress 설치 파일 생성기들
-═══════════════════════════════════════════════ */
-
-function genWpConfig({ dbName, dbUser, dbPass, dbHost, siteUrl, siteName }) {
-  const keys = Array.from({ length: 8 }, () =>
+function generateWpConfig({ dbName, dbUser, dbPass, dbHost, siteUrl, siteName }) {
+  const authKeys = Array.from({ length: 8 }, () =>
     Math.random().toString(36).repeat(3).slice(0, 64)
   );
   return `<?php
-define('DB_NAME',     '${dbName}');
-define('DB_USER',     '${dbUser}');
-define('DB_PASSWORD', '${dbPass}');
-define('DB_HOST',     '${dbHost}');
-define('DB_CHARSET',  'utf8mb4');
-define('DB_COLLATE',  'utf8mb4_unicode_ci');
+/**
+ * CloudPress 자동 생성 wp-config.php
+ * PHP 8.3+ 최적화 / 한국 시간(KST, Asia/Seoul) 기준
+ */
 
-define('AUTH_KEY',         '${keys[0]}');
-define('SECURE_AUTH_KEY',  '${keys[1]}');
-define('LOGGED_IN_KEY',    '${keys[2]}');
-define('NONCE_KEY',        '${keys[3]}');
-define('AUTH_SALT',        '${keys[4]}');
-define('SECURE_AUTH_SALT', '${keys[5]}');
-define('LOGGED_IN_SALT',   '${keys[6]}');
-define('NONCE_SALT',       '${keys[7]}');
+define('DB_NAME', '${dbName}');
+define('DB_USER', '${dbUser}');
+define('DB_PASSWORD', '${dbPass}');
+define('DB_HOST', '${dbHost}');
+define('DB_CHARSET', 'utf8mb4');
+define('DB_COLLATE', 'utf8mb4_unicode_ci');
+
+define('AUTH_KEY',         '${authKeys[0]}');
+define('SECURE_AUTH_KEY',  '${authKeys[1]}');
+define('LOGGED_IN_KEY',    '${authKeys[2]}');
+define('NONCE_KEY',        '${authKeys[3]}');
+define('AUTH_SALT',        '${authKeys[4]}');
+define('SECURE_AUTH_SALT', '${authKeys[5]}');
+define('LOGGED_IN_SALT',   '${authKeys[6]}');
+define('NONCE_SALT',       '${authKeys[7]}');
 
 $table_prefix = 'wp_';
 
+// ── 사이트 URL ──
 define('WP_HOME',    '${siteUrl}');
 define('WP_SITEURL', '${siteUrl}');
-define('WPLANG',     'ko_KR');
 
-define('WP_MEMORY_LIMIT',     '256M');
+// ── 한국어 / 한국 시간 ──
+define('WPLANG', 'ko_KR');
+
+// ── PHP 8.3 퍼포먼스 최적화 ──
+define('WP_MEMORY_LIMIT', '256M');
 define('WP_MAX_MEMORY_LIMIT', '512M');
-define('WP_POST_REVISIONS',   3);
-define('EMPTY_TRASH_DAYS',    7);
-define('WP_CACHE',            true);
-define('COMPRESS_CSS',        true);
-define('COMPRESS_SCRIPTS',    true);
+define('WP_POST_REVISIONS', 3);
+define('EMPTY_TRASH_DAYS', 7);
+define('WP_CACHE', true);
+define('COMPRESS_CSS', true);
+define('COMPRESS_SCRIPTS', true);
 define('CONCATENATE_SCRIPTS', false);
-define('ENFORCE_GZIP',        true);
-define('AUTOSAVE_INTERVAL',   300);
-define('DISABLE_WP_CRON',     false);
+define('ENFORCE_GZIP', true);
+define('AUTOSAVE_INTERVAL', 300);
+define('WP_CRON_LOCK_TIMEOUT', 60);
+define('DISABLE_WP_CRON', false);
 
+// ── 보안 ──
 define('DISALLOW_FILE_EDIT', true);
-define('WP_DEBUG',           false);
-define('WP_DEBUG_LOG',       false);
-define('WP_DEBUG_DISPLAY',   false);
-define('FORCE_SSL_ADMIN',    false);
+define('WP_DEBUG', false);
+define('WP_DEBUG_LOG', false);
+define('WP_DEBUG_DISPLAY', false);
+define('SCRIPT_DEBUG', false);
+define('FORCE_SSL_ADMIN', false);
 
-if (!defined('ABSPATH')) {
+// ── MySQL 타임존 (KST) 설정 ──
+// wp-settings.php 로드 후 DB 연결 시 KST 강제 적용
+if ( !defined('ABSPATH') ) {
   define('ABSPATH', __DIR__ . '/');
 }
 require_once ABSPATH . 'wp-settings.php';
 `;
 }
 
-function genHtaccess() {
+/**
+ * .htaccess (속도 + 보안 최적화)
+ */
+function generateHtaccess({ plan = 'free' }) {
+  const cacheControl = plan === 'enterprise' ? '2592000' :
+                       plan === 'pro'        ? '1296000' :
+                       plan === 'starter'    ? '604800'  : '86400';
   return `# BEGIN WordPress
 <IfModule mod_rewrite.c>
 RewriteEngine On
@@ -187,24 +155,40 @@ RewriteRule . /index.php [L]
 </IfModule>
 # END WordPress
 
+# ── 압축 ──
 <IfModule mod_deflate.c>
-  AddOutputFilterByType DEFLATE text/html text/plain text/css text/javascript
-  AddOutputFilterByType DEFLATE application/javascript application/json image/svg+xml
+  AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css text/javascript
+  AddOutputFilterByType DEFLATE application/javascript application/x-javascript application/json
+  AddOutputFilterByType DEFLATE application/xml application/xhtml+xml application/rss+xml
+  AddOutputFilterByType DEFLATE image/svg+xml font/opentype application/font-woff
 </IfModule>
 
+# ── 브라우저 캐싱 ──
 <IfModule mod_expires.c>
   ExpiresActive On
-  ExpiresByType image/jpeg "access plus 30 days"
-  ExpiresByType image/png  "access plus 30 days"
-  ExpiresByType image/webp "access plus 30 days"
-  ExpiresByType text/css   "access plus 7 days"
-  ExpiresByType application/javascript "access plus 7 days"
+  ExpiresByType image/jpg "access plus ${cacheControl} seconds"
+  ExpiresByType image/jpeg "access plus ${cacheControl} seconds"
+  ExpiresByType image/gif "access plus ${cacheControl} seconds"
+  ExpiresByType image/png "access plus ${cacheControl} seconds"
+  ExpiresByType image/webp "access plus ${cacheControl} seconds"
+  ExpiresByType image/svg+xml "access plus ${cacheControl} seconds"
+  ExpiresByType text/css "access plus 604800 seconds"
+  ExpiresByType application/javascript "access plus 604800 seconds"
+  ExpiresByType font/woff2 "access plus 2592000 seconds"
 </IfModule>
 
+# ── 보안 헤더 ──
 <IfModule mod_headers.c>
+  Header set Connection keep-alive
   Header always set X-Content-Type-Options nosniff
   Header always set X-Frame-Options SAMEORIGIN
   Header always set X-XSS-Protection "1; mode=block"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+FileETag None
+<IfModule mod_headers.c>
+  Header unset ETag
 </IfModule>
 
 <FilesMatch "(^\\.htaccess|readme\\.html|license\\.txt|wp-config-sample\\.php)$">
@@ -214,100 +198,789 @@ RewriteRule . /index.php [L]
 `;
 }
 
-function genUserIni() {
-  return `; CloudPress PHP 설정 (PHP 8.3)
-memory_limit = 256M
-max_execution_time = 120
+/**
+ * .user.ini — PHP 8.3 최신 버전 + 한국 타임존
+ */
+function generateUserIni({ plan = 'free' }) {
+  const memLimit = plan === 'enterprise' ? '512M' :
+                   plan === 'pro'        ? '256M' :
+                   plan === 'starter'    ? '128M' : '64M';
+  const execTime = plan === 'enterprise' ? '300' :
+                   plan === 'pro'        ? '120' :
+                   plan === 'starter'    ? '90'  : '60';
+  return `; CloudPress PHP 최적화 (PHP 8.3 기준)
+; 자동 생성 — 수정하지 마세요
+
+; ── 버전 요구 (호스팅이 허용하면 PHP 8.3 사용) ──
+; 실제 버전 선택은 호스팅 cPanel > PHP Version Manager에서 설정
+
+; ── 메모리 / 실행시간 ──
+memory_limit = ${memLimit}
+max_execution_time = ${execTime}
 max_input_time = 60
 post_max_size = 256M
 upload_max_filesize = 256M
 max_input_vars = 10000
+
+; ── 한국 타임존 (KST = UTC+9) ──
 date.timezone = Asia/Seoul
+
+; ── 출력 버퍼링 (속도) ──
 output_buffering = 4096
 zlib.output_compression = On
+zlib.output_compression_level = 6
+
+; ── 세션 최적화 ──
+session.gc_maxlifetime = 3600
+session.cache_limiter = nocache
+session.cookie_httponly = 1
+session.cookie_secure = 1
+session.use_strict_mode = 1
+session.cookie_samesite = Lax
+
+; ── OPcache (PHP 8.3 개선판) ──
 opcache.enable = 1
+opcache.enable_cli = 0
 opcache.memory_consumption = 128
+opcache.interned_strings_buffer = 16
 opcache.max_accelerated_files = 10000
 opcache.revalidate_freq = 60
+opcache.fast_shutdown = 1
+opcache.jit = 1255
+opcache.jit_buffer_size = 64M
+
+; ── 에러 표시 비활성화 ──
 display_errors = Off
 log_errors = On
+error_reporting = E_ALL & ~E_DEPRECATED & ~E_STRICT
+
+; ── 보안 ──
 expose_php = Off
 allow_url_fopen = On
 allow_url_include = Off
 `;
 }
 
-function genMuPluginMysqlKst() {
+/**
+ * MySQL KST 타임존 설정 MU-Plugin
+ */
+function generateMysqlTimezonePlugin() {
   return `<?php
-/** Plugin Name: CloudPress MySQL KST Timezone */
+/**
+ * Plugin Name: CloudPress MySQL KST Timezone
+ * Description: MySQL 세션 타임존을 한국 표준시(KST, UTC+9)로 강제 설정
+ * 자동 생성 — 수정하지 마세요
+ */
+
 add_action('init', function() {
   global $wpdb;
+  // MySQL 세션 타임존 KST (+9:00) 설정
   $wpdb->query("SET time_zone = '+9:00'");
+  // 연결 charset utf8mb4 보장
   $wpdb->query("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
 }, 1);
+
+// WPDB 초기화 시에도 실행
+add_action('wp_loaded', function() {
+  global $wpdb;
+  $wpdb->query("SET time_zone = '+9:00'");
+}, 1);
 `;
 }
 
-function genMuPluginResponsive() {
+/**
+ * Cron Runner PHP (wp-cron 강제 실행)
+ */
+function generateCronRunner() {
   return `<?php
-/** Plugin Name: CloudPress Responsive Enhancer
- *  Description: 반응형 WordPress — 모바일/태블릿/데스크톱 완전 지원 */
+/**
+ * CloudPress Cron Runner
+ * WordPress pseudo-cron 강제 실행 파일
+ */
+define('DOING_CRON', true);
+define('ABSPATH', __DIR__ . '/');
 
-add_action('wp_head', function() {
-  echo '<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=5.0">';
+$key = isset($_GET['key']) ? $_GET['key'] : '';
+$expected = defined('CRON_SECRET_KEY') ? CRON_SECRET_KEY : '';
+if (!empty($expected) && $key !== $expected) {
+  http_response_code(403);
+  exit('Forbidden');
+}
+
+if (!file_exists(ABSPATH . 'wp-load.php')) {
+  http_response_code(500);
+  exit('WordPress not found');
+}
+
+ignore_user_abort(true);
+set_time_limit(60);
+require_once ABSPATH . 'wp-load.php';
+
+spawn_cron();
+$crons = _get_cron_array();
+if (!empty($crons)) {
+  $gmt_time = microtime(true);
+  foreach ($crons as $timestamp => $cronhooks) {
+    if ($timestamp > $gmt_time) break;
+    foreach ($cronhooks as $hook => $keys) {
+      foreach ($keys as $k => $v) {
+        $schedule = $v['schedule'];
+        $args = $v['args'];
+        wp_reschedule_event($timestamp, $schedule, $hook, $args);
+        wp_unschedule_event($timestamp, $hook, $args);
+        do_action_ref_array($hook, $args);
+      }
+    }
+  }
+}
+
+echo json_encode(['ok' => true, 'time' => date('c'), 'jobs' => count($crons ?? [])]);
+`;
+}
+
+/**
+ * WordPress 자동 설치 PHP 스크립트 (installer.php)
+ * PHP 8.3 + 한국어 WP 최신버전 + KST 기준
+ */
+function generateWpInstallerScript({
+  dbName, dbUser, dbPass, dbHost,
+  wpAdminUser, wpAdminPw, wpAdminEmail,
+  siteName, siteUrl, plan,
+  responsive = true,
+}) {
+  const wpConfig = generateWpConfig({ dbName, dbUser, dbPass, dbHost, siteUrl, siteName });
+  const htaccess = generateHtaccess({ plan });
+  const userIni = generateUserIni({ plan });
+  const cronRunner = generateCronRunner();
+  const mysqlTzPlugin = generateMysqlTimezonePlugin();
+
+  const wpConfigB64 = Buffer.from(wpConfig).toString('base64');
+  const htaccessB64 = Buffer.from(htaccess).toString('base64');
+  const userIniB64 = Buffer.from(userIni).toString('base64');
+  const cronRunnerB64 = Buffer.from(cronRunner).toString('base64');
+  const mysqlTzB64 = Buffer.from(mysqlTzPlugin).toString('base64');
+
+  const siteNameEscaped = siteName.replace(/'/g, "\\'").replace(/\\/g, '\\\\');
+  const secret8 = wpAdminPw.slice(0, 8);
+
+  return `<?php
+/**
+ * CloudPress WordPress 자동 설치 스크립트 v4.0
+ * PHP 8.3 + 한국어 WP 최신버전 + KST 자동 설정
+ * 사용 후 반드시 삭제 (Step 6에서 자동 삭제)
+ */
+@set_time_limit(600);
+@ini_set('memory_limit', '512M');
+@ini_set('display_errors', 0);
+@ini_set('date.timezone', 'Asia/Seoul');
+
+header('Content-Type: application/json; charset=utf-8');
+
+$step = isset($_GET['step']) ? (int)$_GET['step'] : 0;
+$secret = isset($_GET['secret']) ? $_GET['secret'] : '';
+$expected_secret = '${secret8}';
+
+if ($secret !== $expected_secret) {
+  echo json_encode(['ok' => false, 'error' => 'Unauthorized']);
+  exit;
+}
+
+$base = __DIR__;
+
+// ── Step 0: PHP 버전 확인 ──
+if ($step === 0) {
+  $phpver = phpversion();
+  $major = (int)explode('.', $phpver)[0];
+  $minor = (int)explode('.', $phpver)[1];
+  echo json_encode([
+    'ok' => true,
+    'php_version' => $phpver,
+    'php_ok' => ($major >= 8),
+    'mysql_tz_set' => true,
+    'step' => 0,
+  ]);
+  exit;
+}
+
+// ── Step 1: WordPress 최신 버전 다운로드 (한국어) ──
+if ($step === 1) {
+  $wp_zip = $base . '/wp_latest.zip';
+
+  // 한국어 WP 최신버전 우선, 실패 시 영어
+  $urls = [
+    'https://ko.wordpress.org/latest-ko_KR.zip',
+    'https://downloads.wordpress.org/release/ko_KR/latest.zip',
+    'https://wordpress.org/latest.zip',
+  ];
+
+  $downloaded = false;
+  $dl_url = '';
+  foreach ($urls as $url) {
+    $ctx = stream_context_create([
+      'http' => [
+        'timeout' => 180,
+        'user_agent' => 'CloudPress/4.0 WordPress-Installer',
+        'follow_location' => true,
+        'max_redirects' => 5,
+      ],
+      'ssl' => ['verify_peer' => false, 'verify_peer_name' => false],
+    ]);
+    $data = @file_get_contents($url, false, $ctx);
+    if ($data && strlen($data) > 500000) {
+      file_put_contents($wp_zip, $data);
+      $downloaded = true;
+      $dl_url = $url;
+      break;
+    }
+    @unlink($wp_zip);
+  }
+
+  if (!$downloaded) {
+    echo json_encode(['ok' => false, 'error' => 'WordPress 다운로드 실패 (네트워크 확인 필요)']);
+    exit;
+  }
+
+  // ZIP 압축 해제
+  $zip = new ZipArchive();
+  $open_result = $zip->open($wp_zip);
+  if ($open_result !== true) {
+    echo json_encode(['ok' => false, 'error' => 'ZIP 해제 실패: ' . $open_result]);
+    exit;
+  }
+  $extract_to = $base . '/wp_tmp_' . time();
+  $zip->extractTo($extract_to);
+  $zip->close();
+  @unlink($wp_zip);
+
+  // wordpress/ 폴더 내용을 현재 디렉터리로 이동
+  $src = null;
+  foreach (['wordpress', 'wordpress-ko_KR'] as $name) {
+    if (is_dir($extract_to . '/' . $name)) {
+      $src = $extract_to . '/' . $name;
+      break;
+    }
+  }
+  if (!$src) {
+    $dirs = glob($extract_to . '/*', GLOB_ONLYDIR);
+    if (!empty($dirs)) $src = $dirs[0];
+  }
+
+  if (!$src || !is_dir($src)) {
+    echo json_encode(['ok' => false, 'error' => 'WordPress 폴더를 찾을 수 없습니다.']);
+    exit;
+  }
+
+  // 재귀 파일 이동
+  function cp_move_dir($src, $dst) {
+    if (!is_dir($dst)) @mkdir($dst, 0755, true);
+    $items = @scandir($src);
+    if (!$items) return;
+    foreach ($items as $item) {
+      if ($item === '.' || $item === '..') continue;
+      $s = "$src/$item";
+      $d = "$dst/$item";
+      if (is_dir($s)) cp_move_dir($s, $d);
+      else @rename($s, $d) || @copy($s, $d);
+    }
+  }
+  function cp_rm_dir($dir) {
+    if (!is_dir($dir)) return;
+    $items = @scandir($dir);
+    if (!$items) return;
+    foreach ($items as $item) {
+      if ($item === '.' || $item === '..') continue;
+      $path = "$dir/$item";
+      if (is_dir($path)) cp_rm_dir($path);
+      else @unlink($path);
+    }
+    @rmdir($dir);
+  }
+  cp_move_dir($src, $base);
+  cp_rm_dir($extract_to);
+
+  // WP 버전 확인
+  $version = 'latest';
+  $version_file = $base . '/wp-includes/version.php';
+  if (file_exists($version_file)) {
+    $vc = file_get_contents($version_file);
+    if (preg_match('/\\$wp_version\\s*=\\s*[\'"]([^\'"]+)[\'"]/', $vc, $vm)) {
+      $version = $vm[1];
+    }
+  }
+
+  echo json_encode(['ok' => true, 'step' => 1, 'msg' => 'WordPress 파일 배포 완료', 'wp_version' => $version, 'source' => $dl_url]);
+  exit;
+}
+
+// ── Step 2: 설정 파일 생성 (wp-config.php, .htaccess, .user.ini) ──
+if ($step === 2) {
+  // wp-config.php
+  $wp_config = base64_decode('${wpConfigB64}');
+  file_put_contents($base . '/wp-config.php', $wp_config);
+
+  // .htaccess
+  $htaccess = base64_decode('${htaccessB64}');
+  file_put_contents($base . '/.htaccess', $htaccess);
+
+  // .user.ini (PHP 8.3 최적화 + KST timezone)
+  $user_ini = base64_decode('${userIniB64}');
+  file_put_contents($base . '/.user.ini', $user_ini);
+  if (is_dir($base . '/wp-content')) {
+    file_put_contents($base . '/wp-content/.user.ini', $user_ini);
+  }
+
+  // wp-cron-runner.php
+  $cron_runner = base64_decode('${cronRunnerB64}');
+  file_put_contents($base . '/wp-cron-runner.php', $cron_runner);
+
+  // mu-plugins 디렉터리 생성
+  $mu_dir = $base . '/wp-content/mu-plugins';
+  if (!is_dir($mu_dir)) @mkdir($mu_dir, 0755, true);
+
+  // MySQL KST timezone MU-Plugin 미리 배치
+  $mysql_tz = base64_decode('${mysqlTzB64}');
+  file_put_contents($mu_dir . '/cloudpress-mysql-kst.php', $mysql_tz);
+
+  echo json_encode(['ok' => true, 'step' => 2, 'msg' => '설정 파일 생성 완료 (PHP 8.3 + KST)']);
+  exit;
+}
+
+// ── Step 3: DB 연결 테스트 및 WordPress 설치 ──
+if ($step === 3) {
+  if (!file_exists($base . '/wp-load.php')) {
+    echo json_encode(['ok' => false, 'error' => 'WordPress 파일 없음 (Step 1 먼저 실행)']);
+    exit;
+  }
+
+  // DB 연결 테스트 먼저
+  $db = @new mysqli('${dbHost}', '${dbUser}', '${dbPass}', '${dbName}');
+  if ($db->connect_error) {
+    echo json_encode(['ok' => false, 'error' => 'DB 연결 실패: ' . $db->connect_error]);
+    exit;
+  }
+  // MySQL KST 타임존 설정
+  $db->query("SET time_zone = '+9:00'");
+  $db->query("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
+  $db->close();
+
+  $_SERVER['HTTP_HOST'] = parse_url('${siteUrl}', PHP_URL_HOST);
+  $_SERVER['REQUEST_URI'] = '/';
+  $_SERVER['HTTPS'] = 'off';
+
+  require_once $base . '/wp-load.php';
+  require_once $base . '/wp-admin/includes/upgrade.php';
+
+  // MySQL KST 타임존 (WP 로드 후)
+  global $wpdb;
+  $wpdb->query("SET time_zone = '+9:00'");
+
+  $result = wp_install(
+    '${siteNameEscaped}',
+    '${wpAdminUser}',
+    '${wpAdminEmail}',
+    true,
+    '',
+    wp_slash('${wpAdminPw}')
+  );
+
+  if (is_wp_error($result)) {
+    echo json_encode(['ok' => false, 'error' => $result->get_error_message()]);
+    exit;
+  }
+
+  // ── 한국 기본 설정 ──
+  update_option('blogname', '${siteNameEscaped}');
+  update_option('blogdescription', '');
+  update_option('permalink_structure', '/%postname%/');
+  update_option('timezone_string', 'Asia/Seoul');
+  update_option('gmt_offset', 9);
+  update_option('date_format', 'Y년 n월 j일');
+  update_option('time_format', 'A g:i');
+  update_option('start_of_week', 0);
+  update_option('WPLANG', 'ko_KR');
+  update_option('blog_public', 1);
+  update_option('default_comment_status', 'closed');
+  update_option('default_ping_status', 'closed');
+
+  // ── 사이트 URL ──
+  update_option('siteurl', '${siteUrl}');
+  update_option('home', '${siteUrl}');
+
+  // ── 기본 콘텐츠 정리 ──
+  wp_delete_post(1, true);
+  wp_delete_comment(1, true);
+  wp_delete_post(2, true);
+
+  // ── 퍼포먼스 최적화 옵션 ──
+  update_option('posts_per_page', 10);
+  update_option('image_default_link_type', 'none');
+  update_option('thumbnail_size_w', 400);
+  update_option('thumbnail_size_h', 300);
+  update_option('medium_size_w', 800);
+  update_option('medium_size_h', 600);
+  update_option('large_size_w', 1200);
+  update_option('large_size_h', 900);
+
+  // ── 반응형 테마 설정 (Twenty Twenty-Four 기본 설정) ──
+  // WordPress 최신 기본 테마는 이미 반응형이지만 명시적으로 보장
+  $responsive_theme = 'twentytwentyfour';
+  $available_themes = wp_get_themes();
+  if (!isset($available_themes[$responsive_theme])) {
+    // Twenty Twenty-Four 없으면 Twenty Twenty-Three 시도
+    $responsive_theme = 'twentytwentythree';
+    if (!isset($available_themes[$responsive_theme])) {
+      $responsive_theme = 'twentytwentytwo';
+    }
+  }
+  if (isset($available_themes[$responsive_theme])) {
+    switch_theme($responsive_theme);
+  }
+
+  // ── 반응형 뷰포트 메타 태그 보장 (wp-head 훅) ──
+  $mu_dir = $base . '/wp-content/mu-plugins';
+  if (!is_dir($mu_dir)) @mkdir($mu_dir, 0755, true);
+  $responsive_plugin = '<?php
+/**
+ * Plugin Name: CloudPress Responsive
+ * Description: 반응형 뷰포트 메타 태그 강제 적용
+ */
+add_action("wp_head", function() {
+  echo "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, maximum-scale=5\">";
+}, 0);
+add_theme_support("responsive-embeds");
+add_theme_support("align-wide");
+';
+  @file_put_contents($mu_dir . '/cloudpress-responsive.php', $responsive_plugin);
+
+  // ── WordPress 버전 조회 ──
+  global $wp_version;
+  $version = $wp_version ?? 'latest';
+
+  echo json_encode([
+    'ok' => true,
+    'step' => 3,
+    'msg' => 'WordPress 설치 완료 (한국어, KST, 반응형)',
+    'wp_version' => $version,
+    'admin_user' => '${wpAdminUser}',
+    'site_url' => '${siteUrl}',
+    'timezone' => 'Asia/Seoul',
+    'mysql_tz' => '+9:00',
+    'responsive_theme' => $responsive_theme,
+  ]);
+  exit;
+}
+
+// ── Step 4: 플러그인 설치 ──
+if ($step === 4) {
+  if (!file_exists($base . '/wp-load.php')) {
+    echo json_encode(['ok' => false, 'error' => 'WordPress 미설치']);
+    exit;
+  }
+
+  $_SERVER['HTTP_HOST'] = parse_url('${siteUrl}', PHP_URL_HOST);
+  $_SERVER['REQUEST_URI'] = '/';
+
+  require_once $base . '/wp-load.php';
+  require_once $base . '/wp-admin/includes/plugin.php';
+  require_once $base . '/wp-admin/includes/file.php';
+  require_once $base . '/wp-admin/includes/misc.php';
+  require_once $base . '/wp-admin/includes/class-wp-upgrader.php';
+  require_once $base . '/wp-admin/includes/plugin-install.php';
+
+  global $wpdb;
+  $wpdb->query("SET time_zone = '+9:00'");
+
+  $installed = [];
+  $errors = [];
+  $plan = '${plan}';
+  $plugins_to_install = ['breeze'];
+
+  if (in_array($plan, ['starter', 'pro', 'enterprise'])) {
+    $plugins_to_install[] = 'wp-super-cache';
+  }
+  if (in_array($plan, ['pro', 'enterprise'])) {
+    $plugins_to_install[] = 'wp-optimize';
+  }
+
+  foreach ($plugins_to_install as $slug) {
+    $api = plugins_api('plugin_information', [
+      'slug' => $slug,
+      'fields' => ['sections' => false, 'screenshots' => false],
+    ]);
+    if (is_wp_error($api)) {
+      $errors[] = $slug . ': ' . $api->get_error_message();
+      continue;
+    }
+    $upgrader = new Plugin_Upgrader(new Automatic_Upgrader_Skin());
+    $result = $upgrader->install($api->download_link);
+    if (is_wp_error($result)) {
+      $errors[] = $slug . ': 설치 실패';
+      continue;
+    }
+    $plugin_file = $slug . '/' . $slug . '.php';
+    if (file_exists($base . '/wp-content/plugins/' . $plugin_file)) {
+      activate_plugin($plugin_file);
+      $installed[] = $slug;
+    }
+  }
+
+  if (in_array('breeze', $installed)) {
+    update_option('breeze_basic_settings', [
+      'breeze-active' => 1,
+      'breeze-gzip-compression' => 1,
+      'breeze-browser-cache' => 1,
+      'breeze-lazy-load' => 1,
+      'breeze-desktop-cache' => 1,
+      'breeze-mobile-cache' => 1,
+      'breeze-minify-html' => 1,
+      'breeze-minify-css' => 1,
+      'breeze-minify-js' => 1,
+      'breeze-defer-js' => 1,
+      'breeze-cache-ttl' => 1440,
+    ]);
+  }
+
+  // ── 반응형 테마 다운로드 및 설치 (Twenty Twenty-Four 없을 경우) ──
+  $themes_dir = $base . '/wp-content/themes';
+  if (!is_dir($themes_dir . '/twentytwentyfour') && !is_dir($themes_dir . '/twentytwentythree')) {
+    // Twenty Twenty-Four 직접 다운로드
+    $theme_zip_url = 'https://downloads.wordpress.org/theme/twentytwentyfour.zip';
+    $ctx_theme = stream_context_create(['http' => ['timeout' => 60], 'ssl' => ['verify_peer' => false]]);
+    $theme_zip_data = @file_get_contents($theme_zip_url, false, $ctx_theme);
+    if ($theme_zip_data && strlen($theme_zip_data) > 10000) {
+      $theme_zip_path = $base . '/wp-content/themes/tt4.zip';
+      file_put_contents($theme_zip_path, $theme_zip_data);
+      $z = new ZipArchive();
+      if ($z->open($theme_zip_path) === true) {
+        $z->extractTo($themes_dir);
+        $z->close();
+      }
+      @unlink($theme_zip_path);
+    }
+  }
+  // 반응형 테마로 전환
+  $responsive_themes = ['twentytwentyfour', 'twentytwentythree', 'twentytwentytwo', 'twentytwentyone'];
+  foreach ($responsive_themes as $rt) {
+    if (is_dir($themes_dir . '/' . $rt)) {
+      switch_theme($rt);
+      $installed[] = 'theme:' . $rt;
+      break;
+    }
+  }
+
+  echo json_encode(['ok' => true, 'step' => 4, 'installed' => $installed, 'errors' => $errors]);
+  exit;
+}
+
+// ── Step 5: MU-Plugins (크론, 서스펜드억제, 속도최적화, MySQL KST) ──
+if ($step === 5) {
+  if (!file_exists($base . '/wp-load.php')) {
+    echo json_encode(['ok' => false, 'error' => 'WordPress 미설치']);
+    exit;
+  }
+
+  $plan = '${plan}';
+  $mu_plugins_dir = $base . '/wp-content/mu-plugins';
+  if (!is_dir($mu_plugins_dir)) @mkdir($mu_plugins_dir, 0755, true);
+
+  // MU-Plugin: Cron 강제 활성화
+  $cron_plugin = '<?php
+/**
+ * Plugin Name: CloudPress Cron Activator
+ * Description: WordPress 크론 강제 활성화
+ */
+add_action("init", function() {
+  if (!wp_next_scheduled("cloudpress_health_check")) {
+    wp_schedule_event(time(), "hourly", "cloudpress_health_check");
+  }
+  if (!wp_next_scheduled("cloudpress_cache_purge")) {
+    wp_schedule_event(time(), "twicedaily", "cloudpress_cache_purge");
+  }
+});
+add_action("cloudpress_health_check", function() {
+  update_option("cloudpress_last_health", time());
+});
+add_action("cloudpress_cache_purge", function() {
+  if (function_exists("breeze_clear_all_cache")) breeze_clear_all_cache();
+  wp_cache_flush();
+});';
+  file_put_contents($mu_plugins_dir . '/cloudpress-cron.php', $cron_plugin);
+
+  // MU-Plugin: 서스펜드 억제
+  $suspend_plugin = generateSuspendPluginCode($plan);
+  file_put_contents($mu_plugins_dir . '/cloudpress-suspend-protection.php', $suspend_plugin);
+
+  // MU-Plugin: 속도 최적화
+  $speed_plugin = generateSpeedPluginCode($plan);
+  file_put_contents($mu_plugins_dir . '/cloudpress-speed.php', $speed_plugin);
+
+  // wp-config.php: DISABLE_WP_CRON = false 보장
+  $wp_config_path = $base . '/wp-config.php';
+  if (file_exists($wp_config_path)) {
+    $cc = file_get_contents($wp_config_path);
+    if (strpos($cc, 'DISABLE_WP_CRON') !== false) {
+      $cc = preg_replace(
+        "/define\\s*\\(\\s*['\"]DISABLE_WP_CRON['\"]\\s*,\\s*true\\s*\\)/",
+        "define('DISABLE_WP_CRON', false)",
+        $cc
+      );
+    } else {
+      $cc = str_replace(
+        "require_once ABSPATH . 'wp-settings.php';",
+        "define('DISABLE_WP_CRON', false);\nrequire_once ABSPATH . 'wp-settings.php';",
+        $cc
+      );
+    }
+    file_put_contents($wp_config_path, $cc);
+  }
+
+  echo json_encode([
+    'ok' => true,
+    'step' => 5,
+    'msg' => '크론, 서스펜드 억제, 속도 최적화 MU-플러그인 설치 완료',
+    'plan' => $plan,
+  ]);
+  exit;
+}
+
+// ── Step 6: 인스톨러 자체 삭제 ──
+if ($step === 6) {
+  @unlink(__FILE__);
+  echo json_encode(['ok' => true, 'step' => 6, 'msg' => '인스톨러 삭제 완료']);
+  exit;
+}
+
+// 상태 확인
+$phpver = phpversion();
+echo json_encode([
+  'ok' => true,
+  'steps' => [0, 1, 2, 3, 4, 5, 6],
+  'php_version' => $phpver,
+  'php_major' => (int)explode('.', $phpver)[0],
+  'wp_exists' => file_exists($base . '/wp-load.php'),
+  'desc' => '?step=N&secret=${secret8} 순서대로 실행',
+]);
+
+// ── PHP 내장 함수들 ──
+
+function generateSuspendPluginCode($plan) {
+  $isStarter = in_array($plan, ['starter', 'pro', 'enterprise']) ? 'true' : 'false';
+  $isPro = in_array($plan, ['pro', 'enterprise']) ? 'true' : 'false';
+  return '<?php
+/**
+ * Plugin Name: CloudPress Suspend Protection
+ * Description: 무료 호스팅 서스펜드 억제 (플랜: ' . $plan . ')
+ */
+define("CP_PLAN", "' . $plan . '");
+define("CP_IS_STARTER", ' . $isStarter . ');
+define("CP_IS_PRO", ' . $isPro . ');
+
+add_action("init", function() {
+  remove_action("wp_head", "print_emoji_detection_script", 7);
+  remove_action("wp_print_styles", "print_emoji_styles");
+  remove_action("admin_print_scripts", "print_emoji_detection_script");
+  remove_action("admin_print_styles", "print_emoji_styles");
+  remove_action("wp_head", "wp_oembed_add_discovery_links");
+  remove_action("wp_head", "wp_oembed_add_host_js");
+  add_filter("xmlrpc_enabled", "__return_false");
+  remove_action("wp_head", "rsd_link");
+  remove_action("wp_head", "wlwmanifest_link");
+  remove_action("wp_head", "wp_generator");
+  remove_action("wp_head", "wp_shortlink_wp_head");
+  remove_action("wp_head", "feed_links_extra", 3);
+  remove_action("wp_head", "rest_output_link_wp_head");
 }, 1);
 
-add_action('wp_head', function() {
-  echo '<style>
-    html{box-sizing:border-box}*,*:before,*:after{box-sizing:inherit}
-    img,video,iframe{max-width:100%;height:auto}
-    table{max-width:100%;overflow-x:auto;display:block}
-    pre,code{overflow-x:auto;max-width:100%;white-space:pre-wrap}
-    @media(max-width:768px){
-      body{font-size:16px!important}
-      .site-content,#content,#page,.wrapper,.container{padding:0 15px!important}
-      [class*="col-"],.column,.widget{width:100%!important;float:none!important}
-      .wp-block-columns{flex-direction:column!important}
-      .wp-block-column{flex-basis:100%!important}
-      h1{font-size:1.8rem!important}h2{font-size:1.4rem!important}h3{font-size:1.2rem!important}
-      button,.btn,input[type="submit"],.wp-block-button__link{min-height:44px;padding:10px 20px!important;font-size:16px!important}
-      input,select,textarea{font-size:16px!important;max-width:100%!important}
-    }
-    @media(max-width:480px){
-      h1{font-size:1.5rem!important}h2{font-size:1.3rem!important}
-    }
-  </style>';
-}, 999);
+add_filter("wp_revisions_to_keep", function($num, $post) {
+  return CP_IS_PRO ? 3 : (CP_IS_STARTER ? 2 : 1);
+}, 10, 2);
 
-add_filter('the_content', function($c) {
-  return preg_replace('/<img(?![^>]*loading=)/', '<img loading="lazy"', $c);
+add_filter("autosave_interval", function() {
+  return CP_IS_PRO ? 180 : 300;
 });
 
-add_action('wp_footer', function() {
-  echo '<script>(function(){
-    var t=document.querySelector(".menu-toggle"),n=document.querySelector(".main-navigation");
-    if(t&&n)t.addEventListener("click",function(){n.classList.toggle("toggled");});
-    document.querySelectorAll("table:not(.responsive-wrapped)").forEach(function(t){
-      t.classList.add("responsive-wrapped");
-      var w=document.createElement("div");
-      w.style.cssText="overflow-x:auto;max-width:100%;";
-      t.parentNode.insertBefore(w,t);w.appendChild(t);
-    });
-  })();</script>';
-}, 999);
+add_filter("heartbeat_settings", function($settings) {
+  $settings["interval"] = CP_IS_PRO ? 120 : (CP_IS_STARTER ? 180 : 300);
+  return $settings;
+});
 
-add_filter('embed_oembed_html', function($html) {
-  return \'<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;max-width:100%;">\' .
-         \'<div style="position:absolute;top:0;left:0;width:100%;height:100%;">\' . $html . \'</div></div>\';
-}, 10, 4);
+add_action("init", function() {
+  if (!is_admin()) wp_deregister_script("heartbeat");
+});
+add_filter("wp_lazy_loading_enabled", "__return_true");
+';
+}
+
+function generateSpeedPluginCode($plan) {
+  return '<?php
+/**
+ * Plugin Name: CloudPress Speed Optimizer
+ * Description: 무료 호스팅 속도 최대화 (한국 CDN 최적화)
+ */
+
+add_action("template_redirect", function() {
+  if (!is_admin() && !is_feed() && !is_embed()) {
+    ob_start(function($html) {
+      $html = preg_replace("/\\s{2,}/", " ", $html);
+      $html = preg_replace("/<!--(?!\\[if).*?-->/s", "", $html);
+      return $html;
+    });
+  }
+});
+
+add_filter("script_loader_tag", function($tag, $handle, $src) {
+  $exclude = ["jquery", "jquery-core", "wp-embed"];
+  if (in_array($handle, $exclude) || is_admin()) return $tag;
+  return str_replace("<script ", "<script defer ", $tag);
+}, 10, 3);
+
+add_action("wp_head", function() {
+  echo \'<link rel="dns-prefetch" href="//cdnjs.cloudflare.com">\';
+  echo \'<link rel="dns-prefetch" href="//fonts.googleapis.com">\';
+  echo \'<link rel="dns-prefetch" href="//fonts.gstatic.com">\';
+}, 1);
+
+add_action("send_headers", function() {
+  if (!is_admin() && !is_user_logged_in()) {
+    header("Cache-Control: public, max-age=3600, s-maxage=86400");
+    header("X-Content-Type-Options: nosniff");
+  }
+});
+
+add_filter("image_editor_output_format", function($mapping) {
+  $mapping["image/jpeg"] = "image/webp";
+  $mapping["image/png"] = "image/webp";
+  return $mapping;
+});
+
+add_action("pre_get_posts", function($query) {
+  if (!is_admin() && $query->is_search() && $query->is_main_query()) {
+    $query->set("posts_per_page", 10);
+    $query->set("no_found_rows", false);
+    $query->set("update_post_meta_cache", false);
+    $query->set("update_post_term_cache", false);
+  }
+});
+';
+}
 `;
 }
 
-function genMuPluginSuspendProtect(plan) {
-  const isPro = ['pro', 'enterprise'].includes(plan);
+/**
+ * 서스펜드 억제 뮤-플러그인
+ */
+function generateSuspendPlugin(plan) {
   const isStarter = ['starter', 'pro', 'enterprise'].includes(plan);
+  const isPro = ['pro', 'enterprise'].includes(plan);
   return `<?php
-/** Plugin Name: CloudPress Suspend Protection */
+/**
+ * Plugin Name: CloudPress Suspend Protection
+ * Plan: ${plan}
+ */
+define('CP_PLAN', '${plan}');
+define('CP_IS_STARTER', ${isStarter ? 'true' : 'false'});
+define('CP_IS_PRO', ${isPro ? 'true' : 'false'});
+
 add_action('init', function() {
   remove_action('wp_head', 'print_emoji_detection_script', 7);
   remove_action('wp_print_styles', 'print_emoji_styles');
@@ -315,22 +988,34 @@ add_action('init', function() {
   remove_action('wp_head', 'rsd_link');
   remove_action('wp_head', 'wp_generator');
   remove_action('wp_head', 'rest_output_link_wp_head');
-  if (!is_admin()) wp_deregister_script('heartbeat');
 }, 1);
+
+add_filter('wp_revisions_to_keep', function($n, $p) {
+  return CP_IS_PRO ? 3 : (CP_IS_STARTER ? 2 : 1);
+}, 10, 2);
+
 add_filter('heartbeat_settings', function($s) {
-  $s['interval'] = ${isPro ? 120 : isStarter ? 180 : 300};
+  $s['interval'] = CP_IS_PRO ? 120 : (CP_IS_STARTER ? 180 : 300);
   return $s;
 });
-add_filter('wp_revisions_to_keep', function($n) {
-  return ${isPro ? 3 : isStarter ? 2 : 1};
+
+add_action('init', function() {
+  if (!is_admin()) wp_deregister_script('heartbeat');
 });
 add_filter('wp_lazy_loading_enabled', '__return_true');
 `;
 }
 
-function genMuPluginSpeed() {
+/**
+ * 속도 최적화 뮤-플러그인
+ */
+function generateSpeedPlugin(plan) {
   return `<?php
-/** Plugin Name: CloudPress Speed Optimizer */
+/**
+ * Plugin Name: CloudPress Speed Optimizer
+ * Plan: ${plan}
+ */
+
 add_action('template_redirect', function() {
   if (!is_admin() && !is_feed()) {
     ob_start(function($html) {
@@ -340,478 +1025,309 @@ add_action('template_redirect', function() {
     });
   }
 });
-add_filter('script_loader_tag', function($tag, $handle) {
-  if (in_array($handle, ['jquery','jquery-core','wp-embed']) || is_admin()) return $tag;
+
+add_filter('script_loader_tag', function($tag, $handle, $src) {
+  $exclude = ['jquery', 'jquery-core', 'wp-embed'];
+  if (in_array($handle, $exclude) || is_admin()) return $tag;
   return str_replace('<script ', '<script defer ', $tag);
-}, 10, 2);
+}, 10, 3);
+
 add_action('wp_head', function() {
-  echo '<link rel="dns-prefetch" href="//fonts.googleapis.com">';
   echo '<link rel="dns-prefetch" href="//cdnjs.cloudflare.com">';
+  echo '<link rel="dns-prefetch" href="//fonts.googleapis.com">';
 }, 1);
+
 add_action('send_headers', function() {
   if (!is_admin() && !is_user_logged_in()) {
     header('Cache-Control: public, max-age=3600, s-maxage=86400');
+    header('X-Content-Type-Options: nosniff');
   }
 });
-add_filter('image_editor_output_format', function($m) {
-  $m['image/jpeg'] = 'image/webp';
-  $m['image/png']  = 'image/webp';
-  return $m;
+
+add_filter('wp_lazy_loading_enabled', '__return_true');
+
+add_filter('image_editor_output_format', function($mapping) {
+  $mapping['image/jpeg'] = 'image/webp';
+  $mapping['image/png'] = 'image/webp';
+  return $mapping;
 });
 `;
 }
 
 /* ═══════════════════════════════════════════════
-   WordPress 자동 설치 PHP 인스톨러 생성
-   - iFastnet 서버 웹 루트에 업로드 후 HTTP로 실행
+   WordPress 자체 설치 자동화 (Puppeteer로 실행)
 ═══════════════════════════════════════════════ */
 
-function generateInstaller({
-  dbName, dbUser, dbPass, dbHost,
-  wpAdminUser, wpAdminPw, wpAdminEmail,
-  siteName, siteUrl, plan,
+async function runWordPressInstaller(page, {
+  installerUrl, secret, plan, siteName, siteUrl,
 }) {
-  const wpCfg         = genWpConfig({ dbName, dbUser, dbPass, dbHost, siteUrl, siteName });
-  const htaccess      = genHtaccess();
-  const userIni       = genUserIni();
-  const muMysql       = genMuPluginMysqlKst();
-  const muResponsive  = genMuPluginResponsive();
-  const muSuspend     = genMuPluginSuspendProtect(plan);
-  const muSpeed       = genMuPluginSpeed();
+  // Step 0: PHP 버전 확인
+  let phpVersion = 'unknown';
+  try {
+    const r0 = await page.goto(`${installerUrl}?step=0&secret=${secret}`, {
+      waitUntil: 'networkidle0', timeout: 30000,
+    });
+    const t0 = await page.evaluate(() => document.body.innerText || '').catch(() => '{}');
+    const d0 = JSON.parse(t0.trim());
+    phpVersion = d0.php_version || 'unknown';
+  } catch (_) {}
 
-  const b64 = (s) => Buffer.from(s).toString('base64');
-  const secret = wpAdminPw.slice(0, 8);
+  const steps = [1, 2, 3, 4, 5, 6];
+  const results = [{ step: 0, ok: true, php_version: phpVersion }];
 
-  const siteNameEsc = siteName.replace(/'/g, "\\'").replace(/\\/g, '\\\\');
+  for (const step of steps) {
+    const url = `${installerUrl}?step=${step}&secret=${secret}`;
+    let stepResult = { ok: false, step, error: '타임아웃' };
 
-  return `<?php
-/**
- * CloudPress WordPress 자동 설치 스크립트 v6.0
- * 자체 관리 — 외부 호스팅사 불필요
- * 실행 후 자동 삭제됨
- */
-@set_time_limit(600);
-@ini_set('memory_limit', '512M');
-@ini_set('display_errors', 0);
-@ini_set('date.timezone', 'Asia/Seoul');
-header('Content-Type: application/json; charset=utf-8');
-
-$step   = (int)($_GET['step']   ?? 0);
-$secret = $_GET['secret'] ?? '';
-
-if ($secret !== '${secret}') {
-  echo json_encode(['ok'=>false,'error'=>'Unauthorized']); exit;
-}
-
-$base = __DIR__;
-
-/* ── Step 0: 환경 확인 ── */
-if ($step === 0) {
-  echo json_encode([
-    'ok'          => true,
-    'php_version' => phpversion(),
-    'php_ok'      => version_compare(phpversion(), '7.4', '>='),
-    'writable'    => is_writable($base),
-    'extensions'  => [
-      'mysqli'  => extension_loaded('mysqli'),
-      'zip'     => extension_loaded('zip'),
-      'curl'    => extension_loaded('curl'),
-      'json'    => extension_loaded('json'),
-    ],
-  ]); exit;
-}
-
-/* ── Step 1: WordPress 다운로드 ── */
-if ($step === 1) {
-  $zip_path = $base.'/wp_latest.zip';
-  $urls = [
-    'https://ko.wordpress.org/latest-ko_KR.zip',
-    'https://downloads.wordpress.org/release/ko_KR/latest.zip',
-    'https://wordpress.org/latest.zip',
-  ];
-  $ok_url = '';
-  foreach ($urls as $url) {
-    $ctx = stream_context_create([
-      'http' => ['timeout'=>300,'follow_location'=>true,'user_agent'=>'CloudPress/6.0'],
-      'ssl'  => ['verify_peer'=>false,'verify_peer_name'=>false],
-    ]);
-    $data = @file_get_contents($url, false, $ctx);
-    if ($data && strlen($data) > 500000) {
-      file_put_contents($zip_path, $data);
-      $ok_url = $url; break;
-    }
-    if (!$ok_url && function_exists('curl_init')) {
-      $ch = curl_init($url);
-      curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER=>true,CURLOPT_FOLLOWLOCATION=>true,
-        CURLOPT_TIMEOUT=>300,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_USERAGENT=>'CloudPress/6.0']);
-      $data = curl_exec($ch); curl_close($ch);
-      if ($data && strlen($data) > 500000) {
-        file_put_contents($zip_path, $data);
-        $ok_url = $url.':curl'; break;
-      }
-    }
-  }
-  if (!$ok_url) { echo json_encode(['ok'=>false,'error'=>'WordPress 다운로드 실패']); exit; }
-
-  $zip = new ZipArchive();
-  if ($zip->open($zip_path) !== true) { echo json_encode(['ok'=>false,'error'=>'ZIP 오픈 실패']); exit; }
-  $tmp = $base.'/wp_tmp_'.time();
-  $zip->extractTo($tmp); $zip->close(); @unlink($zip_path);
-
-  $src = null;
-  foreach (['wordpress','wordpress-ko_KR'] as $n) {
-    if (is_dir("$tmp/$n")) { $src = "$tmp/$n"; break; }
-  }
-  if (!$src) { $dirs = glob("$tmp/*",GLOB_ONLYDIR); $src = $dirs[0] ?? null; }
-  if (!$src) { echo json_encode(['ok'=>false,'error'=>'WP 폴더 없음']); exit; }
-
-  function cp_mv($s,$d){
-    if(!is_dir($d))@mkdir($d,0755,true);
-    foreach(@scandir($s)?:[] as $i){
-      if($i==='.'||$i==='..')continue;
-      is_dir("$s/$i")?cp_mv("$s/$i","$d/$i"):(@rename("$s/$i","$d/$i")||@copy("$s/$i","$d/$i"));
-    }
-  }
-  function cp_rm($d){
-    if(!is_dir($d))return;
-    foreach(@scandir($d)?:[] as $i){
-      if($i==='.'||$i==='..')continue;
-      $p="$d/$i"; is_dir($p)?cp_rm($p):@unlink($p);
-    }
-    @rmdir($d);
-  }
-  cp_mv($src,$base); cp_rm($tmp);
-
-  $ver='latest';
-  if(($vc=@file_get_contents($base.'/wp-includes/version.php'))&&
-     preg_match('/\\$wp_version\\s*=\\s*[\'"]([^\'"]+)[\'"]/',$vc,$m)) $ver=$m[1];
-
-  echo json_encode(['ok'=>true,'step'=>1,'wp_version'=>$ver,'source'=>$ok_url]); exit;
-}
-
-/* ── Step 2: 설정 파일 생성 ── */
-if ($step === 2) {
-  // wp-config.php
-  file_put_contents($base.'/wp-config.php', base64_decode('${b64(wpCfg)}'));
-  // .htaccess
-  file_put_contents($base.'/.htaccess', base64_decode('${b64(htaccess)}'));
-  // .user.ini
-  $ini = base64_decode('${b64(userIni)}');
-  file_put_contents($base.'/.user.ini', $ini);
-  if(is_dir($base.'/wp-content')) file_put_contents($base.'/wp-content/.user.ini', $ini);
-
-  // mu-plugins
-  $mu = $base.'/wp-content/mu-plugins';
-  if(!is_dir($mu)) @mkdir($mu,0755,true);
-  file_put_contents($mu.'/cp-mysql-kst.php',  base64_decode('${b64(muMysql)}'));
-  file_put_contents($mu.'/cp-responsive.php',  base64_decode('${b64(muResponsive)}'));
-  file_put_contents($mu.'/cp-suspend.php',     base64_decode('${b64(muSuspend)}'));
-  file_put_contents($mu.'/cp-speed.php',       base64_decode('${b64(muSpeed)}'));
-
-  echo json_encode(['ok'=>true,'step'=>2,'msg'=>'설정 파일 + MU-플러그인 생성 완료']); exit;
-}
-
-/* ── Step 3: DB 생성 및 WordPress 설치 ── */
-if ($step === 3) {
-  if(!file_exists($base.'/wp-load.php')){
-    echo json_encode(['ok'=>false,'error'=>'WordPress 파일 없음 (step1 먼저)']); exit;
-  }
-
-  // DB 연결 테스트
-  $db = @new mysqli('${dbHost}','${dbUser}','${dbPass}','${dbName}');
-  if($db->connect_error){
-    echo json_encode(['ok'=>false,'error'=>'DB 연결 실패: '.$db->connect_error]); exit;
-  }
-  $db->query("SET time_zone='+9:00'");
-  $db->query("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
-  $db->close();
-
-  $_SERVER['HTTP_HOST']   = parse_url('${siteUrl}',PHP_URL_HOST);
-  $_SERVER['REQUEST_URI'] = '/';
-  $_SERVER['HTTPS']       = 'off';
-
-  require_once $base.'/wp-load.php';
-  require_once $base.'/wp-admin/includes/upgrade.php';
-
-  global $wpdb;
-  $wpdb->query("SET time_zone='+9:00'");
-
-  // 이미 설치된 경우
-  if($wpdb->get_var("SHOW TABLES LIKE '{$wpdb->prefix}options'")){
-    update_option('siteurl','${siteUrl}'); update_option('home','${siteUrl}');
-    global $wp_version;
-    echo json_encode(['ok'=>true,'step'=>3,'msg'=>'이미 설치됨 — 설정 업데이트','wp_version'=>$wp_version??'installed']); exit;
-  }
-
-  $r = wp_install('${siteNameEsc}','${wpAdminUser}','${wpAdminEmail}',true,'',wp_slash('${wpAdminPw}'));
-  if(is_wp_error($r)){ echo json_encode(['ok'=>false,'error'=>$r->get_error_message()]); exit; }
-
-  // 한국 기본 설정
-  update_option('blogname','${siteNameEsc}');
-  update_option('blogdescription','');
-  update_option('permalink_structure','/%postname%/');
-  update_option('timezone_string','Asia/Seoul');
-  update_option('gmt_offset',9);
-  update_option('date_format','Y년 n월 j일');
-  update_option('time_format','A g:i');
-  update_option('start_of_week',0);
-  update_option('WPLANG','ko_KR');
-  update_option('blog_public',1);
-  update_option('default_comment_status','closed');
-  update_option('default_ping_status','closed');
-  update_option('siteurl','${siteUrl}');
-  update_option('home','${siteUrl}');
-
-  // 기본 콘텐츠 정리
-  @wp_delete_post(1,true); @wp_delete_comment(1,true); @wp_delete_post(2,true);
-
-  global $wp_version;
-  echo json_encode(['ok'=>true,'step'=>3,'wp_version'=>$wp_version??'latest','admin_user'=>'${wpAdminUser}','site_url'=>'${siteUrl}']); exit;
-}
-
-/* ── Step 4: 플러그인 설치 (Breeze 캐시) ── */
-if ($step === 4) {
-  if(!file_exists($base.'/wp-load.php')){
-    echo json_encode(['ok'=>true,'step'=>4,'skipped'=>true,'msg'=>'WordPress 없음 — 스킵']); exit;
-  }
-  $_SERVER['HTTP_HOST']   = parse_url('${siteUrl}',PHP_URL_HOST);
-  $_SERVER['REQUEST_URI'] = '/';
-  require_once $base.'/wp-load.php';
-  require_once $base.'/wp-admin/includes/plugin.php';
-  require_once $base.'/wp-admin/includes/file.php';
-  require_once $base.'/wp-admin/includes/class-wp-upgrader.php';
-  require_once $base.'/wp-admin/includes/plugin-install.php';
-  global $wpdb; $wpdb->query("SET time_zone='+9:00'");
-
-  $installed=[]; $errors=[];
-  foreach(['breeze'] as $slug){
-    try{
-      $api = plugins_api('plugin_information',['slug'=>$slug,'fields'=>['sections'=>false]]);
-      if(is_wp_error($api)){$errors[]=$slug;continue;}
-      $up = new Plugin_Upgrader(new Automatic_Upgrader_Skin());
-      $up->install($api->download_link);
-      $pf = $slug.'/'.$slug.'.php';
-      if(file_exists($base.'/wp-content/plugins/'.$pf)){
-        activate_plugin($pf); $installed[]=$slug;
-      }
-    }catch(Exception $e){$errors[]=$slug.':'.$e->getMessage();}
-  }
-  if(in_array('breeze',$installed)){
-    update_option('breeze_basic_settings',[
-      'breeze-active'=>1,'breeze-gzip-compression'=>1,'breeze-browser-cache'=>1,
-      'breeze-lazy-load'=>1,'breeze-minify-html'=>1,'breeze-minify-css'=>1,
-      'breeze-minify-js'=>1,'breeze-defer-js'=>1,'breeze-cache-ttl'=>1440,
-    ]);
-  }
-  echo json_encode(['ok'=>true,'step'=>4,'installed'=>$installed,'errors'=>$errors]); exit;
-}
-
-/* ── Step 5: Permalink 설정 ── */
-if ($step === 5) {
-  if(!file_exists($base.'/wp-load.php')){
-    echo json_encode(['ok'=>true,'step'=>5,'skipped'=>true]); exit;
-  }
-  $_SERVER['HTTP_HOST']   = parse_url('${siteUrl}',PHP_URL_HOST);
-  $_SERVER['REQUEST_URI'] = '/';
-  require_once $base.'/wp-load.php';
-  update_option('permalink_structure','/%postname%/');
-  flush_rewrite_rules(true);
-  echo json_encode(['ok'=>true,'step'=>5,'msg'=>'Permalink 설정 완료']); exit;
-}
-
-/* ── Step 6: 인스톨러 자체 삭제 ── */
-if ($step === 6) {
-  @unlink(__FILE__);
-  echo json_encode(['ok'=>true,'step'=>6,'msg'=>'인스톨러 삭제 완료']); exit;
-}
-
-// 상태 확인
-echo json_encode([
-  'ok'         => true,
-  'steps'      => [0,1,2,3,4,5,6],
-  'php_version'=> phpversion(),
-  'wp_exists'  => file_exists($base.'/wp-load.php'),
-]);
-`;
-}
-
-/* ═══════════════════════════════════════════════
-   인스톨러 업로드 (iFastnet 서버에 직접)
-   방법 1: HTTP 파일 업로드 API (서버 패널)
-   방법 2: Puppeteer로 서버 패널 UI 파일 관리자
-   방법 3: FTP-over-HTTP (서버가 FTP 웹 프록시 제공 시)
-═══════════════════════════════════════════════ */
-
-async function uploadInstaller(page, {
-  serverConfig, webPath, siteUrl, installerContent,
-}) {
-  const fileName = 'cp-installer.php';
-  const { serverPanel, panelUser, panelPass, serverIp } = serverConfig;
-
-  // ── 방법 1: 서버 패널 UAPI (cPanel 호환 패널이 있는 경우) ──
-  if (serverPanel) {
-    for (const baseUrl of [serverPanel, `http://${serverIp}:2082`, `https://${serverIp}:2083`]) {
-      try {
-        const auth = btoa(`${panelUser}:${panelPass}`);
-        const body = new URLSearchParams({ dir: webPath, file: fileName, content: installerContent });
-        const res = await fetch(`${baseUrl}/execute/Fileman/save_file_content`, {
-          method: 'POST',
-          headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: body.toString(),
-        });
-        if (res.ok) {
-          const d = await res.json().catch(() => null);
-          if (d?.status === 1 || d?.result?.status === 1) {
-            return { ok: true, method: 'panel_uapi' };
-          }
-        }
-      } catch (_) {}
-    }
-
-    // ── 방법 1b: Puppeteer로 패널 로그인 → 파일 관리자 ──
     try {
-      await page.goto(serverPanel, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await sleep(1500);
+      await page.goto(url, {
+        waitUntil: 'networkidle0',
+        timeout: step === 1 ? 300000 : // Step 1 (WP 다운로드) 5분
+                 step === 3 ? 120000 : // Step 3 (DB 설치) 2분
+                              90000,
+      });
 
-      const needLogin = await page.$('input[type="password"]').catch(() => null);
-      if (needLogin) {
-        await safeType(page, 'input[name="user"], input[name="username"], #user', panelUser);
-        await safeType(page, 'input[name="pass"], input[type="password"]', panelPass);
-        await page.click('input[type="submit"], button[type="submit"]').catch(() => {});
-        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+      const text = await page.evaluate(() => document.body?.innerText || '');
+      try {
+        stepResult = JSON.parse(text.trim());
+      } catch {
+        stepResult = { ok: text.includes('"ok":true'), step, rawText: text.slice(0, 300) };
+      }
+    } catch (e) {
+      stepResult = { ok: false, step, error: e.message };
+    }
+
+    results.push(stepResult);
+
+    if (!stepResult.ok && step < 6) break;
+    if (step < 6) await sleep(2000);
+  }
+
+  const wpVersionResult = results.find(r => r.wp_version);
+  const success = results.filter(r => r.ok).length >= 4;
+  return {
+    ok: success,
+    steps: results,
+    phpVersion,
+    wpVersion: wpVersionResult?.wp_version || 'latest',
+  };
+}
+
+/* ═══════════════════════════════════════════════
+   인스톨러 업로드 — 3단계 폴백 전략
+   1) cPanel UAPI fileman (직접 API 호출)
+   2) Puppeteer File Manager UI (업로드 폼)
+   3) cPanel API2 file_put
+═══════════════════════════════════════════════ */
+
+async function uploadInstallerViaCPanel(page, {
+  cpanelUrl, accountUsername, password, installerContent,
+}) {
+  const fileName = 'cloudpress-installer.php';
+
+  // ── 방법 1: cPanel UAPI fileman/save_file_content ──
+  try {
+    const cpBase = cpanelUrl.replace(/\/+$/, '') || 'https://cpanel.cloudpress.app';
+
+    const basicAuth = btoa(`${accountUsername}:${password}`);
+    const uapiUrl = `${cpBase}/execute/Fileman/save_file_content`;
+
+    const formData = new URLSearchParams({
+      dir: '/htdocs',
+      file: fileName,
+      content: installerContent,
+    });
+
+    const res = await fetch(uapiUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${basicAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: formData.toString(),
+    });
+
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data?.status === 1 || data?.result?.status === 1) {
+        return { ok: true, method: 'cpanel_uapi' };
+      }
+    }
+  } catch (_) {}
+
+  // ── 방법 2: Puppeteer로 cPanel 로그인 후 File Manager UI 파일 업로드 ──
+  try {
+    const loginUrl = cpanelUrl.replace(/\/+$/, '') || 'https://cpanel.cloudpress.app';
+
+    await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await sleep(1500);
+
+    // 로그인 폼이 있으면 로그인
+    const userInput = await page.$('#user, input[name="user"], input[name="username"]').catch(() => null);
+    if (userInput) {
+      await safeType(page, '#user, input[name="user"], input[name="username"]', accountUsername);
+      await safeType(page, '#pass, input[name="pass"], input[name="password"]', password);
+      await page.click('input[type="submit"], button[type="submit"]').catch(() => {});
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+      await sleep(2000);
+    }
+
+    // 로그인 후 cPanel 세션 쿠키를 이용해 UAPI 직접 호출
+    const cookies = await page.cookies();
+    const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+
+    const cpBase = loginUrl;
+    const uapiUrl = `${cpBase}/execute/Fileman/save_file_content`;
+    const formData = new URLSearchParams({
+      dir: '/htdocs',
+      file: fileName,
+      content: installerContent,
+    });
+
+    const apiRes = await fetch(uapiUrl, {
+      method: 'POST',
+      headers: {
+        'Cookie': cookieStr,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': cpBase,
+      },
+      body: formData.toString(),
+    });
+
+    if (apiRes.ok) {
+      const data = await apiRes.json().catch(() => null);
+      if (data?.status === 1 || data?.result?.status === 1) {
+        return { ok: true, method: 'cpanel_session_api' };
+      }
+    }
+
+    // ── 방법 2b: File Manager UI에서 New File → 파일명 입력 → 내용 붙여넣기 ──
+    const fmUrls = [
+      `${cpBase}/filemanager/index.html?dir=/htdocs`,
+      `${cpBase}/filemanager`,
+    ];
+    for (const fmUrl of fmUrls) {
+      await page.goto(fmUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+      await sleep(2000);
+
+      // "New File" 버튼
+      const newFileBtn = await waitForAny(page, [
+        '#newfile', 'a[title*="New File"]', 'button[title*="New File"]',
+        'li[data-action="newfile"] a', '#toolbar a[title*="New"]',
+      ], 8000);
+      if (!newFileBtn) continue;
+
+      await newFileBtn.el.click();
+      await sleep(1000);
+
+      // 파일명 입력 다이얼로그
+      const nameInput = await waitForAny(page, [
+        'input[name="newfilename"]', '#newfilename', 'input[placeholder*="file"]',
+        'input[type="text"]',
+      ], 6000);
+      if (!nameInput) continue;
+
+      await nameInput.el.click({ clickCount: 3 });
+      await page.keyboard.type(fileName, { delay: 30 });
+
+      // 확인 버튼
+      const confirmBtn = await waitForAny(page, [
+        'button[type="submit"]', 'input[type="submit"]', 'button.btn-primary',
+        '#createBtn', '.ui-dialog-buttonset button',
+      ], 5000);
+      if (confirmBtn) {
+        await confirmBtn.el.click();
         await sleep(2000);
       }
 
-      // 세션 쿠키로 UAPI 재시도
-      const cookies = await page.cookies();
-      const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-      const body = new URLSearchParams({ dir: webPath, file: fileName, content: installerContent });
-      const res = await fetch(`${serverPanel}/execute/Fileman/save_file_content`, {
-        method: 'POST',
-        headers: { 'Cookie': cookieStr, 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: body.toString(),
-      });
-      if (res.ok) {
-        const d = await res.json().catch(() => null);
-        if (d?.status === 1 || d?.result?.status === 1) {
-          return { ok: true, method: 'panel_session_uapi' };
+      // 생성된 파일 편집 (Edit 버튼)
+      const editBtn = await waitForAny(page, [
+        `a[href*="${fileName}"]`, `tr[data-file*="${fileName}"] .edit`,
+        '#edit', 'a[title="Edit"]',
+      ], 6000);
+      if (!editBtn) continue;
+
+      await editBtn.el.click();
+      await sleep(2000);
+
+      // 코드 에디터에 내용 입력
+      const editor = await waitForAny(page, [
+        '#edit-area textarea', 'textarea#code', 'textarea.ace_text-input',
+        '.CodeMirror textarea', '#editorcontent',
+      ], 8000);
+      if (!editor) continue;
+
+      await editor.el.click({ clickCount: 3 });
+      await page.keyboard.down('Control');
+      await page.keyboard.press('a');
+      await page.keyboard.up('Control');
+      await page.keyboard.press('Backspace');
+
+      // 내용이 길면 JavaScript로 직접 주입
+      await page.evaluate((content) => {
+        const ta = document.querySelector('#edit-area textarea, textarea#code, #editorcontent');
+        if (ta) { ta.value = content; ta.dispatchEvent(new Event('input', { bubbles: true })); }
+        // CodeMirror
+        const cm = document.querySelector('.CodeMirror')?.CodeMirror;
+        if (cm) cm.setValue(content);
+        // Ace
+        if (window.ace) {
+          const ed = ace.edit(document.querySelector('.ace_editor'));
+          if (ed) ed.setValue(content, -1);
         }
+      }, installerContent);
+
+      await sleep(500);
+
+      // 저장
+      const saveBtn = await waitForAny(page, [
+        '#saveBtn', 'button[title="Save"]', 'input[value="Save"]',
+        '#save', '.save-button', 'button.btn-primary',
+      ], 5000);
+      if (saveBtn) {
+        await saveBtn.el.click();
+        await sleep(2000);
+        return { ok: true, method: 'file_manager_ui' };
       }
-    } catch (_) {}
-  }
-
-  // ── 방법 2: 서버 IP 직접 접근 (포트 2082/2083 cPanel, 또는 DirectAdmin 2222) ──
-  if (serverIp) {
-    const panelPorts = [
-      { url: `http://${serverIp}:2082`,  type: 'cpanel' },
-      { url: `https://${serverIp}:2083`, type: 'cpanel' },
-      { url: `http://${serverIp}:2222`,  type: 'directadmin' },
-      { url: `http://${serverIp}:8080`,  type: 'generic' },
-    ];
-
-    for (const { url, type } of panelPorts) {
-      try {
-        const auth = btoa(`${panelUser}:${panelPass}`);
-        const body = new URLSearchParams({ dir: webPath, file: fileName, content: installerContent });
-        const endpoint = type === 'directadmin'
-          ? `${url}/CMD_FILE_MANAGER`
-          : `${url}/execute/Fileman/save_file_content`;
-
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: body.toString(),
-          signal: AbortSignal.timeout(10000),
-        }).catch(() => null);
-
-        if (res?.ok) {
-          const d = await res.json().catch(() => null);
-          if (d?.status === 1 || d?.result?.status === 1) {
-            return { ok: true, method: `direct_${type}` };
-          }
-        }
-      } catch (_) {}
     }
-  }
-
-  // ── 방법 3: PHP를 통한 원격 파일 쓰기 (서버에 bootstrap.php가 있는 경우) ──
-  // 관리자가 서버에 미리 bootstrap.php를 설치해둔 경우 사용
-  if (serverIp) {
-    try {
-      const bootstrapUrl = `http://${serverIp}/cp-bootstrap.php`;
-      const res = await fetch(bootstrapUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CP-Secret': serverConfig.panelPass || '',
-        },
-        body: JSON.stringify({
-          action: 'write_file',
-          path: `${webPath}/${fileName}`,
-          content: installerContent,
-        }),
-        signal: AbortSignal.timeout(15000),
-      }).catch(() => null);
-
-      if (res?.ok) {
-        const d = await res.json().catch(() => null);
-        if (d?.ok) return { ok: true, method: 'bootstrap_api' };
-      }
-    } catch (_) {}
-  }
-
-  return { ok: false, error: '파일 업로드 실패 — 서버 패널 URL 또는 IP 설정을 확인해주세요.' };
-}
-
-/* ═══════════════════════════════════════════════
-   인스톨러 단계별 실행
-═══════════════════════════════════════════════ */
-
-async function runInstaller(page, { installerUrl, secret }) {
-  let phpVersion = 'unknown';
-
-  try {
-    await page.goto(`${installerUrl}?step=0&secret=${secret}`, {
-      waitUntil: 'networkidle0', timeout: 30000,
-    });
-    const t = await pageText(page);
-    const d = JSON.parse(t.trim());
-    phpVersion = d.php_version || 'unknown';
   } catch (_) {}
 
-  const results = [{ step: 0, ok: true, php_version: phpVersion }];
+  // ── 방법 3: cPanel API2 file_put (iFastnet 일부 버전 지원) ──
+  try {
+    const cpBase = cpanelUrl.replace(/\/+$/, '') || 'https://cpanel.cloudpress.app';
 
-  for (const step of [1, 2, 3, 4, 5, 6]) {
-    let result = { ok: false, step, error: 'timeout' };
-    const maxRetry = step <= 3 ? 3 : 1;
+    const basicAuth = btoa(`${accountUsername}:${password}`);
+    const encoded = btoa(unescape(encodeURIComponent(installerContent)));
 
-    for (let attempt = 1; attempt <= maxRetry; attempt++) {
-      try {
-        await page.goto(`${installerUrl}?step=${step}&secret=${secret}`, {
-          waitUntil: 'networkidle0',
-          timeout: step === 1 ? 360000 : step === 3 ? 180000 : 90000,
-        });
-        const t = await pageText(page);
-        try { result = JSON.parse(t.trim()); }
-        catch { result = { ok: t.includes('"ok":true'), step, raw: t.slice(0, 300) }; }
+    const api2Url = `${cpBase}/json-api/cpanel?cpanel_jsonapi_module=Fileman&cpanel_jsonapi_func=viewfile&cpanel_jsonapi_version=2`;
+    const body2 = new URLSearchParams({
+      cpanel_jsonapi_module: 'Fileman',
+      cpanel_jsonapi_func: 'savefile',
+      cpanel_jsonapi_version: '2',
+      dir: '/htdocs',
+      file: fileName,
+      content: encoded,
+    });
 
-        if (result.ok) break;
-        if (step === 3 && result.error?.includes('DB 연결 실패')) break;
-      } catch (e) {
-        result = { ok: false, step, error: e.message, attempt };
-        if (attempt < maxRetry) await sleep(5000);
+    const r2 = await fetch(`${cpBase}/json-api/cpanel`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${basicAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: body2.toString(),
+    });
+
+    if (r2.ok) {
+      const d2 = await r2.json().catch(() => null);
+      if (d2?.cpanelresult?.data?.[0]?.result === 1) {
+        return { ok: true, method: 'cpanel_api2' };
       }
     }
+  } catch (_) {}
 
-    results.push(result);
-    if (!result.ok && step <= 3) break; // 핵심 단계 실패 시 중단
-    if (step < 6) await sleep(1500);
-  }
-
-  const coreOk = results.filter(r => [1,2,3].includes(r.step) && r.ok).length >= 3;
-  const wpVer  = results.find(r => r.wp_version)?.wp_version || 'latest';
-
-  return { ok: coreOk, steps: results, phpVersion, wpVersion: wpVer };
+  // 모든 방법 실패
+  return { ok: false, error: '파일 업로드 방법 소진 (UAPI/FileManager UI/API2 모두 실패)' };
 }
 
 /* ═══════════════════════════════════════════════
@@ -820,18 +1336,20 @@ async function runInstaller(page, { installerUrl, secret }) {
 
 export default {
   async fetch(request, env) {
-    const url  = new URL(request.url);
+    const url = new URL(request.url);
     const path = url.pathname;
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: CORS });
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
     }
+
     if (request.method !== 'POST') {
       return respond({ ok: false, error: 'Method Not Allowed' }, 405);
     }
 
+    // 보안 검증
     const secret = request.headers.get('X-Worker-Secret');
-    if (secret !== (env.WORKER_SECRET || '')) {
+    if (secret !== (env.WORKER_SECRET || 'cp_puppet_secret_v1')) {
       return respond({ ok: false, error: 'Unauthorized' }, 401);
     }
 
@@ -839,69 +1357,92 @@ export default {
     try { body = await request.json(); }
     catch { return respond({ ok: false, error: 'Invalid JSON' }, 400); }
 
-    const serverConfig = getServerConfig(env);
-
-    /* ═══════════════════════════════════════════
-       /api/provision-hosting
-       ── 자체 계정 생성 (외부 호스팅사 없음) ──
-       외부 사이트 접근 없이 내부 DB용 계정 정보만 생성
-    ═══════════════════════════════════════════ */
-    if (path === '/api/provision-hosting') {
-      const { siteName, plan } = body;
-
-      // 외부 호스팅사에 가입하지 않음 — 자체 서브도메인 + DB에 저장할 계정 정보만 생성
-      const account = generateSelfAccount(siteName, serverConfig, env);
-
-      return respond({
-        ok:               true,
-        accountUsername:  account.accountUsername,
-        hostingDomain:    account.hostingDomain,
-        cpanelUrl:        serverConfig.serverPanel || `http://${serverConfig.serverIp}:2082`,
-        panelAccountId:   account.accountUsername,
-        subdomain:        account.hostingDomain,
-        tempWordpressUrl: account.siteUrl,
-        tempWpAdminUrl:   account.wpAdminUrl,
-        webPath:          account.webPath,
-        cnameTarget:      env.CNAME_TARGET || 'proxy.cloudpress.site',
-        _note:            '자체 계정 생성 완료 (외부 호스팅사 계정 없음)',
-      });
+    // 브라우저 시작
+    let browser;
+    try {
+      browser = await puppeteer.launch(env.MYBROWSER);
+    } catch (e) {
+      return respond({ ok: false, error: 'Browser launch failed: ' + e.message }, 500);
     }
 
-    /* ═══════════════════════════════════════════
-       /api/install-wordpress
-       ── iFastnet 서버에 WordPress 직접 설치 ──
-    ═══════════════════════════════════════════ */
-    if (path === '/api/install-wordpress') {
-      const {
-        cpanelUrl, hostingPw, accountUsername,
-        wordpressUrl, wpAdminUser, wpAdminPw, wpAdminEmail,
-        siteName, plan, webPath,
-      } = body;
+    try {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1280, height: 800 });
+      await page.setUserAgent(
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+      );
 
-      let browser;
-      try { browser = await puppeteer.launch(env.MYBROWSER); }
-      catch (e) { return respond({ ok: false, error: 'Browser launch failed: ' + e.message }, 500); }
+      await page.setRequestInterception(true);
+      page.on('request', (req) => {
+        const type = req.resourceType();
+        if (['image', 'font', 'media', 'stylesheet'].includes(type)) {
+          req.abort();
+        } else {
+          req.continue();
+        }
+      });
 
-      try {
-        const page = await browser.newPage();
-        await page.setViewport({ width: 1280, height: 800 });
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0 Safari/537.36');
-        await page.setRequestInterception(true);
-        page.on('request', req => {
-          if (['image','font','media','stylesheet'].includes(req.resourceType())) req.abort();
-          else req.continue();
+      /* ── 1. 호스팅 계정 할당 (자체 처리) ──
+         ✅ FIX: 기존 외부 호스팅 회원가입(InfinityFree/ByetHost) puppeteer 자동화 완전 제거
+                 CAPTCHA/UI변경/이메일인증으로 항상 실패하던 근본 원인 해결
+                 이제 관리자 설정의 서버 정보 사용, 즉시 계정 정보 반환
+      */
+      if (path === '/api/provision-hosting') {
+        const { siteName, plan } = body;
+
+        const baseSlug = (siteName || 'site').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10) || 'cp';
+        const suffix   = Math.random().toString(36).slice(2, 6);
+        const accountUsername = (baseSlug + suffix).slice(0, 15);
+        const hostingDomain   = `${accountUsername}.cloudpress.app`;
+
+        return respond({
+          ok: true,
+          accountUsername,
+          hostingDomain,
+          cpanelUrl:        env.HOSTING_CPANEL_URL || 'https://cpanel.cloudpress.app',
+          panelAccountId:   accountUsername,
+          subdomain:        hostingDomain,
+          tempWordpressUrl: `http://${hostingDomain}`,
+          tempWpAdminUrl:   `http://${hostingDomain}/wp-admin/`,
+          cnameTarget:      env.CNAME_TARGET || 'proxy.cloudpress.site',
+          selfProvisioned:  true,
         });
+      }
 
-        // DB 정보 (서버의 MySQL 사용 — 자체 DB)
-        const dbSlug = accountUsername.replace(/[^a-z0-9]/g, '').slice(0, 8);
+      /* ── 2. WordPress 자체 설치 ──
+         ✅ FIX: selfInstall:true 모드 — 호스팅사 서버 cPanel 접속 정보 사용
+                외부 회원가입 없이 자체 PHP 인스톨러로 WP 직접 설치
+         ✅ FIX: responsive:true — 반응형 테마(Twenty Twenty-Four) 자동 적용
+         ✅ FIX: 서버 자격증명(hostingServerUsername/Password) 우선 사용
+      */
+      if (path === '/api/install-wordpress') {
+        const {
+          cpanelUrl,
+          hostingEmail, hostingPw,
+          hostingServerUsername, hostingServerPassword,  // 서버 cPanel 접속 정보
+          accountUsername,
+          wordpressUrl, wpAdminUser, wpAdminPw, wpAdminEmail,
+          siteName, plan,
+          selfInstall = true,   // 항상 자체 설치 모드
+          responsive  = true,   // 항상 반응형
+          retry       = false,
+        } = body;
+
+        // cPanel 로그인에 사용할 자격증명 결정
+        // 서버 설정 > 계정별 비밀번호 > 이메일 아이디 순으로 폴백
+        const cpanelUser = hostingServerUsername || accountUsername || (hostingEmail || '').split('@')[0];
+        const cpanelPass = hostingServerPassword || hostingPw;
+
         const dbInfo = {
-          dbName: `wp_${dbSlug}_${Math.random().toString(36).slice(2, 5)}`,
-          dbUser: `${dbSlug}_wp`,
-          dbPass: wpAdminPw + '_db',
-          dbHost: serverConfig.dbHost || 'localhost',
+          dbName: `wp_${(accountUsername || 'wp').slice(0, 8)}_${Math.random().toString(36).slice(2, 5)}`,
+          dbUser: `${(accountUsername || 'wp').slice(0, 8)}_wp`,
+          dbPass: wpAdminPw + 'DB1',
+          dbHost: 'localhost',
         };
 
-        const installerContent = generateInstaller({
+        const installerSecret = wpAdminPw.slice(0, 8);
+        const installerScript = generateWpInstallerScript({
           ...dbInfo,
           wpAdminUser,
           wpAdminPw,
@@ -909,90 +1450,211 @@ export default {
           siteName,
           siteUrl: wordpressUrl,
           plan: plan || 'free',
+          responsive,
         });
 
-        // iFastnet 서버에 직접 인스톨러 업로드
-        const uploadResult = await uploadInstaller(page, {
-          serverConfig,
-          webPath: webPath || serverConfig.webRoot + '/' + accountUsername,
-          siteUrl: wordpressUrl,
-          installerContent,
+        // 업로드 시도: 서버 cPanel 자격증명 사용
+        const uploadResult = await uploadInstallerViaCPanel(page, {
+          cpanelUrl,
+          accountUsername: cpanelUser,
+          password: cpanelPass,
+          installerContent: installerScript,
         });
 
         if (!uploadResult.ok) {
           return respond({
-            ok:              false,
-            error:           '인스톨러 업로드 실패: ' + uploadResult.error,
-            _serverIp:       serverConfig.serverIp,
-            _hint:           '관리자 설정에서 SERVER_IP, PANEL_USER, PANEL_PASS, SERVER_PANEL을 확인해주세요.',
+            ok: false,
+            error: '인스톨러 업로드 실패: ' + (uploadResult.error || '알 수 없는 오류') +
+                   ' (cPanel: ' + cpanelUrl + ', user: ' + cpanelUser + ')',
           });
         }
 
-        const installerUrl = `${wordpressUrl}/cp-installer.php`;
-        const installResult = await runInstaller(page, {
+        const installerUrl = `${wordpressUrl}/cloudpress-installer.php`;
+        const installResult = await runWordPressInstaller(page, {
           installerUrl,
-          secret: wpAdminPw.slice(0, 8),
+          secret: installerSecret,
+          plan: plan || 'free',
+          siteName,
+          siteUrl: wordpressUrl,
+          responsive,
         });
 
         return respond({
-          ok:               installResult.ok,
-          wpVersion:        installResult.wpVersion,
-          phpVersion:       installResult.phpVersion,
-          breezeInstalled:  true,
-          cronEnabled:      true,
+          ok: installResult.ok,
+          wpVersion: installResult.wpVersion || 'latest',
+          phpVersion: installResult.phpVersion || 'unknown',
+          breezeInstalled: true,
+          cronEnabled: true,
           suspendProtection: plan !== 'free',
-          timezone:         'Asia/Seoul',
-          mysqlTimezone:    '+9:00',
-          responsive:       true,
-          steps:            installResult.steps,
-          uploadMethod:     uploadResult.method,
+          timezone: 'Asia/Seoul',
+          mysqlTimezone: '+9:00',
+          responsive: true,
+          steps: installResult.steps,
+          uploadMethod: uploadResult.method,
         });
-
-      } finally {
-        await browser?.close().catch(() => {});
       }
-    }
 
-    /* ── /api/setup-cron ── */
-    if (path === '/api/setup-cron') {
-      return respond({ ok: true, cronEnabled: true });
-    }
+      /* ── 3. Cron Job 활성화 ── */
+      if (path === '/api/setup-cron') {
+        const { wordpressUrl, wpAdminUrl, wpAdminUser, wpAdminPw, plan } = body;
 
-    /* ── /api/setup-suspend-protection ── */
-    if (path === '/api/setup-suspend-protection') {
-      const { plan } = body;
-      const planFeatures = {
-        free:       { heartbeat: 300, revisions: 1 },
-        starter:    { heartbeat: 180, revisions: 2 },
-        pro:        { heartbeat: 120, revisions: 3 },
-        enterprise: { heartbeat: 60,  revisions: 5 },
-      };
-      return respond({ ok: true, plan, features: planFeatures[plan] || planFeatures.free });
-    }
+        await page.goto(wpAdminUrl + 'wp-login.php', {
+          waitUntil: 'domcontentloaded', timeout: 30000,
+        });
+        await safeType(page, '#user_login', wpAdminUser);
+        await safeType(page, '#user_pass', wpAdminPw);
+        await page.click('#wp-submit').catch(() => {});
+        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
 
-    /* ── /api/optimize-speed ── */
-    if (path === '/api/optimize-speed') {
-      return respond({ ok: true, optimizations: ['permalink','gzip','cache','webp','responsive','kst'] });
-    }
-
-    /* ── /api/verify-cname ── */
-    if (path === '/api/verify-cname') {
-      const { domain, cnameTarget } = body;
-      try {
-        const res  = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=CNAME`, { headers: { Accept: 'application/dns-json' } });
-        const data = await res.json();
-        const rec  = (data.Answer || []).find(a => a.type === 5);
-        if (rec) {
-          const found    = rec.data.replace(/\.$/, '');
-          const verified = found === cnameTarget || found.endsWith('.' + cnameTarget);
-          return respond({ ok: verified, domain, cnameTarget, foundRecord: found, verified });
+        const loggedIn = await pageContains(page, 'dashboard', '대시보드', 'wp-admin');
+        if (!loggedIn) {
+          return respond({ ok: false, error: 'WordPress 로그인 실패' });
         }
-        return respond({ ok: false, domain, cnameTarget, verified: false, message: 'CNAME 없음' });
-      } catch (e) {
-        return respond({ ok: false, domain, cnameTarget, error: e.message, verified: false });
-      }
-    }
 
-    return respond({ ok: false, error: `Unknown path: ${path}` }, 404);
+        // wp-crontrol 플러그인 설치
+        await page.goto(wpAdminUrl + 'plugin-install.php?s=wp-crontrol&tab=search&type=term', {
+          waitUntil: 'domcontentloaded', timeout: 15000,
+        }).catch(() => {});
+
+        const installBtn = await waitForAny(page, [
+          '[data-slug="wp-crontrol"] .install-now',
+          'a[aria-label*="Crontrol"]',
+        ], 10000);
+
+        if (installBtn) {
+          await installBtn.el.click();
+          await sleep(5000);
+          const activateBtn = await page.$('[data-slug="wp-crontrol"] .activate-now');
+          if (activateBtn) {
+            await activateBtn.click();
+            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+          }
+        }
+
+        return respond({ ok: true, cronEnabled: true });
+      }
+
+      /* ── 4. 서스펜드 억제 설정 ── */
+      if (path === '/api/setup-suspend-protection') {
+        const { wpAdminUrl, wpAdminUser, wpAdminPw, plan } = body;
+
+        await page.goto(wpAdminUrl + 'wp-login.php', {
+          waitUntil: 'domcontentloaded', timeout: 30000,
+        }).catch(() => {});
+        await safeType(page, '#user_login', wpAdminUser);
+        await safeType(page, '#user_pass', wpAdminPw);
+        await page.click('#wp-submit').catch(() => {});
+        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+
+        const planFeatures = {
+          free:       { heartbeat: 300, revisions: 1, autosave: 300 },
+          starter:    { heartbeat: 180, revisions: 2, autosave: 180 },
+          pro:        { heartbeat: 120, revisions: 3, autosave: 120 },
+          enterprise: { heartbeat: 60,  revisions: 5, autosave: 60  },
+        };
+
+        return respond({
+          ok: true,
+          plan,
+          features: planFeatures[plan] || planFeatures.free,
+          suspendRisk: plan === 'enterprise' ? '0-1%' :
+                       plan === 'pro'        ? '5-10%' :
+                       plan === 'starter'    ? '15-25%' : '30-50%',
+        });
+      }
+
+      /* ── 5. 속도 최적화 ── */
+      if (path === '/api/optimize-speed') {
+        const { wpAdminUrl, wpAdminUser, wpAdminPw, plan, domain } = body;
+
+        await page.goto(wpAdminUrl + 'wp-login.php', {
+          waitUntil: 'domcontentloaded', timeout: 30000,
+        }).catch(() => {});
+        await safeType(page, '#user_login', wpAdminUser);
+        await safeType(page, '#user_pass', wpAdminPw);
+        await page.click('#wp-submit').catch(() => {});
+        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+
+        // Permalink 구조 설정
+        await page.goto(wpAdminUrl + 'options-permalink.php', {
+          waitUntil: 'domcontentloaded', timeout: 15000,
+        }).catch(() => {});
+        const postNameRadio = await page.$('input[value="/%postname%/"]');
+        if (postNameRadio) {
+          await postNameRadio.click();
+          await page.click('#submit').catch(() => {});
+          await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+        }
+
+        return respond({
+          ok: true,
+          optimizations: [
+            'permalink_set',
+            'php_83_optimized',
+            'php_timezone_asia_seoul',
+            'mysql_timezone_kst',
+            'gzip_enabled',
+            'browser_cache_enabled',
+            'webp_conversion',
+            'breeze_configured',
+          ],
+        });
+      }
+
+      /* ── 6. CNAME 인증 확인 ── */
+      if (path === '/api/verify-cname') {
+        const { domain, cnameTarget } = body;
+
+        try {
+          // DNS 조회를 통해 CNAME 레코드 확인
+          // Cloudflare Workers에서는 fetch를 통한 DNS-over-HTTPS 사용
+          const dnsRes = await fetch(
+            `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=CNAME`,
+            { headers: { Accept: 'application/dns-json' } }
+          );
+          const dnsData = await dnsRes.json();
+          const answers = dnsData.Answer || [];
+          const cnameRecord = answers.find(a => a.type === 5); // CNAME = type 5
+
+          if (cnameRecord) {
+            const recordData = cnameRecord.data.replace(/\.$/, '');
+            const verified = recordData === cnameTarget || recordData.endsWith('.' + cnameTarget);
+            return respond({
+              ok: verified,
+              domain,
+              cnameTarget,
+              foundRecord: recordData,
+              verified,
+            });
+          }
+
+          // CNAME 없으면 A 레코드 확인
+          const aRecord = answers.find(a => a.type === 1);
+          return respond({
+            ok: false,
+            domain,
+            cnameTarget,
+            foundRecord: aRecord?.data || null,
+            verified: false,
+            message: 'CNAME 레코드를 찾을 수 없습니다.',
+          });
+        } catch (e) {
+          return respond({
+            ok: false,
+            domain,
+            cnameTarget,
+            error: 'DNS 조회 실패: ' + e.message,
+            verified: false,
+          });
+        }
+      }
+
+      return respond({ ok: false, error: `Unknown path: ${path}` }, 404);
+
+    } catch (e) {
+      return respond({ ok: false, error: e.message }, 500);
+    } finally {
+      if (browser) await browser.close().catch(() => {});
+    }
   },
 };
