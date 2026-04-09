@@ -222,28 +222,25 @@ async function runProvisioningPipeline(env, siteId, payload) {
   if (!workerUrl) {
     await updateSiteStatus(env.DB, siteId, {
       status: 'failed',
-      provision_step: 'hosting_account',
+      provision_step: 'wordpress_install',
       error_message: 'Worker URL 미설정 — 관리자 → 설정에서 Worker URL을 입력해주세요.',
     });
     return;
   }
 
-  // ══ 단계 1: 호스팅 계정 할당 (즉시 완료) ══
-  // ✅ FIX: 외부 사이트 회원가입 puppeteer 제거
-  //         cPanel 서버 설정을 이용해 자체 계정 생성
+  // 계정 생성 단계 없음 — 서버 설정에서 도메인/URL 직접 계산
   const baseSlug = payload.siteName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10) || 'cp';
   const suffix   = Math.random().toString(36).slice(2, 6);
   const accountUsername = (baseSlug + suffix).slice(0, 15);
 
-  // 서버 도메인: 관리자 설정 우선, 없으면 cloudpress.app 서브도메인
-  const serverDomain    = serverCfg.domain || `${accountUsername}.cloudpress.app`;
-  const cpanelUrl       = serverCfg.cpanelUrl || `https://cpanel.cloudpress.app`;
-  const hostingDomain   = serverDomain;
+  const serverDomain     = serverCfg.domain || `${accountUsername}.cloudpress.app`;
+  const cpanelUrl        = serverCfg.cpanelUrl || `https://cpanel.cloudpress.app`;
+  const hostingDomain    = serverDomain;
   const tempWordpressUrl = payload.siteUrl || `http://${hostingDomain}`;
   const tempWpAdminUrl   = `${tempWordpressUrl}/wp-admin/`;
   const cnameTarget      = await getCnameTarget(env);
 
-  // 계정 정보 즉시 저장 (단계 1 완료)
+  // WP 설치에 필요한 URL 정보만 DB에 저장 (계정 생성 없음)
   await updateSiteStatus(env.DB, siteId, {
     status:           'installing_wp',
     provision_step:   'wordpress_install',
@@ -450,14 +447,15 @@ export async function onRequestPost({ request, env, ctx }) {
         id, user_id, name, hosting_provider, hosting_email, hosting_password,
         wp_username, wp_password, wp_admin_email,
         status, provision_step, plan, server_type
-      ) VALUES (?,?,?,'cloudpress_self',?,?,?,?,?,'pending','initializing',?,'shared')`
+      ) VALUES (?,?,?,'direct',?,?,?,?,?,'installing_wp','wordpress_install',?,'shared')`
     ).bind(siteId, user.id, siteName.trim(), hostingEmail, hostingPw, adminLogin, wpAdminPw, wpAdminEmail, effectivePlan).run();
   } catch (e) {
     return err('사이트 레코드 생성 실패: ' + e.message, 500);
   }
 
+  // 계정 생성 단계 없음 — 바로 WP 설치 시작
   await updateSiteStatus(env.DB, siteId, {
-    status: 'provisioning', provision_step: 'hosting_account',
+    status: 'installing_wp', provision_step: 'wordpress_install',
   }).catch(() => {});
 
   const pipelinePayload = {
@@ -476,15 +474,14 @@ export async function onRequestPost({ request, env, ctx }) {
 
   return ok({
     siteId, provider: 'cloudpress_self', plan: effectivePlan,
-    message: '사이트 생성이 시작되었습니다. 완료까지 5~10분 소요됩니다.',
+    message: 'WordPress 설치가 시작되었습니다. 완료까지 5~10분 소요됩니다.',
     phpVersion: '8.3 (최신)', wpVersion: 'latest (한국어)',
     timezone: 'Asia/Seoul (KST)',
     steps: [
-      { step: 1, name: '호스팅 계정 할당 (자체)', status: 'running' },
-      { step: 2, name: 'WordPress 자체 설치 (PHP 8.3 + 한국어 + 반응형)', status: 'pending' },
-      { step: 3, name: 'Cron Job 활성화', status: 'pending' },
-      { step: 4, name: '서스펜드 억제 설정', status: 'pending' },
-      { step: 5, name: '속도 최적화 (KST 기준)', status: 'pending' },
+      { step: 1, name: 'WordPress 설치 (PHP 8.3 + 한국어 + 반응형)', status: 'running' },
+      { step: 2, name: '플러그인 설치 및 환경 설정', status: 'pending' },
+      { step: 3, name: '속도 최적화', status: 'pending' },
+      { step: 4, name: '사이트 활성화', status: 'pending' },
     ],
   });
 }
