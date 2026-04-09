@@ -277,12 +277,7 @@ async function runProvisioningPipeline(env, siteId, payload) {
     return;
   }
 
-  // ── 단계 1: 호스팅 계정 생성 ── (initializing → provisioning 전환)
-  await updateSiteStatus(env.DB, siteId, {
-    status: 'provisioning',
-    provision_step: 'hosting_account',
-  });
-
+  // ── 단계 1: 호스팅 계정 생성 ── (상태 전환은 onRequestPost에서 이미 처리함)
   let provisionResult;
   try {
     provisionResult = await callWorker(workerUrl, workerSecret, '/api/provision-hosting', {
@@ -573,9 +568,14 @@ export async function onRequestPost({ request, env, ctx }) {
     return err('사이트 생성 실패: ' + e.message, 500);
   }
 
-  // ✅ 수정4: 백그라운드 실행 (Cloudflare Workers ctx.waitUntil 사용)
-  // ctx.waitUntil이 있으면 응답 후에도 계속 실행됨
-  const pipelinePromise = runProvisioningPipeline(env, siteId, {
+  // 응답 전 첫 상태 전환을 동기로 실행 (pending → provisioning)
+  // 이렇게 해야 폴링이 즉시 진행 중 상태를 받을 수 있음
+  await updateSiteStatus(env.DB, siteId, {
+    status: 'provisioning',
+    provision_step: 'hosting_account',
+  }).catch(() => {});
+
+  const pipelinePayload = {
     provider,
     hostingEmail,
     hostingPw,
@@ -585,12 +585,15 @@ export async function onRequestPost({ request, env, ctx }) {
     wpAdminEmail,
     plan: effectivePlan,
     userId: user.id,
-  }).catch(async (e) => {
-    await updateSiteStatus(env.DB, siteId, {
-      status: 'failed',
-      error_message: '파이프라인 오류: ' + e.message,
+  };
+
+  const pipelinePromise = runProvisioningPipeline(env, siteId, pipelinePayload)
+    .catch(async (e) => {
+      await updateSiteStatus(env.DB, siteId, {
+        status: 'failed',
+        error_message: '파이프라인 오류: ' + e.message,
+      });
     });
-  });
 
   // Cloudflare Workers ctx.waitUntil로 백그라운드 실행 보장
   if (ctx && ctx.waitUntil) {
