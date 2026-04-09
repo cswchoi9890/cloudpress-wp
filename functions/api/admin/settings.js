@@ -70,8 +70,14 @@ export async function onRequest({ request, env }) {
         // Puppeteer Worker
         'puppeteer_worker_url', 'puppeteer_worker_secret',
 
-        // ✅ iFastnet 서버 직접 접근 설정 (외부 호스팅사 계정 없음 — 서버 IP만 사용)
-        'server_ip',       // iFastnet 서버 IP 주소
+        // ✅ 호스팅 서버 직접 접근 설정 (getHostingServerConfig에서 사용하는 키)
+        'hosting_cpanel_url',       // cPanel URL (예: https://cpanel.example.com:2083)
+        'hosting_server_username',  // cPanel 관리자 계정
+        'hosting_server_password',  // cPanel 관리자 비밀번호
+        'hosting_server_domain',    // 서버 기본 도메인
+
+        // iFastnet 서버 직접 접근 설정
+        'server_ip',       // 서버 IP 주소
         'ftp_host',        // FTP 호스트 (보통 server_ip와 동일)
         'ftp_user',        // FTP 사용자명
         'ftp_pass',        // FTP 비밀번호
