@@ -560,6 +560,8 @@ function updateProvisionSteps(provisionStep, status) {
 
 function startPolling(siteId) {
   let prevProvisionStep = null;
+  let initializingCount = 0;        // 'initializing'/'pending' 연속 카운트
+  const INIT_TIMEOUT_CYCLES = 15;   // 15 * 4초 = 60초 후 타임아웃
 
   pollInterval = setInterval(async () => {
     try {
@@ -576,6 +578,24 @@ function startPolling(siteId) {
       const site = data.site;
       const status = site.status;
       const provStep = site.provision_step;
+
+      // ── 초기화 타임아웃 감지 ──
+      if (status === 'pending' || (status === 'provisioning' && provStep === 'initializing')) {
+        initializingCount++;
+        if (initializingCount >= INIT_TIMEOUT_CYCLES) {
+          clearInterval(pollInterval);
+          pollInterval = null;
+          showFail(
+            '사이트 초기화가 너무 오래 걸립니다. ' +
+            'Puppeteer Worker URL이 설정되어 있는지 관리자 → 설정에서 확인해주세요. ' +
+            '(오류: 초기화 타임아웃)'
+          );
+          return;
+        }
+        // 아직 타임아웃 전이면 대기 계속
+        return;
+      }
+      initializingCount = 0; // 다른 상태로 넘어가면 카운터 리셋
 
       updateProvisionSteps(provStep, status);
 
