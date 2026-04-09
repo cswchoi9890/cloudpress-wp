@@ -354,11 +354,13 @@ function generateWpInstallerScript({
   const cronRunner = generateCronRunner();
   const mysqlTzPlugin = generateMysqlTimezonePlugin();
 
-  const wpConfigB64 = Buffer.from(wpConfig).toString('base64');
-  const htaccessB64 = Buffer.from(htaccess).toString('base64');
-  const userIniB64 = Buffer.from(userIni).toString('base64');
-  const cronRunnerB64 = Buffer.from(cronRunner).toString('base64');
-  const mysqlTzB64 = Buffer.from(mysqlTzPlugin).toString('base64');
+  // ✅ FIX: Buffer는 Node.js 전용 — CF Workers에서는 btoa() + encodeURIComponent 사용
+  const toBase64 = (str) => btoa(unescape(encodeURIComponent(str)));
+  const wpConfigB64    = toBase64(wpConfig);
+  const htaccessB64    = toBase64(htaccess);
+  const userIniB64     = toBase64(userIni);
+  const cronRunnerB64  = toBase64(cronRunner);
+  const mysqlTzB64     = toBase64(mysqlTzPlugin);
 
   const siteNameEscaped = siteName.replace(/'/g, "\\'").replace(/\\/g, '\\\\');
   const secret8 = wpAdminPw.slice(0, 8);
