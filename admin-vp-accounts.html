@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>VP 계정 관리 — CloudPress</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="dashboard.css"/>
+  <style>
+    .vp-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px}
+    .vp-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+    .vp-label{font-family:var(--font-head);font-weight:700;font-size:1.05rem}
+    .vp-status{display:inline-block;padding:4px 10px;border-radius:20px;font-size:.75rem;font-weight:600}
+    .vp-status.active{background:rgba(34,197,94,.1);color:#16a34a}
+    .vp-status.inactive{background:rgba(239,68,68,.1);color:#dc2626}
+    .vp-info{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:12px}
+    .vp-info-item{font-size:.85rem}
+    .vp-info-label{color:var(--muted);margin-bottom:3px}
+    .vp-info-value{font-weight:500}
+    .vp-actions{display:flex;gap:8px;flex-wrap:wrap}
+    .modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;align-items:center;justify-content:center}
+    .modal.show{display:flex}
+    .modal-content{background:var(--bg);border-radius:16px;padding:28px;max-width:600px;width:90%;max-height:90vh;overflow-y:auto}
+    .modal-header{font-family:var(--font-head);font-weight:700;font-size:1.2rem;margin-bottom:20px}
+    .field-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+    @media(max-width:600px){.field-row{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="app-wrap">
+  <aside class="sidebar" id="sidebar">
+    <a href="/dashboard.html" class="sb-logo">
+      <svg width="22" height="22" viewBox="0 0 28 28" fill="none">
+        <path d="M14 2L26 8V20L14 26L2 20V8L14 2Z" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M14 8L20 11V17L14 20L8 17V11L14 8Z" fill="currentColor" opacity=".5"/>
+        <circle cx="14" cy="14" r="2.2" fill="currentColor"/>
+      </svg>CloudPress
+    </a>
+    <nav class="sb-nav">
+      <div class="sb-section"><div class="sb-label">관리자</div>
+        <a href="/admin.html" class="sb-link">📊 개요</a>
+        <a href="/admin-user-control.html" class="sb-link">👥 사용자</a>
+        <a href="/admin-site-control.html" class="sb-link">🌐 사이트</a>
+        <a href="/admin-vp-accounts.html" class="sb-link active">🔑 VP 계정</a>
+        <a href="/admin-settings.html" class="sb-link">⚙️ 설정</a>
+        <a href="/admin-notices.html" class="sb-link">📢 공지</a>
+        <a href="/admin-revenue.html" class="sb-link">💰 매출</a>
+        <a href="/admin-traffic.html" class="sb-link">📈 트래픽</a>
+      </div>
+      <div class="sb-section">
+        <button class="sb-link danger" onclick="CP.logout()">로그아웃</button>
+      </div>
+    </nav>
+  </aside>
+  <div class="sidebar-overlay" id="overlay" onclick="closeSidebar()"></div>
+
+  <main class="main">
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:14px">
+        <button class="sidebar-toggle" onclick="openSidebar()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 12h18M3 6h18M3 18h18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+        <span class="topbar-title">VP 계정 관리</span>
+      </div>
+      <button class="btn primary" onclick="showCreateModal()">➕ VP 계정 추가</button>
+    </div>
+
+    <div class="content">
+      <div id="toast" style="display:none;position:fixed;top:20px;right:20px;z-index:9999;padding:12px 18px;border-radius:10px;font-size:.85rem;font-weight:600;color:#fff"></div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px">
+        <h3 style="margin:0 0 10px;font-size:1rem">💡 VP 계정이란?</h3>
+        <p style="margin:0;font-size:.88rem;color:var(--muted);line-height:1.6">
+          VP(Vesta Panel) 계정은 사용자들이 생성하는 WordPress 사이트가 배포될 호스팅 서버 계정입니다.<br>
+          각 VP 계정마다 <strong>복제할 ZIP 템플릿 파일</strong>을 설정할 수 있으며, 사이트 생성 시 자동으로 해당 템플릿을 복제하여 새 사이트를 생성합니다.<br>
+          각 사이트는 <strong>독립적인 D1 데이터베이스와 KV 네임스페이스</strong>를 사용하므로 완전히 격리된 환경에서 운영됩니다.
+        </p>
+      </div>
+
+      <div id="accounts-container">
+        <div style="text-align:center;padding:40px;color:var(--muted)">
+          <div style="font-size:3rem;margin-bottom:10px">⏳</div>
+          <div>VP 계정을 불러오는 중...</div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- 생성/수정 모달 -->
+<div id="vpModal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <span id="modalTitle">VP 계정 추가</span>
+    </div>
+    <form id="vpForm" onsubmit="saveAccount(event)">
+      <input type="hidden" id="accountId"/>
+      
+      <div class="field">
+        <label>계정 레이블 (식별용) *</label>
+        <input type="text" id="label" required placeholder="예: 메인 서버 1"/>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>VP 사용자명 *</label>
+          <input type="text" id="vp_username" required placeholder="admin"/>
+        </div>
+        <div class="field">
+          <label>VP 비밀번호 *</label>
+          <input type="password" id="vp_password" required placeholder="••••••••"/>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>패널 URL *</label>
+          <input type="url" id="panel_url" required placeholder="https://panel.example.com:8083"/>
+        </div>
+        <div class="field">
+          <label>서버 도메인 *</label>
+          <input type="text" id="server_domain" required placeholder="example.com"/>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>웹 루트 경로</label>
+          <input type="text" id="web_root" placeholder="/htdocs"/>
+          <div class="hint">기본값: /htdocs</div>
+        </div>
+        <div class="field">
+          <label>PHP 바이너리</label>
+          <input type="text" id="php_bin" placeholder="php8.3"/>
+          <div class="hint">기본값: php8.3</div>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>MySQL 호스트</label>
+          <input type="text" id="mysql_host" placeholder="localhost"/>
+          <div class="hint">기본값: localhost</div>
+        </div>
+        <div class="field">
+          <label>최대 사이트 수</label>
+          <input type="number" id="max_sites" placeholder="50"/>
+          <div class="hint">기본값: 50</div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>복제 ZIP URL 🎯</label>
+        <input type="url" id="clone_zip_url" placeholder="https://example.com/template.zip"/>
+        <div class="hint">
+          사이트 생성 시 복제할 WordPress ZIP 파일의 다운로드 URL<br>
+          이 URL의 ZIP 파일을 다운로드하여 새 사이트를 생성합니다.
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:24px">
+        <button type="submit" class="btn primary" style="flex:1">저장</button>
+        <button type="button" class="btn" onclick="hideModal()" style="flex:1">취소</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>
+let accounts = [];
+
+async function loadAccounts() {
+  try {
+    const res = await CP.apiCall('/api/admin/vp-accounts');
+    if (!res.ok) throw new Error(res.error || '계정 조회 실패');
+    accounts = res.accounts || [];
+    renderAccounts();
+  } catch (e) {
+    showToast(e.message, 'error');
+    document.getElementById('accounts-container').innerHTML = `
+      <div style="text-align:center;padding:40px;color:var(--muted)">
+        <div style="font-size:3rem;margin-bottom:10px">❌</div>
+        <div>계정 조회 실패: ${e.message}</div>
+      </div>
+    `;
+  }
+}
+
+function renderAccounts() {
+  const container = document.getElementById('accounts-container');
+  
+  if (accounts.length === 0) {
+    container.innerHTML = `
+      <div style="text-align:center;padding:60px;color:var(--muted)">
+        <div style="font-size:4rem;margin-bottom:14px">🔑</div>
+        <div style="font-size:1.1rem;margin-bottom:8px">VP 계정이 없습니다</div>
+        <div style="font-size:.88rem">우측 상단의 "➕ VP 계정 추가" 버튼을 눌러 첫 계정을 등록하세요.</div>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = accounts.map(acc => `
+    <div class="vp-card">
+      <div class="vp-header">
+        <div>
+          <div class="vp-label">${acc.label}</div>
+          <div style="font-size:.78rem;color:var(--muted);margin-top:3px">ID: ${acc.id}</div>
+        </div>
+        <span class="vp-status ${acc.is_active ? 'active' : 'inactive'}">
+          ${acc.is_active ? '✅ 활성' : '❌ 비활성'}
+        </span>
+      </div>
+      
+      <div class="vp-info">
+        <div class="vp-info-item">
+          <div class="vp-info-label">VP 사용자명</div>
+          <div class="vp-info-value">${acc.vp_username}</div>
+        </div>
+        <div class="vp-info-item">
+          <div class="vp-info-label">서버 도메인</div>
+          <div class="vp-info-value">${acc.server_domain}</div>
+        </div>
+        <div class="vp-info-item">
+          <div class="vp-info-label">사이트 사용</div>
+          <div class="vp-info-value">${acc.current_sites} / ${acc.max_sites}</div>
+        </div>
+        <div class="vp-info-item">
+          <div class="vp-info-label">복제 ZIP</div>
+          <div class="vp-info-value">${acc.clone_zip_url ? '✅ 설정됨' : '❌ 미설정'}</div>
+        </div>
+      </div>
+
+      ${acc.clone_zip_url ? `
+        <div style="background:var(--surface2);border-radius:8px;padding:10px;margin-bottom:12px;font-size:.82rem">
+          <div style="color:var(--muted);margin-bottom:4px">📦 복제 ZIP URL:</div>
+          <div style="word-break:break-all;font-family:monospace;font-size:.75rem">${acc.clone_zip_url}</div>
+        </div>
+      ` : ''}
+
+      <div class="vp-actions">
+        <button class="btn sm" onclick="editAccount('${acc.id}')">✏️ 수정</button>
+        <button class="btn sm ${acc.is_active ? 'warning' : 'primary'}" onclick="toggleActive('${acc.id}', ${acc.is_active})">
+          ${acc.is_active ? '⏸️ 비활성화' : '▶️ 활성화'}
+        </button>
+        <button class="btn sm danger" onclick="deleteAccount('${acc.id}', '${acc.label}')">🗑️ 삭제</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function showCreateModal() {
+  document.getElementById('modalTitle').textContent = 'VP 계정 추가';
+  document.getElementById('vpForm').reset();
+  document.getElementById('accountId').value = '';
+  document.getElementById('vpModal').classList.add('show');
+}
+
+function editAccount(id) {
+  const acc = accounts.find(a => a.id === id);
+  if (!acc) return;
+
+  document.getElementById('modalTitle').textContent = 'VP 계정 수정';
+  document.getElementById('accountId').value = acc.id;
+  document.getElementById('label').value = acc.label;
+  document.getElementById('vp_username').value = acc.vp_username;
+  document.getElementById('vp_password').value = ''; // 보안상 비워둠
+  document.getElementById('panel_url').value = acc.panel_url;
+  document.getElementById('server_domain').value = acc.server_domain;
+  document.getElementById('web_root').value = acc.web_root || '';
+  document.getElementById('php_bin').value = acc.php_bin || '';
+  document.getElementById('mysql_host').value = acc.mysql_host || '';
+  document.getElementById('clone_zip_url').value = acc.clone_zip_url || '';
+  document.getElementById('max_sites').value = acc.max_sites || '';
+  document.getElementById('vpModal').classList.add('show');
+}
+
+function hideModal() {
+  document.getElementById('vpModal').classList.remove('show');
+}
+
+async function saveAccount(e) {
+  e.preventDefault();
+  
+  const accountId = document.getElementById('accountId').value;
+  const isEdit = !!accountId;
+
+  const data = {
+    label: document.getElementById('label').value,
+    vp_username: document.getElementById('vp_username').value,
+    panel_url: document.getElementById('panel_url').value,
+    server_domain: document.getElementById('server_domain').value,
+    web_root: document.getElementById('web_root').value || undefined,
+    php_bin: document.getElementById('php_bin').value || undefined,
+    mysql_host: document.getElementById('mysql_host').value || undefined,
+    clone_zip_url: document.getElementById('clone_zip_url').value || undefined,
+    max_sites: document.getElementById('max_sites').value || undefined,
+  };
+
+  const password = document.getElementById('vp_password').value;
+  if (password) data.vp_password = password;
+
+  if (isEdit) {
+    data.id = accountId;
+  }
+
+  try {
+    const res = await CP.apiCall(`/api/admin/vp-accounts`, {
+      method: isEdit ? 'PUT' : 'POST',
+      body: JSON.stringify(data),
+    });
+
+    if (!res.ok) throw new Error(res.error || '저장 실패');
+
+    showToast(isEdit ? '계정이 수정되었습니다.' : '계정이 생성되었습니다.', 'success');
+    hideModal();
+    await loadAccounts();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+async function toggleActive(id, currentActive) {
+  if (!confirm(currentActive ? '이 계정을 비활성화하시겠습니까?' : '이 계정을 활성화하시겠습니까?')) return;
+
+  try {
+    const res = await CP.apiCall('/api/admin/vp-accounts', {
+      method: 'PUT',
+      body: JSON.stringify({ id, is_active: !currentActive }),
+    });
+
+    if (!res.ok) throw new Error(res.error || '상태 변경 실패');
+
+    showToast('계정 상태가 변경되었습니다.', 'success');
+    await loadAccounts();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+async function deleteAccount(id, label) {
+  if (!confirm(`"${label}" 계정을 삭제하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다.`)) return;
+
+  try {
+    const res = await CP.apiCall(`/api/admin/vp-accounts?id=${id}`, {
+      method: 'DELETE',
+    });
+
+    if (!res.ok) throw new Error(res.error || '삭제 실패');
+
+    showToast('계정이 삭제되었습니다.', 'success');
+    await loadAccounts();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+function showToast(msg, type) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.style.background = type === 'success' ? '#16a34a' : '#dc2626';
+  toast.style.display = 'block';
+  setTimeout(() => { toast.style.display = 'none'; }, 3000);
+}
+
+// 초기 로드
+loadAccounts();
+</script>
+</body>
+</html>
