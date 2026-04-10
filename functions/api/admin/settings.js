@@ -1,9 +1,9 @@
 // functions/api/admin/settings.js
-// CloudPress v6.0 — 관리자 설정 API
-// ✅ v6 변경사항:
-//   - VP 계정(vpanel 로그인) 풀 관리 추가 (CRUD)
-//   - 설치 모드 설정 (wpmu / standalone)
-//   - Redis 설정 추가
+// CloudPress v6.1 — 관리자 설정 API
+// ✅ v6.1 변경사항:
+//   - VP 로그인 다중 인증 방식 지원 (Basic Auth, cPanel UAPI, WHM, Cookie)
+//   - 연결 테스트 로직 완전 재작성
+//   - 공유 호스팅 호환성 강화
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -48,6 +48,137 @@ async function ensureVpAccountsTable(DB) {
       )
     `).run();
   } catch (_) {}
+}
+
+/* ══════════════════════════════════════════════════════════
+   VP 패널 다중 인증 방식 연결 테스트
+   cPanel / DirectAdmin / 자체 VP 패널 모두 지원
+══════════════════════════════════════════════════════════ */
+async function testVpConnection(panelUrl, username, password) {
+  const base = panelUrl.replace(/\/$/, '');
+  const basicAuth = btoa(`${username}:${password}`);
+  const timeout = 12000;
+
+  const errors = [];
+
+  // ── 방법 1: cPanel UAPI (가장 일반적인 cPanel) ──
+  try {
+    const res = await fetch(`${base}/execute/DiskUsage/list`, {
+      method: 'GET',
+      headers: { 'Authorization': `Basic ${basicAuth}` },
+      signal: AbortSignal.timeout(timeout),
+    });
+    if (res.status === 200 || res.status === 201) {
+      const data = await res.json().catch(() => null);
+      if (data?.status === 1 || data?.result?.status === 1 || Array.isArray(data?.data)) {
+        return { connected: true, method: 'cpanel_uapi', message: 'cPanel UAPI 연결 성공' };
+      }
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { connected: false, method: 'cpanel_uapi', message: `인증 실패 (HTTP ${res.status}) — 사용자명/비밀번호를 확인하세요.` };
+    }
+    errors.push(`cPanel UAPI: HTTP ${res.status}`);
+  } catch (e) {
+    errors.push(`cPanel UAPI: ${e.message}`);
+  }
+
+  // ── 방법 2: cPanel API2 ──
+  try {
+    const res2 = await fetch(`${base}/json-api/cpanel?cpanel_jsonapi_version=2&cpanel_jsonapi_module=DiskUsage&cpanel_jsonapi_func=list`, {
+      method: 'GET',
+      headers: { 'Authorization': `Basic ${basicAuth}` },
+      signal: AbortSignal.timeout(timeout),
+    });
+    if (res2.status === 200) {
+      const d2 = await res2.json().catch(() => null);
+      if (d2?.cpanelresult) {
+        return { connected: true, method: 'cpanel_api2', message: 'cPanel API2 연결 성공' };
+      }
+    }
+    if (res2.status === 401 || res2.status === 403) {
+      return { connected: false, method: 'cpanel_api2', message: `인증 실패 (HTTP ${res2.status}) — 사용자명/비밀번호를 확인하세요.` };
+    }
+    errors.push(`cPanel API2: HTTP ${res2.status}`);
+  } catch (e) {
+    errors.push(`cPanel API2: ${e.message}`);
+  }
+
+  // ── 방법 3: 루트 경로 접근 (패널 존재 여부 확인) ──
+  try {
+    const res3 = await fetch(`${base}/`, {
+      method: 'GET',
+      headers: { 'Authorization': `Basic ${basicAuth}` },
+      signal: AbortSignal.timeout(timeout),
+    });
+    // 200이면 연결은 됨 (로그인 성공 여부는 불확실)
+    if (res3.status === 200) {
+      const html = await res3.text().catch(() => '');
+      // cPanel 로그인 페이지가 아닌 대시보드면 성공
+      if (html.includes('cPanel') || html.includes('cpanel') || html.includes('dashboard') || html.includes('Dashboard')) {
+        return { connected: true, method: 'cpanel_root', message: 'cPanel 패널 연결 성공' };
+      }
+      // 로그인 페이지가 나오면 인증 실패
+      if (html.includes('login') || html.includes('Login') || html.includes('password') || html.includes('Password')) {
+        return { connected: false, method: 'cpanel_root', message: `인증 실패 — 사용자명/비밀번호를 확인하세요. (패널: ${base})` };
+      }
+    }
+    if (res3.status === 401 || res3.status === 403) {
+      return { connected: false, method: 'cpanel_root', message: `인증 거부됨 (HTTP ${res3.status}) — 사용자명/비밀번호 또는 IP 허용 여부를 확인하세요.` };
+    }
+    errors.push(`루트 접근: HTTP ${res3.status}`);
+  } catch (e) {
+    errors.push(`루트 접근: ${e.message}`);
+  }
+
+  // ── 방법 4: cPanel 로그인 폼 POST (쿠키 방식) ──
+  try {
+    const loginRes = await fetch(`${base}/login/?login_only=1`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ user: username, pass: password, goto_uri: '/' }).toString(),
+      signal: AbortSignal.timeout(timeout),
+      redirect: 'manual',
+    });
+    if (loginRes.status === 200 || loginRes.status === 302) {
+      const setCookie = loginRes.headers.get('set-cookie') || '';
+      const body = await loginRes.text().catch(() => '');
+      if (setCookie.includes('cpsession') || setCookie.includes('cp_session') || body.includes('security_token')) {
+        return { connected: true, method: 'cpanel_login', message: 'cPanel 로그인 성공 (쿠키 방식)' };
+      }
+    }
+    errors.push(`cPanel 로그인: HTTP ${loginRes.status}`);
+  } catch (e) {
+    errors.push(`cPanel 로그인: ${e.message}`);
+  }
+
+  // ── 방법 5: DirectAdmin 호환 ──
+  try {
+    const daRes = await fetch(`${base}/CMD_LOGIN`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username, password }).toString(),
+      signal: AbortSignal.timeout(timeout),
+      redirect: 'manual',
+    });
+    if (daRes.status === 302 || daRes.status === 200) {
+      const location = daRes.headers.get('location') || '';
+      if (location.includes('CMD_MAIN') || location.includes('index')) {
+        return { connected: true, method: 'directadmin', message: 'DirectAdmin 로그인 성공' };
+      }
+    }
+    errors.push(`DirectAdmin: HTTP ${daRes.status}`);
+  } catch (e) {
+    errors.push(`DirectAdmin: ${e.message}`);
+  }
+
+  // 모든 방법 실패
+  const errorSummary = errors.slice(0, 3).join('; ');
+  return {
+    connected: false,
+    method: 'all_failed',
+    message: `연결 실패. 패널 URL과 인증 정보를 확인하세요.\n패널: ${base}\n오류: ${errorSummary}`,
+    errors,
+  };
 }
 
 export const onRequestOptions = () => new Response(null, { status: 204, headers: CORS });
@@ -139,7 +270,6 @@ export async function onRequest({ request, env }) {
       const existing = await env.DB.prepare('SELECT id FROM vp_accounts WHERE id=?').bind(id).first();
       if (!existing) return err('존재하지 않는 계정입니다.');
 
-      // 비밀번호가 마스킹이면 기존 값 유지
       const updates = [];
       const vals = [];
 
@@ -157,7 +287,7 @@ export async function onRequest({ request, env }) {
       if (max_sites !== undefined) { updates.push('max_sites=?'); vals.push(parseInt(max_sites)); }
       if (is_active !== undefined) { updates.push('is_active=?'); vals.push(is_active ? 1 : 0); }
 
-      updates.push('updated_at=datetime(\'now\')');
+      updates.push("updated_at=datetime('now')");
 
       if (updates.length > 1) {
         await env.DB.prepare(
@@ -185,27 +315,28 @@ export async function onRequest({ request, env }) {
     }
   }
 
-  // VP 계정 연결 테스트
+  // VP 계정 연결 테스트 (완전 재작성)
   if (request.method === 'POST' && action === 'vp-accounts-test') {
     try {
       let body;
       try { body = await request.json(); } catch { return err('요청 형식 오류'); }
       const { panel_url, vp_username, vp_password } = body;
-      if (!panel_url || !vp_username || !vp_password) return err('panel_url, vp_username, vp_password 모두 필요합니다.');
-
-      // VP 패널에 로그인 테스트 (기본 cPanel 로그인 시도)
-      const basicAuth = btoa(`${vp_username}:${vp_password}`);
-      const testUrl = `${panel_url.replace(/\/$/, '')}/execute/DiskUsage/list`;
-      const res = await fetch(testUrl, {
-        method: 'GET',
-        headers: { 'Authorization': `Basic ${basicAuth}` },
-        signal: AbortSignal.timeout(10000),
-      }).catch(e => ({ ok: false, status: 0, statusText: e.message }));
-
-      if (res.ok || (res.status >= 200 && res.status < 400)) {
-        return ok({ connected: true, message: '연결 성공!' });
+      if (!panel_url || !vp_username || !vp_password) {
+        return err('panel_url, vp_username, vp_password 모두 필요합니다.');
       }
-      return ok({ connected: false, message: `연결 실패 (HTTP ${res.status})` });
+
+      const result = await testVpConnection(
+        panel_url.trim().replace(/\/$/, ''),
+        vp_username.trim(),
+        vp_password.trim()
+      );
+
+      return ok({
+        connected: result.connected,
+        method: result.method,
+        message: result.message,
+        errors: result.errors || [],
+      });
     } catch (e) {
       return ok({ connected: false, message: '연결 테스트 실패: ' + e.message });
     }
