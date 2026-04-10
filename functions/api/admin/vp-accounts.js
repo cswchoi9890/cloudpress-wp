@@ -1,5 +1,5 @@
 // functions/api/admin/vp-accounts.js
-// VP 계정 관리 API + ZIP 파일 업로드 (R2 저장)
+// VP 계정 관리 API — clone_zip_url 은 GitHub Raw URL 직접 입력
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -32,16 +32,7 @@ function genId() {
 
 export const onRequestOptions = () => new Response(null, { status: 204, headers: CORS });
 
-// ─────────────────────────────────────────────
-// POST /api/admin/vp-accounts/upload-zip
-// multipart/form-data 로 ZIP 파일 수신 → R2 저장 → URL 반환
-//
-// ✅ Cloudflare Pages Functions 라우팅 규칙:
-//   이 파일은 /api/admin/vp-accounts 를 처리합니다.
-//   /upload-zip 서브 경로는 onRequestPost 에서 URL path로 분기합니다.
-// ─────────────────────────────────────────────
-
-// GET - VP 계정 목록 조회
+// GET — VP 계정 목록
 export async function onRequestGet({ request, env }) {
   const admin = await requireAdmin(env, request);
   if (!admin) return err('관리자 권한이 필요합니다.', 403);
@@ -60,35 +51,29 @@ export async function onRequestGet({ request, env }) {
   }
 }
 
-// POST - VP 계정 생성 OR ZIP 파일 업로드 (path로 분기)
+// POST — VP 계정 생성
 export async function onRequestPost({ request, env }) {
   const admin = await requireAdmin(env, request);
   if (!admin) return err('관리자 권한이 필요합니다.', 403);
 
-  // ✅ /upload-zip 경로 분기
-  const url = new URL(request.url);
-  if (url.pathname.endsWith('/upload-zip')) {
-    return handleZipUpload(request, env);
-  }
-
-  // ── 계정 생성 ──
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return err('요청 형식 오류');
-  }
+  try { body = await request.json(); } catch { return err('요청 형식 오류'); }
 
-  const {
-    label, vp_username, vp_password, panel_url, server_domain,
-    web_root, php_bin, mysql_host, clone_zip_url, max_sites,
-  } = body;
+  const { label, vp_username, vp_password, panel_url, server_domain,
+          web_root, php_bin, mysql_host, clone_zip_url, max_sites } = body;
 
   if (!label?.trim())         return err('계정 레이블을 입력해주세요.');
   if (!vp_username?.trim())   return err('VP 사용자명을 입력해주세요.');
   if (!vp_password?.trim())   return err('VP 비밀번호를 입력해주세요.');
   if (!panel_url?.trim())     return err('패널 URL을 입력해주세요.');
   if (!server_domain?.trim()) return err('서버 도메인을 입력해주세요.');
+  if (!clone_zip_url?.trim()) return err('복제 ZIP URL을 입력해주세요.');
+
+  // GitHub Raw URL 형식 검증
+  const zipUrl = clone_zip_url.trim();
+  if (!zipUrl.startsWith('http://') && !zipUrl.startsWith('https://')) {
+    return err('올바른 URL 형식이 아닙니다. (https://... 로 시작해야 합니다)');
+  }
 
   const vpId = genId();
 
@@ -106,10 +91,10 @@ export async function onRequestPost({ request, env }) {
       vp_password.trim(),
       panel_url.trim(),
       server_domain.trim(),
-      web_root || '/htdocs',
-      php_bin || 'php8.3',
-      mysql_host || 'localhost',
-      clone_zip_url || null,
+      web_root?.trim() || '/htdocs',
+      php_bin?.trim() || 'php8.3',
+      mysql_host?.trim() || 'localhost',
+      zipUrl,
       parseInt(max_sites, 10) || 50
     ).run();
 
@@ -119,98 +104,29 @@ export async function onRequestPost({ request, env }) {
   }
 }
 
-// ✅ ZIP 업로드 핸들러
-// R2 버킷 바인딩명: ZIP_BUCKET (wrangler.toml에 추가 필요)
-// R2가 없는 경우 KV fallback (25MB 이하 파일만)
-async function handleZipUpload(request, env) {
-  let formData;
-  try {
-    formData = await request.formData();
-  } catch (e) {
-    return err('multipart 파싱 실패: ' + e.message);
-  }
-
-  const file = formData.get('file');
-  if (!file || typeof file === 'string') return err('파일이 없습니다.');
-  if (!file.name.toLowerCase().endsWith('.zip')) return err('ZIP 파일만 업로드할 수 있습니다.');
-
-  const maxBytes = 500 * 1024 * 1024; // 500MB
-  if (file.size > maxBytes) return err('파일 크기는 500MB를 초과할 수 없습니다.');
-
-  // 파일명 정규화: 타임스탬프 + 원본명 (경로 순회 방지)
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const key = 'zip-templates/' + Date.now() + '_' + safeName;
-
-  // ── R2 저장 시도 ──
-  if (env.ZIP_BUCKET) {
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      await env.ZIP_BUCKET.put(key, arrayBuffer, {
-        httpMetadata: { contentType: 'application/zip' },
-        customMetadata: { originalName: file.name, uploadedAt: new Date().toISOString() },
-      });
-
-      // R2 public URL — wrangler.toml에서 custom domain 설정 필요
-      // 없으면 worker 경유 URL 반환
-      const r2PublicBase = env.R2_PUBLIC_URL || '';
-      const zipUrl = r2PublicBase
-        ? r2PublicBase.replace(/\/$/, '') + '/' + key
-        : '/api/admin/vp-accounts/zip-file?key=' + encodeURIComponent(key);
-
-      return ok({ url: zipUrl, key, name: file.name, size: file.size });
-    } catch (e) {
-      return err('R2 업로드 실패: ' + e.message, 500);
-    }
-  }
-
-  // ── R2 없음: KV fallback (25MB 이하) ──
-  if (env.SESSIONS) {
-    const kvLimit = 25 * 1024 * 1024;
-    if (file.size > kvLimit) {
-      return err(
-        'R2 버킷이 설정되지 않았습니다. 25MB를 초과하는 파일은 wrangler.toml에 ZIP_BUCKET(R2)을 추가해야 합니다.' +
-        ' 현재 파일 크기: ' + (file.size / 1024 / 1024).toFixed(1) + 'MB'
-      );
-    }
-    try {
-      const ab = await file.arrayBuffer();
-      const b64 = btoa(String.fromCharCode(...new Uint8Array(ab)));
-      const kvKey = 'zip:' + key;
-      // KV TTL 없이 저장 (영구)
-      await env.SESSIONS.put(kvKey, b64);
-      const zipUrl = '/api/admin/vp-accounts/zip-file?key=' + encodeURIComponent(kvKey);
-      return ok({ url: zipUrl, key: kvKey, name: file.name, size: file.size });
-    } catch (e) {
-      return err('KV 저장 실패: ' + e.message, 500);
-    }
-  }
-
-  return err('스토리지가 설정되지 않았습니다. wrangler.toml에 ZIP_BUCKET(R2) 바인딩을 추가해주세요.');
-}
-
-// PUT - VP 계정 수정
+// PUT — VP 계정 수정
 export async function onRequestPut({ request, env }) {
   const admin = await requireAdmin(env, request);
   if (!admin) return err('관리자 권한이 필요합니다.', 403);
 
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return err('요청 형식 오류');
-  }
+  try { body = await request.json(); } catch { return err('요청 형식 오류'); }
 
-  const {
-    id, label, vp_username, vp_password, panel_url, server_domain,
-    web_root, php_bin, mysql_host, clone_zip_url, max_sites, is_active,
-  } = body;
+  const { id, label, vp_username, vp_password, panel_url, server_domain,
+          web_root, php_bin, mysql_host, clone_zip_url, max_sites, is_active } = body;
 
   if (!id) return err('계정 ID가 필요합니다.');
 
-  const existing = await env.DB.prepare(
-    'SELECT id FROM vp_accounts WHERE id=?'
-  ).bind(id).first();
+  const existing = await env.DB.prepare('SELECT id FROM vp_accounts WHERE id=?').bind(id).first();
   if (!existing) return err('존재하지 않는 VP 계정입니다.', 404);
+
+  // clone_zip_url URL 형식 검증
+  if (clone_zip_url !== undefined && clone_zip_url !== null && clone_zip_url.trim()) {
+    const zipUrl = clone_zip_url.trim();
+    if (!zipUrl.startsWith('http://') && !zipUrl.startsWith('https://')) {
+      return err('올바른 URL 형식이 아닙니다. (https://... 로 시작해야 합니다)');
+    }
+  }
 
   try {
     const updates = [];
@@ -218,14 +134,14 @@ export async function onRequestPut({ request, env }) {
 
     if (label !== undefined)        { updates.push('label=?');         values.push(label.trim()); }
     if (vp_username !== undefined)  { updates.push('vp_username=?');   values.push(vp_username.trim()); }
-    if (vp_password !== undefined)  { updates.push('vp_password=?');   values.push(vp_password.trim()); }
+    if (vp_password !== undefined && vp_password.trim()) {
+                                      updates.push('vp_password=?');   values.push(vp_password.trim()); }
     if (panel_url !== undefined)    { updates.push('panel_url=?');     values.push(panel_url.trim()); }
     if (server_domain !== undefined){ updates.push('server_domain=?'); values.push(server_domain.trim()); }
-    if (web_root !== undefined)     { updates.push('web_root=?');      values.push(web_root || '/htdocs'); }
-    if (php_bin !== undefined)      { updates.push('php_bin=?');       values.push(php_bin || 'php8.3'); }
-    if (mysql_host !== undefined)   { updates.push('mysql_host=?');    values.push(mysql_host || 'localhost'); }
-    // ✅ clone_zip_url: null 허용 (제거 요청 처리)
-    if (clone_zip_url !== undefined){ updates.push('clone_zip_url=?'); values.push(clone_zip_url || null); }
+    if (web_root !== undefined)     { updates.push('web_root=?');      values.push(web_root?.trim() || '/htdocs'); }
+    if (php_bin !== undefined)      { updates.push('php_bin=?');       values.push(php_bin?.trim() || 'php8.3'); }
+    if (mysql_host !== undefined)   { updates.push('mysql_host=?');    values.push(mysql_host?.trim() || 'localhost'); }
+    if (clone_zip_url !== undefined){ updates.push('clone_zip_url=?'); values.push(clone_zip_url?.trim() || null); }
     if (max_sites !== undefined)    { updates.push('max_sites=?');     values.push(parseInt(max_sites, 10) || 50); }
     if (is_active !== undefined)    { updates.push('is_active=?');     values.push(is_active ? 1 : 0); }
 
@@ -244,7 +160,7 @@ export async function onRequestPut({ request, env }) {
   }
 }
 
-// DELETE - VP 계정 삭제
+// DELETE — VP 계정 삭제
 export async function onRequestDelete({ request, env }) {
   const admin = await requireAdmin(env, request);
   if (!admin) return err('관리자 권한이 필요합니다.', 403);
