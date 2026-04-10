@@ -342,17 +342,114 @@ echo json_encode(['ok' => true, 'time' => date('c'), 'jobs' => count($crons ?? [
  * WordPress 자동 설치 PHP 스크립트 (installer.php)
  * PHP 8.3 + 한국어 WP 최신버전 + KST 기준
  */
+function generateCfKvD1Plugin({ personalDomain }) {
+  return `<?php
+/**
+ * Plugin Name: CloudPress D1+KV Integration
+ * Description: Cloudflare D1 + KV 연동 (글·페이지·미디어 라이브러리)
+ * 개인 도메인: ${personalDomain}
+ */
+
+// CloudPress REST API 엔드포인트 등록
+// 콘텐츠(글·페이지·미디어) 저장/조회를 Cloudflare D1/KV와 동기화
+add_action('rest_api_init', function() {
+  register_rest_route('cloudpress/v1', '/sync-content', [
+    'methods'  => 'POST',
+    'callback' => 'cp_sync_content_to_kv',
+    'permission_callback' => function() {
+      return current_user_can('publish_posts');
+    },
+  ]);
+  register_rest_route('cloudpress/v1', '/health', [
+    'methods'  => 'GET',
+    'callback' => function() {
+      return new WP_REST_Response([
+        'ok'     => true,
+        'domain' => '${personalDomain}',
+        'time'   => current_time('mysql'),
+      ]);
+    },
+    'permission_callback' => '__return_true',
+  ]);
+});
+
+// 글 저장 시 CF KV에 캐시 키 무효화 신호 전송
+add_action('save_post', function($post_id, $post) {
+  if (wp_is_post_revision($post_id) || $post->post_status !== 'publish') return;
+  $site_url = get_option('siteurl');
+  $cache_key = 'post_' . $post_id;
+  // Cloudflare Worker에 캐시 무효화 요청 (비동기)
+  wp_remote_post(
+    $site_url . '/__cloudpress_cache_purge',
+    [
+      'blocking' => false,
+      'body'     => json_encode(['key' => $cache_key, 'post_id' => $post_id]),
+      'headers'  => ['Content-Type' => 'application/json', 'X-CloudPress-Internal' => '1'],
+      'timeout'  => 3,
+    ]
+  );
+}, 10, 2);
+
+// 미디어 업로드 시 메타데이터 KV에 동기화
+add_action('add_attachment', function($attachment_id) {
+  // 미디어 메타 KV 저장 (Worker가 처리)
+  $meta = [
+    'id'         => $attachment_id,
+    'url'        => wp_get_attachment_url($attachment_id),
+    'title'      => get_the_title($attachment_id),
+    'mime_type'  => get_post_mime_type($attachment_id),
+    'created_at' => current_time('mysql'),
+  ];
+  // 큐에 추가 (cf-kv-sync transient)
+  $queue = get_transient('cp_kv_sync_queue') ?: [];
+  $queue[] = ['type' => 'media', 'data' => $meta];
+  set_transient('cp_kv_sync_queue', $queue, HOUR_IN_SECONDS);
+});
+
+function cp_sync_content_to_kv($request) {
+  $params  = $request->get_params();
+  $type    = sanitize_text_field($params['type'] ?? 'posts');
+  $per_page = min((int)($params['per_page'] ?? 20), 100);
+
+  $posts = get_posts([
+    'post_type'      => ($type === 'pages') ? 'page' : 'post',
+    'post_status'    => 'publish',
+    'posts_per_page' => $per_page,
+    'orderby'        => 'modified',
+    'order'          => 'DESC',
+  ]);
+
+  $items = array_map(function($p) {
+    return [
+      'id'         => $p->ID,
+      'title'      => get_the_title($p),
+      'slug'       => $p->post_name,
+      'url'        => get_permalink($p),
+      'excerpt'    => get_the_excerpt($p),
+      'date'       => $p->post_date,
+      'modified'   => $p->post_modified,
+      'categories' => wp_get_post_categories($p->ID, ['fields' => 'names']),
+      'tags'       => wp_get_post_tags($p->ID, ['fields' => 'names']),
+    ];
+  }, $posts);
+
+  return new WP_REST_Response(['ok' => true, 'items' => $items, 'count' => count($items)]);
+}
+`;
+}
+
 function generateWpInstallerScript({
   dbName, dbUser, dbPass, dbHost,
   wpAdminUser, wpAdminPw, wpAdminEmail,
-  siteName, siteUrl, plan,
-  responsive = true,
+  siteName, siteUrl, personalDomain = '',
+  plan, responsive = true,
 }) {
   const wpConfig = generateWpConfig({ dbName, dbUser, dbPass, dbHost, siteUrl, siteName });
   const htaccess = generateHtaccess({ plan });
   const userIni = generateUserIni({ plan });
   const cronRunner = generateCronRunner();
   const mysqlTzPlugin = generateMysqlTimezonePlugin();
+  const cfKvD1Plugin = generateCfKvD1Plugin({ personalDomain: personalDomain || siteUrl });
 
   // ✅ FIX: Buffer는 Node.js 전용 — CF Workers에서는 btoa() + encodeURIComponent 사용
   const toBase64 = (str) => btoa(unescape(encodeURIComponent(str)));
@@ -361,6 +458,7 @@ function generateWpInstallerScript({
   const userIniB64     = toBase64(userIni);
   const cronRunnerB64  = toBase64(cronRunner);
   const mysqlTzB64     = toBase64(mysqlTzPlugin);
+  const cfKvD1B64      = toBase64(cfKvD1Plugin);
 
   const siteNameEscaped = siteName.replace(/'/g, "\\'").replace(/\\/g, '\\\\');
   const secret8 = wpAdminPw.slice(0, 8);
@@ -542,6 +640,10 @@ if ($step === 2) {
   // MySQL KST timezone MU-Plugin 미리 배치
   $mysql_tz = base64_decode('${mysqlTzB64}');
   file_put_contents($mu_dir . '/cloudpress-mysql-kst.php', $mysql_tz);
+
+  // CloudPress D1 + KV 연동 MU-Plugin
+  $cf_kv_d1 = base64_decode('${cfKvD1B64}');
+  file_put_contents($mu_dir . '/cloudpress-d1-kv.php', $cf_kv_d1);
 
   echo json_encode(['ok' => true, 'step' => 2, 'msg' => '설정 파일 생성 완료 (PHP 8.3 + KST)']);
   exit;
@@ -815,6 +917,13 @@ add_action("cloudpress_cache_purge", function() {
   // MU-Plugin: 속도 최적화
   $speed_plugin = generateSpeedPluginCode($plan);
   file_put_contents($mu_plugins_dir . '/cloudpress-speed.php', $speed_plugin);
+
+  // MU-Plugin: CF D1+KV 연동 (없으면 재생성)
+  $cf_kv_d1_path = $mu_plugins_dir . '/cloudpress-d1-kv.php';
+  if (!file_exists($cf_kv_d1_path)) {
+    $cf_kv_d1 = base64_decode('${cfKvD1B64}');
+    file_put_contents($cf_kv_d1_path, $cf_kv_d1);
+  }
 
   // wp-config.php: DISABLE_WP_CRON = false 보장
   $wp_config_path = $base . '/wp-config.php';
@@ -1435,17 +1544,24 @@ export default {
         const {
           cpanelUrl,
           hostingEmail, hostingPw,
-          hostingServerUsername, hostingServerPassword,  // 서버 cPanel 접속 정보
+          hostingServerUsername, hostingServerPassword,
           accountUsername,
-          wordpressUrl, wpAdminUser, wpAdminPw, wpAdminEmail,
+          wordpressUrl,        // 실제 호스팅 서버 URL (인스톨러 접근용)
+          personalDomain,      // ★ 사용자에게 보이는 도메인 (WP_HOME/WP_SITEURL)
+          personalUrl,         // ★ https://personalDomain
+          wpAdminUrl,          // 실제 서버 wp-admin URL (설치용)
+          wpAdminUser, wpAdminPw, wpAdminEmail,
           siteName, plan,
-          selfInstall = true,   // 항상 자체 설치 모드
-          responsive  = true,   // 항상 반응형
+          selfInstall = true,
+          responsive  = true,
           retry       = false,
         } = body;
 
-        // cPanel 로그인에 사용할 자격증명 결정
-        // 서버 설정 > 계정별 비밀번호 > 이메일 아이디 순으로 폴백
+        // WordPress URL: personalUrl이 있으면 그것을 WP_HOME/WP_SITEURL로 사용
+        // 인스톨러 실행은 실제 서버 URL(wordpressUrl)로
+        const wpSiteUrl    = personalUrl || wordpressUrl;
+        const installerBaseUrl = wordpressUrl; // 인스톨러는 항상 호스팅 URL로 접근
+
         const cpanelUser = hostingServerUsername || accountUsername || (hostingEmail || '').split('@')[0];
         const cpanelPass = hostingServerPassword || hostingPw;
 
@@ -1457,18 +1573,20 @@ export default {
         };
 
         const installerSecret = wpAdminPw.slice(0, 8);
+        // ★ siteUrl = 개인도메인 URL → WP_HOME, WP_SITEURL, update_option('home'), update_option('siteurl') 전부 개인도메인
         const installerScript = generateWpInstallerScript({
           ...dbInfo,
           wpAdminUser,
           wpAdminPw,
           wpAdminEmail,
           siteName,
-          siteUrl: wordpressUrl,
+          siteUrl: wpSiteUrl,
+          personalDomain: personalDomain || '',
           plan: plan || 'free',
           responsive,
         });
 
-        // 업로드 시도: 서버 cPanel 자격증명 사용
+        // 인스톨러는 실제 호스팅 서버 URL로 업로드
         const uploadResult = await uploadInstallerViaCPanel(page, {
           cpanelUrl,
           accountUsername: cpanelUser,
@@ -1484,13 +1602,14 @@ export default {
           });
         }
 
-        const installerUrl = `${wordpressUrl}/cloudpress-installer.php`;
+        // 인스톨러 실행은 실제 호스팅 URL로
+        const installerUrl = `${installerBaseUrl}/cloudpress-installer.php`;
         const installResult = await runWordPressInstaller(page, {
           installerUrl,
           secret: installerSecret,
           plan: plan || 'free',
           siteName,
-          siteUrl: wordpressUrl,
+          siteUrl: wpSiteUrl,  // ★ WP URL = 개인도메인
           responsive,
         });
 
@@ -1504,6 +1623,8 @@ export default {
           timezone: 'Asia/Seoul',
           mysqlTimezone: '+9:00',
           responsive: true,
+          personalDomain: personalDomain || '',
+          wpSiteUrl,
           steps: installResult.steps,
           uploadMethod: uploadResult.method,
         });
