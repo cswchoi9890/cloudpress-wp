@@ -78,7 +78,7 @@
         <h3 style="margin:0 0 10px;font-size:1rem">💡 VP 계정이란?</h3>
         <p style="margin:0;font-size:.88rem;color:var(--muted);line-height:1.6">
           VP(Vesta Panel) 계정은 사용자들이 생성하는 WordPress 사이트가 배포될 호스팅 서버 계정입니다.<br>
-          각 VP 계정마다 <strong>GitHub에 올린 복제용 ZIP 파일의 Raw URL</strong>을 설정하면, 사이트 생성 시 자동으로 해당 ZIP을 다운로드하여 새 사이트를 생성합니다.
+          각 VP 계정마다 <strong>GitHub에 올린 복제용 ZIP 또는 7Z 파일의 Raw URL</strong>을 설정하면, 사이트 생성 시 자동으로 해당 파일을 다운로드하여 새 사이트를 생성합니다.
         </p>
       </div>
 
@@ -152,9 +152,9 @@
         </div>
       </div>
 
-      <!-- 복제 ZIP GitHub Raw URL -->
+      <!-- 복제 파일 GitHub Raw URL (.zip / .7z) -->
       <div class="field">
-        <label>복제 ZIP — GitHub Raw URL 🎯</label>
+        <label>복제 파일 — GitHub Raw URL 🎯 (.zip / .7z)</label>
         <div class="github-url-wrap">
           <input type="url" id="clone_zip_url"
             placeholder="https://raw.githubusercontent.com/user/repo/main/template.zip"
@@ -163,8 +163,9 @@
         </div>
         <div id="urlStatus" class="url-status"></div>
         <div class="hint" style="margin-top:6px">
-          GitHub 저장소에 ZIP 파일 업로드 후 <strong>Raw URL</strong>을 붙여넣으세요.<br>
+          GitHub 저장소에 <strong>.zip</strong> 또는 <strong>.7z</strong> 파일 업로드 후 <strong>Raw URL</strong>을 붙여넣으세요.<br>
           예: <code>https://raw.githubusercontent.com/아이디/저장소/main/template.zip</code><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;<code>https://raw.githubusercontent.com/아이디/저장소/main/template.7z</code><br>
           비공개 저장소의 경우 GitHub Personal Access Token이 포함된 URL을 사용하세요.
         </div>
       </div>
@@ -220,10 +221,10 @@ function renderAccounts() {
         '<div class="vp-info-item"><div class="vp-info-label">VP 사용자명</div><div class="vp-info-value">' + acc.vp_username + '</div></div>' +
         '<div class="vp-info-item"><div class="vp-info-label">서버 도메인</div><div class="vp-info-value">' + acc.server_domain + '</div></div>' +
         '<div class="vp-info-item"><div class="vp-info-label">사이트 사용</div><div class="vp-info-value">' + acc.current_sites + ' / ' + acc.max_sites + '</div></div>' +
-        '<div class="vp-info-item"><div class="vp-info-label">복제 ZIP</div><div class="vp-info-value">' + (zipSet ? '✅ 설정됨' : '❌ 미설정') + '</div></div>' +
+        '<div class="vp-info-item"><div class="vp-info-label">복제 파일</div><div class="vp-info-value">' + (zipSet ? '✅ 설정됨' : '❌ 미설정') + '</div></div>' +
       '</div>' +
       (zipSet ? '<div style="background:var(--surface2);border-radius:8px;padding:10px;margin-bottom:12px;font-size:.82rem">' +
-        '<div style="color:var(--muted);margin-bottom:4px">📦 복제 ZIP URL:</div>' +
+        '<div style="color:var(--muted);margin-bottom:4px">📦 복제 파일 URL:</div>' +
         '<div style="word-break:break-all;font-family:monospace;font-size:.75rem">' + acc.clone_zip_url + '</div>' +
         '</div>' : '') +
       '<div class="vp-actions">' +
@@ -288,6 +289,13 @@ async function verifyZipUrl() {
   statusEl.textContent = '확인 중...';
   statusEl.style.display = 'block';
 
+  // 확장자 검증 (.zip / .7z)
+  if (!/\.(zip|7z)(\?.*)?$/i.test(url)) {
+    statusEl.className = 'url-status fail';
+    statusEl.textContent = '❌ 지원하지 않는 파일 형식입니다. (.zip 또는 .7z 파일만 허용됩니다)';
+    return;
+  }
+
   try {
     // HEAD 요청으로 가볍게 확인 (CORS 이슈로 실패할 수 있어 fetch 실패 시 OK로 처리)
     var res = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(8000) });
@@ -328,7 +336,8 @@ async function saveAccount() {
   if (!isEdit && !vp_password) { showToast('VP 비밀번호를 입력해주세요.', 'error'); return; }
   if (!panel_url)     { showToast('패널 URL을 입력해주세요.', 'error'); return; }
   if (!server_domain) { showToast('서버 도메인을 입력해주세요.', 'error'); return; }
-  if (!clone_zip_url) { showToast('복제 ZIP URL을 입력해주세요.', 'error'); return; }
+  if (!clone_zip_url) { showToast('복제 파일 URL을 입력해주세요.', 'error'); return; }
+  if (!/\.(zip|7z)(\?.*)?$/i.test(clone_zip_url)) { showToast('지원하지 않는 파일 형식입니다. (.zip 또는 .7z)', 'error'); return; }
 
   var saveBtn = document.getElementById('saveBtn');
   saveBtn.disabled = true;
