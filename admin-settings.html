@@ -98,60 +98,117 @@
         <button class="btn btn-primary" onclick="savePlanSettings()">플랜 설정 저장</button>
       </div>
 
-      <!-- Puppeteer Worker 설정 -->
+      <!-- Worker 설정 -->
       <div class="settings-section">
-        <div class="settings-title">🤖 Puppeteer Worker 설정 (호스팅 자동화)</div>
-        <p style="font-size:.83rem;color:var(--muted);margin-bottom:14px">WordPress 호스팅 자동화를 담당하는 Cloudflare Puppeteer Worker 설정입니다.</p>
+        <div class="settings-title">🤖 Worker 설정 (WP-CLI/WPMU 자동화)</div>
+        <p style="font-size:.83rem;color:var(--muted);margin-bottom:14px">WP-CLI + WPMU 멀티사이트 기반 WordPress 자동 설치를 담당하는 Worker 설정입니다.</p>
         <div class="field">
-          <label>Puppeteer Worker URL</label>
-          <input type="url" id="puppeteer_worker_url" placeholder="https://cloudpress-puppet.workers.dev"/>
+          <label>Worker URL</label>
+          <input type="url" id="puppeteer_worker_url" placeholder="https://cloudpress-worker.workers.dev"/>
         </div>
         <div class="field">
           <label>Worker 보안 시크릿</label>
           <input type="password" id="puppeteer_worker_secret" placeholder="cp_puppet_secret_v1_CHANGE_ME"/>
           <div class="hint">wrangler.toml의 WORKER_SECRET과 동일하게 설정</div>
         </div>
+        <div class="field">
+          <label>설치 모드</label>
+          <select id="installation_mode" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);width:100%">
+            <option value="wpmu">WPMU 멀티사이트 (서브사이트 생성, 권장)</option>
+            <option value="standalone">Standalone (새 WordPress 독립 설치)</option>
+          </select>
+          <div class="hint">WPMU: 메인 WP에 서브사이트 추가 | Standalone: 독립 WP 설치</div>
+        </div>
         <button class="btn btn-primary" onclick="savePuppeteerSettings()">Worker 설정 저장</button>
       </div>
 
-      <!-- 자체 호스팅 서버 설정 (v5.0: 외부 호스팅사 가입 제거 → 서버 접속 정보만 사용) -->
+      <!-- VP 계정 관리 (v6.0 신규) -->
       <div class="settings-section">
-        <div class="settings-title">🖥️ 호스팅 서버 설정 (자체 WordPress 구축)</div>
+        <div class="settings-title">🔑 VP 로그인 계정 관리 (사이트 생성에 사용)</div>
         <p style="font-size:.83rem;color:var(--muted);margin-bottom:14px">
-          WordPress는 <strong>자체 PHP 인스톨러</strong>로 직접 설치됩니다.<br>
-          아래에 호스팅사 cPanel 서버 접속 정보만 입력하면 자동으로 사이트가 구축됩니다.<br>
-          <span style="color:var(--accent);font-weight:600">※ 외부 호스팅 회원가입은 더 이상 필요하지 않습니다.</span>
+          사이트 생성 시 VP 패널(cPanel) 계정으로 로그인하여 WP-CLI/WPMU로 실제 WordPress를 생성합니다.<br>
+          <strong style="color:var(--accent)">계정을 여러 개 추가하면 자동으로 부하 분산됩니다.</strong>
         </p>
-        <div class="field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+
+        <!-- 계정 목록 -->
+        <div id="vpAccountList" style="margin-bottom:16px"></div>
+
+        <!-- 계정 추가 폼 -->
+        <details id="addVpAccountDetails" style="margin-bottom:12px">
+          <summary style="cursor:pointer;font-weight:700;font-size:.9rem;padding:10px 0;color:var(--accent)">➕ 계정 추가</summary>
+          <div style="margin-top:14px;background:var(--surface2);border-radius:10px;padding:16px">
+            <div class="field-row">
+              <div class="field">
+                <label>계정 이름 (label)</label>
+                <input type="text" id="new_vp_label" placeholder="예: 서버1 메인"/>
+              </div>
+              <div class="field">
+                <label>패널 URL</label>
+                <input type="url" id="new_vp_panel_url" placeholder="https://cpanel.yourdomain.com:2083"/>
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label>VP 사용자명</label>
+                <input type="text" id="new_vp_username" placeholder="cpanel_admin"/>
+              </div>
+              <div class="field">
+                <label>VP 비밀번호</label>
+                <input type="password" id="new_vp_password" placeholder="••••••••"/>
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label>서버 도메인</label>
+                <input type="text" id="new_vp_server_domain" placeholder="yourdomain.com"/>
+                <div class="hint">서브사이트가 생성될 기본 도메인</div>
+              </div>
+              <div class="field">
+                <label>웹 루트 경로</label>
+                <input type="text" id="new_vp_web_root" placeholder="/htdocs" value="/htdocs"/>
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label>PHP 바이너리</label>
+                <input type="text" id="new_vp_php_bin" placeholder="php8.3" value="php8.3"/>
+              </div>
+              <div class="field">
+                <label>MySQL 호스트</label>
+                <input type="text" id="new_vp_mysql_host" placeholder="localhost" value="localhost"/>
+              </div>
+            </div>
+            <div class="field">
+              <label>계정당 최대 사이트 수</label>
+              <input type="number" id="new_vp_max_sites" placeholder="50" value="50" min="1" max="500" style="width:140px"/>
+            </div>
+            <div style="display:flex;gap:10px;margin-top:12px">
+              <button class="btn btn-primary" onclick="addVpAccount()">계정 추가</button>
+              <button class="btn" onclick="testVpConnection()">🔌 연결 테스트</button>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <!-- Redis 설정 (v6.0 신규) -->
+      <div class="settings-section">
+        <div class="settings-title">🔴 Redis 영구 객체 캐시 설정</div>
+        <p style="font-size:.83rem;color:var(--muted);margin-bottom:14px">사이트 생성 시 Redis 영구 객체 캐시를 자동으로 설정합니다.</p>
+        <div class="field-row">
           <div class="field">
-            <label>cPanel URL</label>
-            <input type="url" id="hosting_cpanel_url" placeholder="https://cpanel.yourdomain.com:2083"/>
-            <div class="hint">호스팅사 cPanel 접속 주소</div>
+            <label>Redis 호스트</label>
+            <input type="text" id="redis_host" placeholder="127.0.0.1" value="127.0.0.1"/>
           </div>
           <div class="field">
-            <label>서버 도메인</label>
-            <input type="text" id="hosting_server_domain" placeholder="yourdomain.com"/>
-            <div class="hint">WordPress 사이트가 생성될 기본 도메인</div>
+            <label>Redis 포트</label>
+            <input type="number" id="redis_port" placeholder="6379" value="6379"/>
           </div>
         </div>
-        <div class="field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div class="field">
-            <label>cPanel 관리자 아이디</label>
-            <input type="text" id="hosting_server_username" placeholder="cpanel_admin"/>
-          </div>
-          <div class="field">
-            <label>cPanel 관리자 비밀번호</label>
-            <input type="password" id="hosting_server_password" placeholder="••••••••"/>
-          </div>
+        <div class="field">
+          <label>Redis 비밀번호 (없으면 공백)</label>
+          <input type="password" id="redis_password" placeholder="(없으면 공백)"/>
         </div>
-        <div style="background:rgba(34,197,94,.05);border:1px solid rgba(34,197,94,.15);border-radius:10px;padding:12px;margin-bottom:14px;font-size:.82rem;color:var(--muted)">
-          <strong style="color:var(--success)">✅ 자체 설치 방식 안내</strong><br>
-          1. 위 cPanel 정보로 서버에 접속<br>
-          2. PHP 8.3 + WordPress 최신 한국어판 자동 다운로드 및 설치<br>
-          3. 반응형 테마(Twenty Twenty-Four) 자동 설정<br>
-          4. KST 시간대, 한국어 기본 설정 자동 적용
-        </div>
-        <button class="btn btn-primary" onclick="saveHostingServerSettings()">서버 설정 저장</button>
+        <button class="btn btn-primary" onclick="saveRedisSettings()">Redis 설정 저장</button>
       </div>
 
       <!-- Cloudflare CDN 설정 -->
@@ -206,14 +263,267 @@
 
 <script src="app.js"></script>
 <script>
-const PROVIDERS = [
-  { id: 'infinityfree', name: 'InfinityFree', domain: 'infinityfreeapp.com', ssl: true },
-  { id: 'byethost', name: 'ByetHost', domain: 'byethost.com', ssl: true },
-  { id: 'hyperphp', name: 'HyperPHP', domain: 'hyperphp.com', ssl: false },
-  { id: 'freehosting', name: 'FreeHosting', domain: 'freehosting.com', ssl: true },
-  { id: 'profreehost', name: 'ProFreeHost', domain: 'profreehost.com', ssl: false },
-  { id: 'aeonfree', name: 'AeonFree', domain: 'aeonscope.net', ssl: true },
-];
+let settings = {};
+let vpAccounts = [];
+
+function showToast(msg, ok = true) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = ok ? '#16a34a' : '#ef4444';
+  t.style.display = '';
+  setTimeout(() => t.style.display = 'none', 3500);
+}
+
+/* ── VP 계정 목록 렌더링 ── */
+function renderVpAccounts() {
+  const el = document.getElementById('vpAccountList');
+  if (!vpAccounts.length) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:.85rem;padding:10px 0">등록된 VP 계정이 없습니다. 아래에서 계정을 추가해주세요.</div>';
+    return;
+  }
+  el.innerHTML = vpAccounts.map(a => `
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span style="font-weight:700;font-size:.9rem">${escHtml(a.label)}</span>
+          <span style="font-size:.72rem;padding:2px 8px;border-radius:10px;background:${a.is_active ? 'rgba(34,197,94,.1)' : 'rgba(107,114,128,.1)'};color:${a.is_active ? '#16a34a' : 'var(--muted)'}">
+            ${a.is_active ? '✅ 활성' : '⏸️ 비활성'}
+          </span>
+          <span style="font-size:.72rem;color:var(--muted)">${a.current_sites}/${a.max_sites} 사이트</span>
+        </div>
+        <div style="font-size:.8rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:8px">
+          <span>🔗 ${escHtml(a.panel_url)}</span>
+          <span>👤 ${escHtml(a.vp_username)}</span>
+          <span>🌐 ${escHtml(a.server_domain)}</span>
+          <span>📁 ${escHtml(a.web_root)}</span>
+          <span>🐘 ${escHtml(a.php_bin)}</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button class="btn" style="font-size:.78rem;padding:5px 10px" onclick="toggleVpAccount('${a.id}', ${!a.is_active})">
+          ${a.is_active ? '비활성화' : '활성화'}
+        </button>
+        <button class="btn btn-danger" style="font-size:.78rem;padding:5px 10px" onclick="deleteVpAccount('${a.id}', '${escHtml(a.label)}')">삭제</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── VP 계정 로드 ── */
+async function loadVpAccounts() {
+  const token = CP.getToken();
+  const res = await fetch('/api/admin/settings?action=vp-accounts', {
+    headers: { 'Authorization': 'Bearer ' + token }
+  });
+  if (!res.ok) return;
+  const data = await res.json();
+  vpAccounts = data.accounts || [];
+  renderVpAccounts();
+}
+
+/* ── VP 계정 추가 ── */
+async function addVpAccount() {
+  const label       = document.getElementById('new_vp_label').value.trim();
+  const panel_url   = document.getElementById('new_vp_panel_url').value.trim();
+  const vp_username = document.getElementById('new_vp_username').value.trim();
+  const vp_password = document.getElementById('new_vp_password').value;
+  const server_domain = document.getElementById('new_vp_server_domain').value.trim();
+  const web_root    = document.getElementById('new_vp_web_root').value.trim() || '/htdocs';
+  const php_bin     = document.getElementById('new_vp_php_bin').value.trim() || 'php8.3';
+  const mysql_host  = document.getElementById('new_vp_mysql_host').value.trim() || 'localhost';
+  const max_sites   = parseInt(document.getElementById('new_vp_max_sites').value) || 50;
+
+  if (!label || !panel_url || !vp_username || !vp_password || !server_domain) {
+    showToast('모든 필수 항목을 입력해주세요.', false);
+    return;
+  }
+
+  const token = CP.getToken();
+  const res = await fetch('/api/admin/settings?action=vp-accounts-add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify({ label, panel_url, vp_username, vp_password, server_domain, web_root, php_bin, mysql_host, max_sites }),
+  });
+  const data = await res.json();
+  if (data.ok) {
+    showToast('VP 계정이 추가되었습니다!');
+    document.getElementById('addVpAccountDetails').removeAttribute('open');
+    // 입력 필드 초기화
+    ['new_vp_label','new_vp_panel_url','new_vp_username','new_vp_password','new_vp_server_domain'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    await loadVpAccounts();
+  } else {
+    showToast('추가 실패: ' + (data.error || ''), false);
+  }
+}
+
+/* ── VP 계정 활성화/비활성화 ── */
+async function toggleVpAccount(id, isActive) {
+  const token = CP.getToken();
+  const res = await fetch('/api/admin/settings?action=vp-accounts-update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify({ id, is_active: isActive }),
+  });
+  const data = await res.json();
+  if (data.ok) { await loadVpAccounts(); }
+  else showToast('수정 실패: ' + (data.error || ''), false);
+}
+
+/* ── VP 계정 삭제 ── */
+async function deleteVpAccount(id, label) {
+  if (!confirm(`"${label}" 계정을 삭제하시겠습니까?`)) return;
+  const token = CP.getToken();
+  const res = await fetch('/api/admin/settings?action=vp-accounts-delete', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify({ id }),
+  });
+  const data = await res.json();
+  if (data.ok) { showToast('계정이 삭제되었습니다.'); await loadVpAccounts(); }
+  else showToast('삭제 실패: ' + (data.error || ''), false);
+}
+
+/* ── VP 연결 테스트 ── */
+async function testVpConnection() {
+  const panel_url   = document.getElementById('new_vp_panel_url').value.trim();
+  const vp_username = document.getElementById('new_vp_username').value.trim();
+  const vp_password = document.getElementById('new_vp_password').value;
+  if (!panel_url || !vp_username || !vp_password) {
+    showToast('패널 URL, 사용자명, 비밀번호를 먼저 입력해주세요.', false);
+    return;
+  }
+  showToast('연결 테스트 중...', true);
+  const token = CP.getToken();
+  const res = await fetch('/api/admin/settings?action=vp-accounts-test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify({ panel_url, vp_username, vp_password }),
+  });
+  const data = await res.json();
+  showToast(data.message || (data.connected ? '연결 성공!' : '연결 실패'), data.connected);
+}
+
+/* ── 일반 설정 로드 ── */
+async function loadSettings() {
+  const token = CP.getToken();
+  const res = await fetch('/api/admin/settings', { headers: { 'Authorization': 'Bearer ' + token } });
+  if (!res.ok) return;
+  const data = await res.json();
+  settings = data.settings || {};
+
+  const setVal = (id, key, def = '') => {
+    const el = document.getElementById(id);
+    if (el) el.value = settings[key] ?? def;
+  };
+  const setChk = (id, key, def = false) => {
+    const el = document.getElementById(id);
+    if (el) el.checked = (settings[key] === '1' || settings[key] === true) ?? def;
+  };
+  const setSel = (id, key, def = '') => {
+    const el = document.getElementById(id);
+    if (el) el.value = settings[key] ?? def;
+  };
+
+  setVal('plan_free_sites',       'plan_free_sites', '1');
+  setVal('plan_starter_sites',    'plan_starter_sites', '3');
+  setVal('plan_pro_sites',        'plan_pro_sites', '10');
+  setVal('plan_enterprise_sites', 'plan_enterprise_sites', '-1');
+  setVal('puppeteer_worker_url',  'puppeteer_worker_url', 'https://cloudpress-worker.workers.dev');
+  setSel('installation_mode',     'installation_mode', 'wpmu');
+
+  const secretEl = document.getElementById('puppeteer_worker_secret');
+  if (secretEl) {
+    secretEl.value = '';
+    secretEl.placeholder = settings.puppeteer_worker_secret
+      ? '••••••••  (이미 저장됨, 변경하려면 새로 입력)'
+      : 'cp_puppet_secret_v1_CHANGE_ME';
+  }
+
+  setVal('cf_account_id',  'cf_account_id');
+  setChk('cloudflare_cdn_enabled', 'cloudflare_cdn_enabled', false);
+  setVal('redis_host',     'redis_host', '127.0.0.1');
+  setVal('redis_port',     'redis_port', '6379');
+  setChk('auto_ssl',       'auto_ssl', true);
+  setChk('maintenance_mode', 'maintenance_mode', false);
+}
+
+/* ── 설정 저장 공통 ── */
+async function saveSettings(updates) {
+  const token = CP.getToken();
+  const res = await fetch('/api/admin/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify({ settings: updates }),
+  });
+  const data = await res.json();
+  if (data.ok) showToast('설정이 저장되었습니다.');
+  else showToast('저장 실패: ' + (data.error || ''), false);
+}
+
+async function savePlanSettings() {
+  await saveSettings({
+    plan_free_sites:       document.getElementById('plan_free_sites').value,
+    plan_starter_sites:    document.getElementById('plan_starter_sites').value,
+    plan_pro_sites:        document.getElementById('plan_pro_sites').value,
+    plan_enterprise_sites: document.getElementById('plan_enterprise_sites').value,
+  });
+}
+
+async function savePuppeteerSettings() {
+  const url    = document.getElementById('puppeteer_worker_url').value.trim();
+  const secret = document.getElementById('puppeteer_worker_secret').value;
+  const mode   = document.getElementById('installation_mode').value;
+  const updates = { puppeteer_worker_url: url, installation_mode: mode };
+  if (secret && !secret.startsWith('••')) updates.puppeteer_worker_secret = secret;
+  await saveSettings(updates);
+}
+
+async function saveRedisSettings() {
+  const host = document.getElementById('redis_host').value.trim();
+  const port = document.getElementById('redis_port').value.trim();
+  const pass = document.getElementById('redis_password').value;
+  const updates = { redis_host: host, redis_port: port };
+  if (pass && !pass.startsWith('••')) updates.redis_password = pass;
+  await saveSettings(updates);
+}
+
+async function saveCfSettings() {
+  await saveSettings({
+    cf_account_id: document.getElementById('cf_account_id').value,
+    cloudflare_cdn_enabled: document.getElementById('cloudflare_cdn_enabled').checked ? '1' : '0',
+  });
+  const token = document.getElementById('cf_api_token').value;
+  if (token && !token.startsWith('••')) await saveSettings({ cf_api_token: token });
+}
+
+async function saveAutoSettings() {
+  await saveSettings({
+    auto_ssl: document.getElementById('auto_ssl').checked ? '1' : '0',
+  });
+}
+
+async function saveMaintenanceSettings() {
+  await saveSettings({
+    maintenance_mode: document.getElementById('maintenance_mode').checked ? '1' : '0',
+  });
+}
+
+(async () => {
+  const u = await CP.requireAuth(true);
+  if (!u) return;
+  await loadSettings();
+  await loadVpAccounts();
+})();
+</script>
+</body>
+</html>
 
 let activeProviders = new Set(['infinityfree','byethost','freehosting','aeonfree']);
 let settings = {};
