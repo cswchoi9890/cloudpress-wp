@@ -72,7 +72,6 @@
     <div class="content">
       <div id="toast" style="display:none;position:fixed;top:20px;right:20px;z-index:9999;padding:12px 18px;border-radius:10px;font-size:.85rem;font-weight:600;color:#fff"></div>
 
-      <!-- 플랜 설정 -->
       <div class="settings-section">
         <div class="settings-title">💳 플랜별 사이트 한도</div>
         <div class="field-row">
@@ -98,7 +97,6 @@
         <button class="btn btn-primary" onclick="savePlanSettings()">플랜 설정 저장</button>
       </div>
 
-      <!-- Worker 설정 -->
       <div class="settings-section">
         <div class="settings-title">🤖 Worker 설정 (WP-CLI/WPMU 자동화)</div>
         <p style="font-size:.83rem;color:var(--muted);margin-bottom:14px">WP-CLI + WPMU 멀티사이트 기반 WordPress 자동 설치를 담당하는 Worker 설정입니다.</p>
@@ -122,7 +120,6 @@
         <button class="btn btn-primary" onclick="savePuppeteerSettings()">Worker 설정 저장</button>
       </div>
 
-      <!-- VP 계정 관리 (v6.0 신규) -->
       <div class="settings-section">
         <div class="settings-title">🔑 VP 로그인 계정 관리 (사이트 생성에 사용)</div>
         <p style="font-size:.83rem;color:var(--muted);margin-bottom:14px">
@@ -130,10 +127,8 @@
           <strong style="color:var(--accent)">계정을 여러 개 추가하면 자동으로 부하 분산됩니다.</strong>
         </p>
 
-        <!-- 계정 목록 -->
         <div id="vpAccountList" style="margin-bottom:16px"></div>
 
-        <!-- 계정 추가 폼 -->
         <details id="addVpAccountDetails" style="margin-bottom:12px">
           <summary style="cursor:pointer;font-weight:700;font-size:.9rem;padding:10px 0;color:var(--accent)">➕ 계정 추가</summary>
           <div style="margin-top:14px;background:var(--surface2);border-radius:10px;padding:16px">
@@ -190,7 +185,6 @@
         </details>
       </div>
 
-      <!-- Redis 설정 (v6.0 신규) -->
       <div class="settings-section">
         <div class="settings-title">🔴 Redis 영구 객체 캐시 설정</div>
         <p style="font-size:.83rem;color:var(--muted);margin-bottom:14px">사이트 생성 시 Redis 영구 객체 캐시를 자동으로 설정합니다.</p>
@@ -211,7 +205,6 @@
         <button class="btn btn-primary" onclick="saveRedisSettings()">Redis 설정 저장</button>
       </div>
 
-      <!-- Cloudflare CDN 설정 -->
       <div class="settings-section">
         <div class="settings-title">⚡ Cloudflare CDN 자동 연동</div>
         <p style="font-size:.83rem;color:var(--muted);margin-bottom:14px">사이트 생성 시 Cloudflare CDN을 자동으로 연동합니다. (선택사항)</p>
@@ -233,7 +226,6 @@
         <button class="btn btn-primary" onclick="saveCfSettings()">Cloudflare 설정 저장</button>
       </div>
 
-      <!-- SSL / Breeze 기본값 -->
       <div class="settings-section">
         <div class="settings-title">🔒 자동화 기본값</div>
         <div class="field">
@@ -247,7 +239,6 @@
         <button class="btn btn-primary" onclick="saveAutoSettings()">자동화 설정 저장</button>
       </div>
 
-      <!-- 유지보수 모드 -->
       <div class="settings-section">
         <div class="settings-title">🔧 유지보수 모드</div>
         <div class="field">
@@ -520,179 +511,6 @@ async function saveMaintenanceSettings() {
   if (!u) return;
   await loadSettings();
   await loadVpAccounts();
-})();
-</script>
-</body>
-</html>
-
-let activeProviders = new Set(['infinityfree','byethost','freehosting','aeonfree']);
-let settings = {};
-
-function showToast(msg, ok = true) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.style.background = ok ? '#16a34a' : '#ef4444';
-  t.style.display = '';
-  setTimeout(() => t.style.display = 'none', 3000);
-}
-
-function renderProviders() {
-  document.getElementById('providerGrid').innerHTML = PROVIDERS.map(p => `
-    <div class="provider-card ${activeProviders.has(p.id) ? 'active' : ''}" onclick="toggleProvider('${p.id}', this)">
-      <div class="provider-name">${p.name}</div>
-      <div class="provider-domain">${p.domain}</div>
-      <span class="provider-badge ${p.ssl ? 'badge-ssl' : 'badge-nosll'}">${p.ssl ? '✅ SSL 자동' : '❌ SSL 미지원'}</span>
-    </div>
-  `).join('');
-}
-
-function toggleProvider(id, el) {
-  if (activeProviders.has(id)) {
-    if (activeProviders.size <= 1) { showToast('최소 1개의 호스팅 업체는 활성화해야 합니다.', false); return; }
-    activeProviders.delete(id);
-    el.classList.remove('active');
-  } else {
-    activeProviders.add(id);
-    el.classList.add('active');
-  }
-}
-
-async function loadSettings() {
-  const token = CP.getToken();
-  const res = await fetch('/api/admin/settings', { headers: { 'Authorization': 'Bearer ' + token } });
-  if (!res.ok) return;
-  const data = await res.json();
-  settings = data.settings || {};
-
-  const setVal = (id, key, def = '') => {
-    const el = document.getElementById(id);
-    if (el) el.value = settings[key] ?? def;
-  };
-  const setChk = (id, key, def = false) => {
-    const el = document.getElementById(id);
-    if (el) el.checked = (settings[key] === '1' || settings[key] === true) ?? def;
-  };
-
-  setVal('plan_free_sites', 'plan_free_sites', '1');
-  setVal('plan_starter_sites', 'plan_starter_sites', '3');
-  setVal('plan_pro_sites', 'plan_pro_sites', '10');
-  setVal('plan_enterprise_sites', 'plan_enterprise_sites', '-1');
-  setVal('puppeteer_worker_url', 'puppeteer_worker_url', 'https://cloudpress-puppet.workers.dev');
-
-  // secret은 서버에서 마스킹 반환 → 이미 저장된 경우 placeholder로 안내
-  const secretEl = document.getElementById('puppeteer_worker_secret');
-  if (secretEl) {
-    secretEl.value = '';
-    secretEl.placeholder = settings.puppeteer_worker_secret
-      ? '••••••••  (이미 저장됨, 변경하려면 새로 입력)'
-      : 'cp_puppet_secret_v1_CHANGE_ME';
-  }
-
-  setVal('cf_account_id', 'cf_account_id');
-  setChk('cloudflare_cdn_enabled', 'cloudflare_cdn_enabled', true);
-  // 호스팅 서버 설정 로드
-  setVal('hosting_cpanel_url', 'hosting_cpanel_url', '');
-  setVal('hosting_server_domain', 'hosting_server_domain', '');
-  setVal('hosting_server_username', 'hosting_server_username', '');
-  const hpwEl = document.getElementById('hosting_server_password');
-  if (hpwEl) {
-    hpwEl.value = '';
-    hpwEl.placeholder = settings.hosting_server_password
-      ? '••••••••  (이미 저장됨)'
-      : '••••••••';
-  }
-  setChk('auto_ssl', 'auto_ssl', true);
-  setChk('auto_breeze', 'auto_breeze', true);
-  setChk('maintenance_mode', 'maintenance_mode', false);
-
-  // 레거시 provider 설정 유지 (내부 사용)
-  if (settings.active_providers) {
-    activeProviders = new Set(settings.active_providers.split(','));
-  }
-  // renderProviders() — UI 제거됨 (v5.0 자체 설치 방식)
-}
-
-async function saveSettings(updates) {
-  const token = CP.getToken();
-  const res = await fetch('/api/admin/settings', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-    body: JSON.stringify({ settings: updates }),
-  });
-  const data = await res.json();
-  if (data.ok) showToast('설정이 저장되었습니다.');
-  else showToast('저장 실패: ' + (data.error || ''), false);
-}
-
-async function savePlanSettings() {
-  await saveSettings({
-    plan_free_sites: document.getElementById('plan_free_sites').value,
-    plan_starter_sites: document.getElementById('plan_starter_sites').value,
-    plan_pro_sites: document.getElementById('plan_pro_sites').value,
-    plan_enterprise_sites: document.getElementById('plan_enterprise_sites').value,
-  });
-}
-
-async function savePuppeteerSettings() {
-  const url    = document.getElementById('puppeteer_worker_url').value.trim();
-  const secret = document.getElementById('puppeteer_worker_secret').value;
-
-  const updates = { puppeteer_worker_url: url };
-  // 비밀번호 필드가 마스킹 플레이스홀더가 아닌 실제 입력값일 때만 저장
-  if (secret && secret !== '••••••••') {
-    updates.puppeteer_worker_secret = secret;
-  }
-
-  await saveSettings(updates);
-}
-
-async function saveProviderSettings() {
-  await saveSettings({ active_providers: [...activeProviders].join(',') });
-}
-
-async function saveHostingServerSettings() {
-  const cpanelUrl = document.getElementById('hosting_cpanel_url').value.trim();
-  const domain    = document.getElementById('hosting_server_domain').value.trim();
-  const username  = document.getElementById('hosting_server_username').value.trim();
-  const password  = document.getElementById('hosting_server_password').value;
-
-  const updates = {
-    hosting_cpanel_url:       cpanelUrl,
-    hosting_server_domain:    domain,
-    hosting_server_username:  username,
-  };
-  if (password && !password.startsWith('••')) {
-    updates.hosting_server_password = password;
-  }
-  await saveSettings(updates);
-}
-
-async function saveCfSettings() {
-  await saveSettings({
-    cf_account_id: document.getElementById('cf_account_id').value,
-    cloudflare_cdn_enabled: document.getElementById('cloudflare_cdn_enabled').checked ? '1' : '0',
-  });
-  const token = document.getElementById('cf_api_token').value;
-  if (token) await saveSettings({ cf_api_token: token });
-}
-
-async function saveAutoSettings() {
-  await saveSettings({
-    auto_ssl: document.getElementById('auto_ssl').checked ? '1' : '0',
-    auto_breeze: document.getElementById('auto_breeze').checked ? '1' : '0',
-  });
-}
-
-async function saveMaintenanceSettings() {
-  await saveSettings({
-    maintenance_mode: document.getElementById('maintenance_mode').checked ? '1' : '0',
-  });
-}
-
-(async () => {
-  const u = await CP.requireAuth(true);
-  if (!u) return;
-  await loadSettings();
 })();
 </script>
 </body>
