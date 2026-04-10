@@ -41,7 +41,8 @@ export async function onRequest({ request, env }) {
       const MASK_KEYS = [
         'cf_api_token', 'puppeteer_worker_secret',
         'ftp_pass', 'panel_pass', 'db_root_pass',
-        'toss_secret_key',
+        'toss_secret_key', 'clone_vp_password',
+        'hosting_server_password',
       ];
       for (const k of MASK_KEYS) {
         if (settings[k]) settings[k] = '••••••••';
@@ -99,6 +100,10 @@ export async function onRequest({ request, env }) {
         // 사이트 일반
         'maintenance_mode', 'site_name', 'site_domain', 'admin_email',
         'contact_email',
+
+        // WordPress 복제 설정
+        'clone_source_url', 'clone_vp_username', 'clone_vp_password',
+        'clone_vp_panel_url', 'clone_server_domain',
 
         // 결제
         'toss_client_key', 'toss_secret_key',
