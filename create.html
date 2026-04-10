@@ -7,7 +7,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="dashboard.css"/>
   <style>
-    .wizard{max-width:640px;margin:0 auto}
+    .wizard{max-width:660px;margin:0 auto}
     .steps{display:flex;align-items:center;margin-bottom:32px}
     .stp{display:flex;align-items:center;gap:7px;font-size:.82rem;font-weight:500;color:var(--muted)}
     .stp.active{color:var(--accent)}.stp.done{color:var(--success)}
@@ -22,7 +22,7 @@
     .success-icon{width:76px;height:76px;border-radius:50%;background:rgba(34,197,94,.1);border:2px solid rgba(34,197,94,.25);display:flex;align-items:center;justify-content:center;margin:0 auto 20px}
     .cred-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)}
     .cred-row:last-child{border:none}
-    .cred-label{font-size:.78rem;color:var(--muted);width:120px;flex-shrink:0}
+    .cred-label{font-size:.78rem;color:var(--muted);width:130px;flex-shrink:0}
     .cred-val{flex:1;font-size:.85rem;font-weight:600;word-break:break-all}
     .copy-btn{padding:4px 10px;background:var(--surface2);border:1px solid var(--border2);border-radius:6px;color:var(--muted);font-size:.74rem;cursor:pointer;white-space:nowrap}
     .copy-btn:hover{border-color:var(--accent);color:var(--accent)}
@@ -33,6 +33,10 @@
     .eye-btn:hover{color:var(--text)}
     .admin-section{background:rgba(34,197,94,.03);border:1px solid rgba(34,197,94,.15);border-radius:10px;padding:16px;margin-bottom:16px}
     .admin-section-title{font-size:.82rem;font-weight:700;color:var(--success);margin-bottom:12px}
+    .cf-section{background:rgba(249,115,22,.03);border:1px solid rgba(249,115,22,.2);border-radius:10px;padding:16px;margin-bottom:16px}
+    .cf-section-title{font-size:.82rem;font-weight:700;color:var(--accent);margin-bottom:10px;display:flex;align-items:center;gap:7px}
+    .domain-section{background:rgba(59,130,246,.03);border:1px solid rgba(59,130,246,.2);border-radius:10px;padding:16px;margin-bottom:16px}
+    .domain-section-title{font-size:.82rem;font-weight:700;color:#2563eb;margin-bottom:10px;display:flex;align-items:center;gap:7px}
     .hosting-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(249,115,22,.08);border:1px solid rgba(249,115,22,.2);border-radius:8px;padding:6px 12px;font-size:.8rem;color:var(--accent);font-weight:600;margin-bottom:16px}
     .feature-list{list-style:none;padding:0;margin:0 0 16px}
     .feature-list li{padding:5px 0;font-size:.85rem;color:var(--muted);display:flex;align-items:center;gap:8px}
@@ -48,41 +52,34 @@
     .provision-step.error{background:rgba(239,68,68,.06);color:var(--error)}
     .pstep-icon{font-size:.9rem;width:20px;text-align:center;flex-shrink:0}
     .pstep-name{flex:1}
-    .notif-banner{display:flex;align-items:center;gap:10px;padding:12px 16px;background:rgba(139,92,246,.06);border:1px solid rgba(139,92,246,.2);border-radius:10px;margin-bottom:16px;font-size:.83rem}
-    .notif-banner button{padding:5px 12px;background:rgba(139,92,246,.15);border:1px solid rgba(139,92,246,.3);border-radius:7px;color:#7c3aed;font-size:.8rem;cursor:pointer;font-weight:600;white-space:nowrap}
-    .notif-banner button:hover{background:rgba(139,92,246,.25)}
     .spec-badges{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
     .spec-badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:.75rem;font-weight:700}
     .spec-badge.php{background:rgba(139,92,246,.1);color:#7c3aed}
     .spec-badge.wp{background:rgba(59,130,246,.1);color:#2563eb}
     .spec-badge.tz{background:rgba(16,185,129,.1);color:#059669}
     .spec-badge.mysql{background:rgba(245,158,11,.1);color:#d97706}
-
-    /* ── 반응형 (create.html) ── */
-    @media (max-width: 600px) {
-      .wizard { padding: 0 2px; }
-      .steps { gap: 2px; margin-bottom: 20px; }
-      .stp-sep { margin: 0 3px; }
-      .stp { font-size: .75rem; gap: 5px; }
-      .stp-num { width: 20px; height: 20px; font-size: .65rem; }
-      .card { padding: 18px 14px !important; }
-      .spec-badges { gap: 5px; }
-      .spec-badge { font-size: .68rem; padding: 3px 7px; }
-      .provision-step { padding: 6px 8px; }
-      .pstep-name { font-size: .76rem; }
-      .log { height: 130px; font-size: .72rem; }
-      .status-polling { font-size: .76rem; flex-wrap: wrap; }
-      .cred-label { width: 90px !important; font-size: .73rem; }
-      .cred-val { font-size: .8rem; }
-      .pw-inp { font-size: .82rem; padding: 7px 10px; }
-      h3 { font-size: .95rem !important; }
-      .wp-link { padding: 10px 14px; font-size: .82rem; }
-      .field input { font-size: .88rem; }
+    .info-box{background:rgba(59,130,246,.05);border:1px solid rgba(59,130,246,.18);border-radius:8px;padding:12px 14px;font-size:.81rem;color:var(--muted);margin-bottom:12px;line-height:1.7}
+    .info-box strong{color:var(--text)}
+    .warn-box{background:rgba(234,179,8,.06);border:1px solid rgba(234,179,8,.2);border-radius:8px;padding:12px 14px;font-size:.81rem;color:var(--muted);margin-bottom:12px;line-height:1.7}
+    .step-nav{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
+    @media(max-width:600px){
+      .wizard{padding:0 2px}
+      .steps{gap:2px;margin-bottom:20px}
+      .stp-sep{margin:0 3px}
+      .stp{font-size:.72rem;gap:4px}
+      .stp-num{width:20px;height:20px;font-size:.65rem}
+      .card{padding:18px 14px !important}
+      .provision-step{padding:6px 8px}
+      .pstep-name{font-size:.76rem}
+      .log{height:130px;font-size:.72rem}
+      .cred-label{width:90px !important;font-size:.73rem}
+      .cred-val{font-size:.8rem}
+      .pw-inp{font-size:.82rem;padding:7px 10px}
     }
-    @media (max-width: 400px) {
-      .cred-row { flex-direction: column; align-items: flex-start; gap: 5px; }
-      .cred-val { max-width: 100%; text-align: left; }
-      .copy-btn { align-self: flex-end; }
+    @media(max-width:400px){
+      .cred-row{flex-direction:column;align-items:flex-start;gap:5px}
+      .cred-val{max-width:100%;text-align:left}
+      .copy-btn{align-self:flex-end}
     }
   </style>
 </head>
@@ -98,37 +95,18 @@
     </a>
     <nav class="sb-nav">
       <div class="sb-section"><div class="sb-label">메인</div>
-        <a href="/dashboard.html" class="sb-link">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>
-          대시보드
-        </a>
-        <a href="/create.html" class="sb-link active">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          사이트 추가
-        </a>
-      </div>
-      <div class="sb-section">
-        <button class="sb-link danger" onclick="CP.logout()">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="16 17 21 12 16 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="21" y1="12" x2="9" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          로그아웃
-        </button>
+        <a href="/dashboard.html" class="sb-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>대시보드</a>
+        <a href="/create.html" class="sb-item active"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>사이트 생성</a>
+        <a href="/account.html" class="sb-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>내 계정</a>
       </div>
     </nav>
-    <div class="sb-user">
-      <div class="sb-avatar" id="sbAvatar">?</div>
-      <div class="sb-uinfo"><div class="sb-uname" id="sbName">—</div><div class="sb-uemail" id="sbEmail">—</div></div>
-    </div>
   </aside>
-  <div class="sidebar-overlay" id="overlay" onclick="closeSidebar()"></div>
-
-  <main class="main">
+  <main class="main-wrap">
     <div class="topbar">
-      <div style="display:flex;align-items:center;gap:14px">
-        <button class="sidebar-toggle" onclick="openSidebar()">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 12h18M3 6h18M3 18h18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        </button>
-        <span class="topbar-title">WordPress 사이트 구축</span>
-      </div>
+      <button class="menu-btn" onclick="document.getElementById('sidebar').classList.toggle('open')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+      <span class="topbar-title">WordPress 사이트 구축</span>
       <a href="/dashboard.html" class="btn btn-ghost btn-sm">← 대시보드</a>
     </div>
 
@@ -145,64 +123,59 @@
           <div class="stp" id="s2i">
             <div class="stp-num">2</div>
             <svg class="stp-ck" width="24" height="24" viewBox="0 0 24 24" fill="none"><polyline points="20 6 9 17 4 12" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
-            설치 중
+            도메인 설정
           </div>
           <div class="stp-sep"></div>
           <div class="stp" id="s3i">
             <div class="stp-num">3</div>
             <svg class="stp-ck" width="24" height="24" viewBox="0 0 24 24" fill="none"><polyline points="20 6 9 17 4 12" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+            설치 중
+          </div>
+          <div class="stp-sep"></div>
+          <div class="stp" id="s4i">
+            <div class="stp-num">4</div>
+            <svg class="stp-ck" width="24" height="24" viewBox="0 0 24 24" fill="none"><polyline points="20 6 9 17 4 12" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
             완료
           </div>
         </div>
 
-        <!-- Step 1: 사이트 정보 입력 -->
+        <!-- ════ Step 1: 사이트 기본 정보 ════ -->
         <div id="step1">
           <div class="card" style="padding:28px">
-
-            <!-- 크롬 알림 배너 -->
-            <div class="notif-banner" id="notifBanner" style="display:none">
-              <span style="font-size:1.1rem">🔔</span>
-              <span style="flex:1">설치 완료 시 <strong>크롬 알림</strong>을 받으시겠어요? (다른 탭으로 이동해도 알림이 옵니다)</span>
-              <button onclick="requestPushPermission()">알림 허용</button>
-            </div>
-
             <div class="hosting-badge">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" stroke="currentColor" stroke-width="1.5"/></svg>
-              무료 WordPress 호스팅 자동 설치
+              WordPress 자동 설치 + 개인 도메인 연결
             </div>
 
-            <!-- 자동 설정 스펙 배지 -->
             <div class="spec-badges">
-              <span class="spec-badge php">⚡ PHP 8.3 최신</span>
+              <span class="spec-badge php">⚡ PHP 8.3</span>
               <span class="spec-badge wp">🌐 WordPress 최신 (한국어)</span>
-              <span class="spec-badge tz">🕐 KST (Asia/Seoul)</span>
-              <span class="spec-badge mysql">🗄️ MySQL KST (+9:00)</span>
+              <span class="spec-badge tz">🕐 KST</span>
+              <span class="spec-badge mysql">☁️ Cloudflare Worker 프록시</span>
             </div>
 
             <h2 style="font-family:var(--font-head);font-size:1.1rem;font-weight:700;margin-bottom:8px">🚀 WordPress 사이트 자동 구축</h2>
-            <p style="color:var(--muted);font-size:.85rem;margin-bottom:20px">버튼 하나로 무료 호스팅에 WordPress가 자동으로 설치됩니다. 설치하는 동안 다른 탭으로 이동하셔도 됩니다.</p>
+            <p style="color:var(--muted);font-size:.85rem;margin-bottom:20px">사이트 정보를 입력하고 개인 도메인과 Cloudflare API를 연결하면 WordPress가 자동으로 설치됩니다.</p>
 
             <ul class="feature-list">
-              <li>WordPress 자동 설치 (별도 계정 생성 없음)</li>
-              <li>WordPress 최신버전 자동 설치 (한국어 KR)</li>
-              <li>PHP 8.3 최신버전 + 한국 시간(KST) 자동 설정</li>
-              <li>MySQL timezone KST (+9:00) 자동 적용</li>
-              <li>Cron Job 자동 강제 활성화</li>
-              <li>플랜별 서스펜드 억제 (CPU·대역폭 최소화)</li>
-              <li>속도 최적화 (Breeze·gzip·브라우저 캐시)</li>
-              <li>설치 완료 시 크롬 알림 발송</li>
+              <li>개인 도메인(예: myblog.com)으로 완전 운영 — 서브도메인 노출 없음</li>
+              <li>Cloudflare Worker 자동 배포 — 도메인 프록시 무중단</li>
+              <li>WordPress 최신버전 자동 설치 (한국어, PHP 8.3)</li>
+              <li>Cron Job 강제 활성화 · 어드민/모든 페이지 개인도메인으로 제공</li>
+              <li>글·페이지·미디어 라이브러리 → Cloudflare D1 + KV 자동 연동</li>
+              <li>속도 최적화 (gzip, 브라우저 캐시, Breeze)</li>
             </ul>
 
             <!-- 사이트 이름 -->
             <div class="field">
               <label>사이트 이름 <span style="color:var(--error)">*</span></label>
               <input type="text" id="siteName" placeholder="예: 내 블로그" maxlength="60"/>
-              <div class="hint" style="margin-top:6px">사이트 이름을 기반으로 도메인이 자동 생성됩니다</div>
+              <div class="hint" style="margin-top:6px">사이트 이름은 WordPress 관리자에 표시됩니다</div>
             </div>
 
-            <!-- WordPress 관리자 계정 설정 -->
+            <!-- WordPress 관리자 계정 -->
             <div class="admin-section">
-              <div class="admin-section-title">🔐 WordPress 관리자 계정 설정</div>
+              <div class="admin-section-title">🔐 WordPress 관리자 계정</div>
               <div class="field" style="margin-bottom:0">
                 <label>관리자 아이디 <span style="color:var(--error)">*</span></label>
                 <input type="text" id="adminLogin" placeholder="admin" maxlength="40" value="admin" autocomplete="username"/>
@@ -210,32 +183,101 @@
               </div>
             </div>
 
-            <div id="errMsg" style="display:none;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:12px;font-size:.85rem;color:var(--error);margin-bottom:16px"></div>
+            <div id="errMsg1" style="display:none;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:12px;font-size:.85rem;color:var(--error);margin-bottom:16px"></div>
 
-            <button class="btn btn-primary" id="createBtn" onclick="startCreation()" style="width:100%;justify-content:center;padding:13px">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-              WordPress 사이트 자동 구축 시작
-            </button>
+            <div class="step-nav">
+              <button class="btn btn-primary" onclick="goToStep2()">
+                다음: 도메인 설정 →
+              </button>
+            </div>
           </div>
         </div>
 
-        <!-- Step 2: 설치 진행 -->
+        <!-- ════ Step 2: 도메인 + Cloudflare API ════ -->
         <div id="step2" style="display:none">
+          <div class="card" style="padding:28px">
+
+            <!-- 도메인 설정 -->
+            <div class="domain-section">
+              <div class="domain-section-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#2563eb" stroke-width="1.5"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" stroke="#2563eb" stroke-width="1.5"/></svg>
+                개인 도메인 설정
+              </div>
+              <div class="info-box" style="margin-bottom:12px">
+                <strong>사용자에게 보이는 도메인입니다.</strong><br>
+                예: <code>myblog.com</code> 또는 <code>www.myblog.com</code><br>
+                실제 WordPress 서버(호스팅 서브도메인)는 숨겨지고, <strong>모든 페이지·관리자 페이지·크론잡</strong>이 이 도메인으로 동작합니다.
+              </div>
+              <div class="field" style="margin-bottom:0">
+                <label>개인 도메인 <span style="color:var(--error)">*</span></label>
+                <input type="text" id="personalDomain" placeholder="예: myblog.com 또는 www.myblog.com" autocomplete="off" spellcheck="false"/>
+                <div class="hint">http(s):// 없이 도메인만 입력 (예: myblog.com)</div>
+              </div>
+            </div>
+
+            <!-- Cloudflare API -->
+            <div class="cf-section">
+              <div class="cf-section-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" stroke-width="1.5"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5" stroke="currentColor" stroke-width="1.5"/></svg>
+                Cloudflare 연동 (필수)
+              </div>
+              <div class="info-box">
+                <strong>왜 필요한가요?</strong><br>
+                입력하신 개인 도메인에 <strong>Cloudflare Worker</strong>를 자동 배포합니다. 이 워커가 개인 도메인 ↔ 실제 WordPress 서버를 투명하게 연결하여, 크론잡·관리자 페이지·모든 기능이 개인 도메인에서 완벽히 동작합니다.<br><br>
+                <strong>Global API Key 위치:</strong> Cloudflare 대시보드 → 프로필 → API 토큰 → Global API Key
+              </div>
+              <div class="field">
+                <label>Cloudflare 계정 이메일 <span style="color:var(--error)">*</span></label>
+                <input type="email" id="cfEmail" placeholder="your@email.com" autocomplete="off"/>
+              </div>
+              <div class="field">
+                <label>Cloudflare Global API Key <span style="color:var(--error)">*</span></label>
+                <div class="pw-wrap">
+                  <input type="password" class="pw-inp" id="cfApiKey" placeholder="Global API Key (40자 영숫자)" autocomplete="off"/>
+                  <button class="eye-btn" onclick="toggleCfKey()" title="보기/숨기기">
+                    <svg id="cfKeyEye" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/></svg>
+                  </button>
+                </div>
+                <div class="hint">Cloudflare 프로필 → API 토큰 → Global API Key에서 복사</div>
+              </div>
+              <div class="field" style="margin-bottom:0">
+                <label>Cloudflare Account ID <span style="color:var(--error)">*</span></label>
+                <input type="text" id="cfAccountId" placeholder="32자리 Account ID" autocomplete="off" spellcheck="false"/>
+                <div class="hint">Cloudflare 대시보드 우측 사이드바 → Account ID</div>
+              </div>
+            </div>
+
+            <div class="warn-box">
+              ⚠️ <strong>보안 안내:</strong> API 키는 사이트 생성 시 Cloudflare Worker 배포에만 사용되며, 서버에 저장되지 않습니다. 생성 후 즉시 폐기됩니다.
+            </div>
+
+            <div id="errMsg2" style="display:none;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:12px;font-size:.85rem;color:var(--error);margin-bottom:16px"></div>
+
+            <div class="step-nav">
+              <button class="btn btn-ghost" onclick="goStep(1)">← 이전</button>
+              <button class="btn btn-primary" id="createBtn" onclick="startCreation()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                WordPress 사이트 자동 구축 시작
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ════ Step 3: 설치 진행 ════ -->
+        <div id="step3" style="display:none">
           <div class="card" style="padding:32px;text-align:center">
             <div class="spin"></div>
             <h3 style="font-family:var(--font-head);font-size:1.05rem;font-weight:700;margin-bottom:8px" id="progressTitle">WordPress 설치 준비 중...</h3>
-            <p style="color:var(--muted);font-size:.85rem" id="progressDesc">자체 패널로 WordPress를 자동으로 설치합니다. 약 5~10분 소요됩니다.<br><small style="opacity:.7">다른 탭으로 이동해도 설치가 계속 진행됩니다.</small></p>
+            <p style="color:var(--muted);font-size:.85rem" id="progressDesc">개인 도메인과 Cloudflare Worker를 설정하고 WordPress를 설치합니다.<br><small style="opacity:.7">다른 탭으로 이동해도 설치가 계속 진행됩니다.</small></p>
 
-            <!-- 자동 설정 정보 -->
             <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin:12px 0">
               <span class="spec-badge php">PHP 8.3</span>
               <span class="spec-badge wp">WP 최신</span>
               <span class="spec-badge tz">KST</span>
-              <span class="spec-badge mysql">MySQL KST</span>
-              <span class="spec-badge wp" style="background:rgba(16,185,129,.1);color:#059669">반응형</span>
+              <span class="spec-badge mysql" style="background:rgba(249,115,22,.1);color:#ea580c">CF Worker</span>
+              <span class="spec-badge wp" style="background:rgba(16,185,129,.1);color:#059669">개인도메인</span>
             </div>
 
-            <!-- 단계별 진행 표시 -->
             <div style="margin:16px 0;text-align:left">
               <div class="provision-step" id="pstep1">
                 <span class="pstep-icon">⏳</span>
@@ -247,11 +289,11 @@
               </div>
               <div class="provision-step" id="pstep3">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">3단계: 속도 최적화 적용</span>
+                <span class="pstep-name">3단계: Cloudflare Worker 배포 (개인도메인 프록시)</span>
               </div>
               <div class="provision-step" id="pstep4">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">4단계: 사이트 활성화 완료</span>
+                <span class="pstep-name">4단계: 도메인 DNS + 사이트 활성화</span>
               </div>
             </div>
 
@@ -267,8 +309,8 @@
           </div>
         </div>
 
-        <!-- Step 3: 완료 -->
-        <div id="step3" style="display:none">
+        <!-- ════ Step 4: 완료 ════ -->
+        <div id="step4" style="display:none">
           <div class="card" style="padding:32px;text-align:center">
             <div class="success-icon">
               <svg width="36" height="36" viewBox="0 0 24 24" fill="none"><polyline points="20 6 9 17 4 12" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -276,7 +318,6 @@
             <h3 style="font-family:var(--font-head);font-size:1.15rem;font-weight:700;margin-bottom:6px">WordPress 설치 완료! 🎉</h3>
             <p style="color:var(--muted);font-size:.85rem;margin-bottom:24px" id="successDesc">WordPress가 성공적으로 설치되었습니다.</p>
 
-            <!-- WordPress 접속 링크 -->
             <div style="display:flex;gap:10px;justify-content:center;margin-bottom:28px;flex-wrap:wrap">
               <a id="wpSiteLink" href="#" target="_blank" class="wp-link">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M2 12h20" stroke="currentColor" stroke-width="1.5"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" stroke="currentColor" stroke-width="1.5"/></svg>
@@ -288,14 +329,12 @@
               </a>
             </div>
 
-            <!-- 관리자 정보 -->
             <div style="background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:18px;text-align:left;margin-bottom:20px">
               <div style="font-size:.82rem;font-weight:700;color:var(--muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">WordPress 로그인 정보</div>
-
               <div class="cred-row">
-                <div class="cred-label">🌐 사이트 URL</div>
-                <div class="cred-val" id="credSiteUrl">—</div>
-                <button class="copy-btn" onclick="copyText('credSiteUrl')">복사</button>
+                <div class="cred-label">🌐 개인 도메인</div>
+                <div class="cred-val" id="credPersonalDomain">—</div>
+                <button class="copy-btn" onclick="copyText('credPersonalDomain')">복사</button>
               </div>
               <div class="cred-row">
                 <div class="cred-label">⚙️ 관리자 URL</div>
@@ -318,58 +357,46 @@
                 </div>
               </div>
               <div class="cred-row">
-                <div class="cred-label">🏠 호스팅</div>
-                <div class="cred-val" id="credHost">—</div>
+                <div class="cred-label">☁️ CF Worker</div>
+                <div class="cred-val" id="credWorker">—</div>
               </div>
               <div class="cred-row">
                 <div class="cred-label">⚡ PHP 버전</div>
-                <div class="cred-val" id="credPhp">—</div>
+                <div class="cred-val" id="credPhp">PHP 8.3 ✅</div>
               </div>
               <div class="cred-row">
                 <div class="cred-label">📦 WP 버전</div>
-                <div class="cred-val" id="credWpVer">—</div>
+                <div class="cred-val" id="credWpVer">최신 (한국어) ✅</div>
               </div>
               <div class="cred-row">
                 <div class="cred-label">🕐 서버 시간</div>
-                <div class="cred-val" id="credTz">Asia/Seoul (KST, UTC+9)</div>
-              </div>
-              <div class="cred-row">
-                <div class="cred-label">🗄️ MySQL TZ</div>
-                <div class="cred-val" id="credMysqlTz">+9:00 (KST)</div>
-              </div>
-              <div class="cred-row">
-                <div class="cred-label">🔐 SSL</div>
-                <div class="cred-val" id="credSsl">—</div>
-              </div>
-              <div class="cred-row">
-                <div class="cred-label">💨 Breeze</div>
-                <div class="cred-val" id="credBreeze">—</div>
+                <div class="cred-val">Asia/Seoul (KST, UTC+9) ✅</div>
               </div>
               <div class="cred-row">
                 <div class="cred-label">⏰ Cron Job</div>
-                <div class="cred-val" id="credCron">—</div>
-              </div>
-              <div class="cred-row">
-                <div class="cred-label">🛡️ 서스펜드 억제</div>
-                <div class="cred-val" id="credSuspend">—</div>
+                <div class="cred-val" id="credCron">✅ 활성화됨</div>
               </div>
               <div class="cred-row">
                 <div class="cred-label">🚀 속도 최적화</div>
                 <div class="cred-val" id="credSpeed">—</div>
               </div>
+              <div class="cred-row">
+                <div class="cred-label">🗄️ 데이터 저장</div>
+                <div class="cred-val">Cloudflare D1 + KV ✅</div>
+              </div>
             </div>
 
-            <div style="background:rgba(234,179,8,.06);border:1px solid rgba(234,179,8,.2);border-radius:8px;padding:12px;font-size:.8rem;color:var(--muted);text-align:left;margin-bottom:16px">
+            <div class="warn-box" style="text-align:left;margin-bottom:16px">
               ⚠️ <strong>중요:</strong> 위 비밀번호를 안전한 곳에 저장하세요. 대시보드에서도 언제든지 확인할 수 있습니다.
             </div>
 
-            <div style="background:rgba(59,130,246,.06);border:1px solid rgba(59,130,246,.2);border-radius:8px;padding:12px;font-size:.8rem;color:var(--muted);text-align:left;margin-bottom:20px">
-              🌐 <strong>도메인 연결:</strong> 사이트 상세 페이지에서 나만의 도메인을 연결할 수 있습니다.
+            <div class="info-box" style="text-align:left;margin-bottom:20px">
+              🌐 <strong>DNS 전파 안내:</strong> 개인 도메인이 완전히 적용되려면 DNS 전파에 최대 48시간이 소요될 수 있습니다. 보통 1~2시간 내 접속 가능합니다.
             </div>
 
             <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
               <a href="/dashboard.html" class="btn btn-ghost">대시보드로 이동</a>
-              <button class="btn btn-primary" id="newSiteBtn" onclick="resetWizard()">새 사이트 추가</button>
+              <button class="btn btn-primary" onclick="resetWizard()">새 사이트 추가</button>
             </div>
           </div>
         </div>
@@ -383,7 +410,7 @@
             <h3 style="font-family:var(--font-head);font-size:1.1rem;font-weight:700;margin-bottom:8px;color:var(--error)">설치 실패</h3>
             <p style="color:var(--muted);font-size:.85rem;margin-bottom:20px" id="failMsg">WordPress 설치 중 오류가 발생했습니다.</p>
             <div style="display:flex;gap:10px;justify-content:center">
-              <button class="btn btn-primary" id="retryBtn" onclick="resetWizard()">다시 시도</button>
+              <button class="btn btn-primary" onclick="resetWizard()">처음부터 다시 시도</button>
               <a href="/dashboard.html" class="btn btn-ghost">대시보드로</a>
             </div>
           </div>
@@ -399,119 +426,91 @@
 /* ── 상태 변수 ── */
 let currentSiteId = null;
 let pollInterval  = null;
-let pushRegistered = false;
-let serviceWorkerReg = null;
+// 위저드 데이터
+const WD = {
+  siteName: '', adminLogin: '',
+  personalDomain: '', cfEmail: '', cfApiKey: '', cfAccountId: ''
+};
 
 /* ══════════════════════════════════════════
-   크롬 Push 알림 (Web Push Notification)
-   ✅ 수정5: 사이트 생성 완료 시 크롬 알림
+   Step 이동
 ══════════════════════════════════════════ */
+function goStep(n) {
+  ['step1','step2','step3','step4','stepFail'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  const target = document.getElementById('step' + n);
+  if (target) target.style.display = '';
 
-// Service Worker 등록 (Push 알림용)
-async function registerServiceWorker() {
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
-  try {
-    serviceWorkerReg = await navigator.serviceWorker.register('/sw-push.js', { scope: '/' });
-  } catch (e) {
-    console.warn('SW 등록 실패:', e);
+  for (let i = 1; i <= 4; i++) {
+    const el = document.getElementById('s' + i + 'i');
+    if (!el) continue;
+    if (i < n) el.className = 'stp done';
+    else if (i === n) el.className = 'stp active';
+    else el.className = 'stp';
   }
 }
 
-// Push 알림 권한 요청 + 구독
-async function requestPushPermission() {
-  if (!('Notification' in window)) {
-    alert('이 브라우저는 알림을 지원하지 않습니다.');
-    return;
-  }
-
-  const permission = await Notification.requestPermission();
-  if (permission !== 'granted') {
-    alert('알림 권한이 거부되었습니다. 브라우저 설정에서 허용해주세요.');
-    return;
-  }
-
-  document.getElementById('notifBanner').style.display = 'none';
-  pushRegistered = true;
-
-  // VAPID 공개키 조회
-  try {
-    const token = CP.getToken();
-    const vapidRes = await fetch('/api/sites', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-      body: JSON.stringify({ action: 'get-vapid-key' }),
-    });
-    const vapidData = await vapidRes.json();
-
-    if (vapidData.vapidPublicKey && serviceWorkerReg) {
-      const subscription = await serviceWorkerReg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidData.vapidPublicKey),
-      });
-
-      // 구독 정보 서버에 저장
-      await fetch('/api/sites', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ action: 'save-push-subscription', subscription }),
-      });
-    }
-  } catch (e) {
-    console.warn('Push 구독 오류:', e);
-  }
-}
-
-function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - base64String.length % 4) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = window.atob(base64);
-  return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
-}
-
-// 브라우저 내장 알림 (Push API 없이 Notification API 직접 사용)
-function showBrowserNotification(title, body, url) {
-  if (Notification.permission === 'granted') {
-    const n = new Notification(title, {
-      body,
-      icon: '/favicon-32.png',
-      badge: '/favicon-32.png',
-      tag: 'site-created',
-      requireInteraction: true,
-      data: { url },
-    });
-    n.onclick = () => {
-      window.focus();
-      if (url) window.open(url, '_blank');
-      n.close();
-    };
-  }
-}
-
-/* ══════════════════════════════════════════
-   사이트 생성 흐름
-══════════════════════════════════════════ */
-
-async function startCreation() {
+function goToStep2() {
   const siteName   = document.getElementById('siteName').value.trim();
   const adminLogin = document.getElementById('adminLogin').value.trim();
-  const errEl      = document.getElementById('errMsg');
-
+  const errEl      = document.getElementById('errMsg1');
   errEl.style.display = 'none';
 
-  if (!siteName)                             { showErr('사이트 이름을 입력해주세요.'); return; }
-  if (!adminLogin || adminLogin.length < 3)  { showErr('관리자 아이디는 3자 이상 입력해주세요.'); return; }
-  if (!/^[a-zA-Z0-9_]+$/.test(adminLogin))  { showErr('관리자 아이디는 영문/숫자/언더바만 사용 가능합니다.'); return; }
+  if (!siteName)                            { errEl.textContent = '사이트 이름을 입력해주세요.'; errEl.style.display = ''; return; }
+  if (!adminLogin || adminLogin.length < 3) { errEl.textContent = '관리자 아이디는 3자 이상 입력해주세요.'; errEl.style.display = ''; return; }
+  if (!/^[a-zA-Z0-9_]+$/.test(adminLogin)) { errEl.textContent = '관리자 아이디는 영문/숫자/언더바만 사용 가능합니다.'; errEl.style.display = ''; return; }
+
+  WD.siteName   = siteName;
+  WD.adminLogin = adminLogin;
+  goStep(2);
+}
+
+function toggleCfKey() {
+  const inp = document.getElementById('cfApiKey');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+/* ══════════════════════════════════════════
+   사이트 생성 시작
+══════════════════════════════════════════ */
+async function startCreation() {
+  const personalDomain = document.getElementById('personalDomain').value.trim().toLowerCase()
+    .replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const cfEmail     = document.getElementById('cfEmail').value.trim();
+  const cfApiKey    = document.getElementById('cfApiKey').value.trim();
+  const cfAccountId = document.getElementById('cfAccountId').value.trim();
+  const errEl       = document.getElementById('errMsg2');
+  errEl.style.display = 'none';
+
+  if (!personalDomain) { errEl.textContent = '개인 도메인을 입력해주세요.'; errEl.style.display = ''; return; }
+  if (!/^[a-z0-9\-\.]+\.[a-z]{2,}$/.test(personalDomain)) { errEl.textContent = '올바른 도메인 형식이 아닙니다. (예: myblog.com)'; errEl.style.display = ''; return; }
+  if (!cfEmail || !/^[^@]+@[^@]+\.[^@]+$/.test(cfEmail)) { errEl.textContent = 'Cloudflare 계정 이메일을 올바르게 입력해주세요.'; errEl.style.display = ''; return; }
+  if (!cfApiKey || cfApiKey.length < 30) { errEl.textContent = 'Cloudflare Global API Key를 입력해주세요. (최소 30자)'; errEl.style.display = ''; return; }
+  if (!cfAccountId || cfAccountId.length < 20) { errEl.textContent = 'Cloudflare Account ID를 입력해주세요. (32자리)'; errEl.style.display = ''; return; }
+
+  WD.personalDomain = personalDomain;
+  WD.cfEmail        = cfEmail;
+  WD.cfApiKey       = cfApiKey;
+  WD.cfAccountId    = cfAccountId;
 
   document.getElementById('createBtn').disabled = true;
-  document.getElementById('notifBanner').style.display = 'none';
-  goStep(2);
+  goStep(3);
 
   try {
     const token = CP.getToken();
     const res = await fetch('/api/sites', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-      body: JSON.stringify({ siteName, adminLogin }),
+      body: JSON.stringify({
+        siteName:       WD.siteName,
+        adminLogin:     WD.adminLogin,
+        personalDomain: WD.personalDomain,
+        cfEmail:        WD.cfEmail,
+        cfApiKey:       WD.cfApiKey,
+        cfAccountId:    WD.cfAccountId,
+      }),
     });
 
     let data;
@@ -526,33 +525,35 @@ async function startCreation() {
 
     if (!data.ok) {
       showFail(data.error || '사이트 생성 요청 실패');
+      document.getElementById('createBtn').disabled = false;
       return;
     }
 
     currentSiteId = data.siteId;
     addLog(`✅ 사이트 생성 요청 완료 (ID: ${data.siteId})`);
     addLog(`📋 플랜: ${data.plan || 'free'}`);
-    addLog(`⚡ PHP: ${data.phpVersion || '8.3 (최신)'}`);
-    addLog(`📦 WP: ${data.wpVersion || '최신버전 (한국어)'}`);
-    addLog(`🕐 시간대: ${data.timezone || 'Asia/Seoul (KST)'}`);
+    addLog(`🌐 개인 도메인: ${WD.personalDomain}`);
+    addLog(`☁️ Cloudflare Worker 배포 준비 중...`);
     addLog(`🚀 WordPress 자동 설치를 시작합니다...`);
 
     startPolling(data.siteId);
 
   } catch (e) {
     showFail('네트워크 오류: ' + e.message);
+    document.getElementById('createBtn').disabled = false;
   }
 }
 
 /* provision_step → 단계 UI 매핑 */
 const STEP_MAP = {
-  'initializing':       { step: 0, msg: '초기화 중...',                                         title: '⏳ 설치 준비 중...' },
-  'hosting_account':    { step: 1, msg: '① WordPress 설치 중...',                               title: '① WordPress 설치 중...' },
-  'wordpress_install':  { step: 1, msg: '① WordPress 설치 중 (PHP 8.3 + 한국어 + 반응형)...',   title: '① WordPress 설치 중...' },
-  'cron_setup':         { step: 2, msg: '② 플러그인 설치 및 최적화 중...',                      title: '② 플러그인 설치 중...' },
-  'suspend_protection': { step: 3, msg: '③ 속도 최적화 적용 중...',                             title: '③ 속도 최적화 적용 중...' },
-  'speed_optimization': { step: 3, msg: '③ 속도 최적화 적용 중...',                             title: '③ 속도 최적화 적용 중...' },
-  'completed':          { step: 4, msg: '✅ 사이트 생성 완료!',                                  title: '✅ 사이트 생성 완료!' },
+  'initializing':        { step: 0, msg: '초기화 중...',                                       title: '⏳ 설치 준비 중...' },
+  'wordpress_install':   { step: 1, msg: '① WordPress 설치 중 (PHP 8.3 + 한국어 + 반응형)...', title: '① WordPress 설치 중...' },
+  'cron_setup':          { step: 2, msg: '② 플러그인 설치 및 최적화 중...',                    title: '② 플러그인 설치 중...' },
+  'suspend_protection':  { step: 2, msg: '② 플러그인 설치 및 최적화 중...',                    title: '② 플러그인 설치 중...' },
+  'speed_optimization':  { step: 2, msg: '② 속도 최적화 적용 중...',                          title: '② 속도 최적화 중...' },
+  'worker_deploy':       { step: 3, msg: '③ Cloudflare Worker 배포 중...',                   title: '③ CF Worker 배포 중...' },
+  'dns_setup':           { step: 4, msg: '④ DNS 설정 및 사이트 활성화 중...',                  title: '④ 사이트 활성화 중...' },
+  'completed':           { step: 4, msg: '✅ 사이트 생성 완료!',                               title: '✅ 사이트 생성 완료!' },
 };
 
 function updateProvisionSteps(provisionStep, status) {
@@ -586,15 +587,14 @@ function updateProvisionSteps(provisionStep, status) {
 function startPolling(siteId) {
   let prevProvisionStep = null;
   let pollCount = 0;
-  const MAX_POLLS = 180; // 최대 12분 (4초 * 180)
+  const MAX_POLLS = 200; // ~13분
 
   pollInterval = setInterval(async () => {
-    // ✅ FIX: 타임아웃 — 무한 폴링 방지
     pollCount++;
     if (pollCount > MAX_POLLS) {
       clearInterval(pollInterval);
       pollInterval = null;
-      showFail('설치 시간이 초과되었습니다 (12분). 관리자에게 문의하거나 다시 시도해주세요.');
+      showFail('설치 시간이 초과되었습니다 (13분). 관리자에게 문의하거나 다시 시도해주세요.');
       return;
     }
 
@@ -609,7 +609,7 @@ function startPolling(siteId) {
       const data = await res.json();
       if (!data.ok) return;
 
-      const site = data.site;
+      const site   = data.site;
       const status = site.status;
       const provStep = site.provision_step;
 
@@ -617,10 +617,11 @@ function startPolling(siteId) {
 
       if (provStep !== prevProvisionStep) {
         prevProvisionStep = provStep;
-        if (provStep === 'wordpress_install' || provStep === 'hosting_account') addLog('📦 [1/4] WordPress 설치 중... (PHP 8.3 + 한국어 + 반응형)');
-        if (provStep === 'cron_setup')         addLog('🔧 [2/4] 플러그인 및 환경 설정 중...');
-        if (provStep === 'suspend_protection' || provStep === 'speed_optimization') addLog('⚡ [3/4] 속도 최적화 적용 중...');
-        // ✅ FIX: error_message가 있으면 로그에 표시 (재시도 중 상태 확인용)
+        if (provStep === 'wordpress_install') addLog('📦 [1/4] WordPress 설치 중... (PHP 8.3 + 한국어 + 반응형)');
+        if (provStep === 'cron_setup')        addLog('🔧 [2/4] 플러그인 및 환경 설정 중...');
+        if (provStep === 'speed_optimization') addLog('⚡ [2/4] 속도 최적화 적용 중...');
+        if (provStep === 'worker_deploy')     addLog('☁️ [3/4] Cloudflare Worker 배포 중 (' + WD.personalDomain + ')...');
+        if (provStep === 'dns_setup')         addLog('🌐 [4/4] DNS 레코드 설정 및 사이트 활성화 중...');
         if (site.error_message && status !== 'failed') addLog('⚠️ ' + site.error_message);
       }
 
@@ -637,27 +638,19 @@ function startPolling(siteId) {
           }
         }
 
-        addLog('⚡ PHP: ' + (site.php_version || '8.3 최신버전') + ' 설정 완료');
-        addLog('📦 WP: ' + (site.wp_version || '최신') + ' 한국어 설치 완료');
-        addLog('🕐 PHP timezone: Asia/Seoul (KST) 설정 완료');
-        addLog('🗄️ MySQL timezone: +9:00 (KST) 설정 완료');
-        addLog('⏰ Cron Job: 활성화 완료');
-        addLog('🛡️ 서스펜드 억제: 활성화 완료');
-        addLog('💨 Breeze 캐시: 설치 완료');
-        addLog('🎉 모든 설치 완료!');
-
-        showBrowserNotification(
-          '✅ WordPress 설치 완료!',
-          `"${site.name}" 사이트가 성공적으로 설치되었습니다.`,
-          site.wp_admin_url || site.wp_url
-        );
+        addLog('⚡ PHP 8.3 설정 완료');
+        addLog('📦 WordPress 최신 (한국어) 설치 완료');
+        addLog('🕐 timezone: Asia/Seoul (KST) 설정 완료');
+        addLog('⏰ Cron Job 강제 활성화 완료');
+        addLog('☁️ Cloudflare Worker 배포 완료 → ' + (site.custom_domain || WD.personalDomain));
+        addLog('🗄️ Cloudflare D1 + KV 연동 완료');
+        addLog('🎉 모든 설치 완료! 개인 도메인으로 접속하세요.');
 
         showSuccess(site);
 
       } else if (status === 'failed') {
         clearInterval(pollInterval);
         pollInterval = null;
-
         if (provStep) {
           const info = STEP_MAP[provStep] || {};
           if (info.step) {
@@ -672,191 +665,105 @@ function startPolling(siteId) {
         showFail(site.error_message || 'WordPress 설치에 실패했습니다.');
       }
     } catch (e) {
-      // ✅ FIX: 폴링 에러 무시하되 콘솔에는 남김 (디버깅용)
       console.warn('폴링 오류:', e);
     }
   }, 4000);
 }
 
 function showSuccess(site) {
-  goStep(3);
+  goStep(4);
 
-  document.getElementById('credSiteUrl').textContent = site.wp_url || '—';
-  document.getElementById('credAdminUrl').textContent = site.wp_admin_url || '—';
-  document.getElementById('credUser').textContent = site.wp_username || '—';
-  document.getElementById('credPw').value = site.wp_password || '—';
-  document.getElementById('credHost').textContent = site.hosting_provider || '—';
-  document.getElementById('credPhp').textContent = site.php_version ? `${site.php_version} ✅` : 'PHP 8.3 (최신) ✅';
-  document.getElementById('credWpVer').textContent = site.wp_version ? `${site.wp_version} (한국어) ✅` : '최신 (한국어) ✅';
-  document.getElementById('credTz').textContent = 'Asia/Seoul (KST, UTC+9) ✅';
-  document.getElementById('credMysqlTz').textContent = '+9:00 (KST) ✅';
-  document.getElementById('credSsl').textContent = site.ssl_active ? '✅ 활성화됨' : '⏳ 설정 중';
-  document.getElementById('credBreeze').textContent = site.breeze_installed ? '✅ 설치됨 (캐시 활성화)' : '⏳ 설치 중';
-  document.getElementById('credCron').textContent = site.cron_enabled ? '✅ 활성화됨 (강제 실행)' : '⏳ 설정 중';
-  document.getElementById('credSuspend').textContent = site.suspend_protected ? '✅ 억제 활성화됨' : '기본 설정';
-  document.getElementById('credSpeed').textContent = site.speed_optimized ? '✅ 최적화됨' : '⏳ 적용 중';
+  const personalDomain = site.custom_domain || WD.personalDomain || site.primary_domain || '';
+  const personalUrl    = personalDomain ? 'https://' + personalDomain : (site.wp_url || '#');
+  const adminUrl       = personalDomain ? 'https://' + personalDomain + '/wp-admin/' : (site.wp_admin_url || '#');
+  const workerName     = site.cf_worker_name || (personalDomain ? personalDomain.replace(/\./g, '-') + '-proxy' : '—');
 
-  if (site.wp_url) {
-    document.getElementById('wpSiteLink').href = site.wp_url;
-    document.getElementById('wpAdminLink').href = site.wp_admin_url || site.wp_url + '/wp-admin/';
-  }
+  document.getElementById('credPersonalDomain').textContent = personalUrl;
+  document.getElementById('credAdminUrl').textContent       = adminUrl;
+  document.getElementById('credUser').textContent           = site.wp_username || WD.adminLogin || '—';
+  document.getElementById('credPw').value                   = site.wp_password || '—';
+  document.getElementById('credWorker').textContent         = workerName + ' ✅';
+  document.getElementById('credPhp').textContent            = (site.php_version || 'PHP 8.3') + ' ✅';
+  document.getElementById('credWpVer').textContent          = (site.wp_version  || '최신') + ' (한국어) ✅';
+  document.getElementById('credCron').textContent           = site.cron_enabled ? '✅ 활성화됨 (강제 실행)' : '⏳ 설정 중';
+  document.getElementById('credSpeed').textContent          = site.speed_optimized ? '✅ 최적화됨' : '⏳ 적용 중';
+
+  document.getElementById('wpSiteLink').href  = personalUrl;
+  document.getElementById('wpAdminLink').href = adminUrl;
 
   document.getElementById('successDesc').textContent =
-    `"${site.name}" 사이트가 ${site.hosting_provider}에 성공적으로 설치되었습니다.`;
+    `"${site.name}" 사이트가 ${personalUrl} 으로 성공적으로 설치되었습니다.`;
 }
 
 function showFail(msg) {
   clearInterval(pollInterval);
   pollInterval = null;
   document.getElementById('stepFail').style.display = '';
-  document.getElementById('step2').style.display = 'none';
+  document.getElementById('step3').style.display = 'none';
   document.getElementById('failMsg').textContent = msg;
-  document.getElementById('s2i').className = 'stp';
-}
-
-function showErr(msg) {
-  const el = document.getElementById('errMsg');
-  el.textContent = msg;
-  el.style.display = '';
-  document.getElementById('createBtn').disabled = false;
 }
 
 function addLog(msg) {
   const box = document.getElementById('logBox');
   const div = document.createElement('div');
   div.className = msg.startsWith('✅') || msg.startsWith('🎉') ? 'ok' :
-                  msg.startsWith('❌') ? 'err' : 'cur';
+                  msg.startsWith('❌') ? 'err' :
+                  msg.startsWith('⚠️') ? 'warn' : 'cur';
   div.textContent = msg;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
 }
 
-function goStep(n) {
-  ['step1','step2','step3','stepFail'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.style.display = 'none';
-  });
-  const target = document.getElementById('step' + n);
-  if (target) target.style.display = '';
-
-  for (let i = 1; i <= 3; i++) {
-    const el = document.getElementById('s' + i + 'i');
-    if (!el) continue;
-    if (i < n) el.className = 'stp done';
-    else if (i === n) el.className = 'stp active';
-    else el.className = 'stp';
-  }
-}
-
-/* ══════════════════════════════════════════
-   ✅ 수정1: resetWizard — 완전 초기화
-   - 폴링 중단
-   - currentSiteId 초기화
-   - 모든 폼 필드 초기화
-   - provision step 표시 초기화
-   - 로그 박스 초기화
-   - 에러 메시지 초기화
-   - 버튼 활성화
-   - step1로 이동
-══════════════════════════════════════════ */
-function resetWizard() {
-  // 폴링 중단
-  if (pollInterval) {
-    clearInterval(pollInterval);
-    pollInterval = null;
-  }
-
-  // 상태 초기화
-  currentSiteId = null;
-
-  // 폼 필드 초기화
-  const siteNameEl = document.getElementById('siteName');
-  const adminLoginEl = document.getElementById('adminLogin');
-  if (siteNameEl) siteNameEl.value = '';
-  if (adminLoginEl) adminLoginEl.value = 'admin';
-
-  // 버튼 활성화
-  const createBtn = document.getElementById('createBtn');
-  if (createBtn) createBtn.disabled = false;
-
-  // 로그 박스 초기화
-  const logBox = document.getElementById('logBox');
-  if (logBox) {
-    logBox.innerHTML = '<div class="cur">▶ 사이트 생성 요청 전송됨</div><div class="cur">▶ 무료 호스팅 업체 자동 선택 중...</div>';
-  }
-
-  // provision step 표시 초기화
-  for (let i = 1; i <= 5; i++) {
-    const el = document.getElementById('pstep' + i);
-    if (!el) continue;
-    el.className = 'provision-step';
-    const icon = el.querySelector('.pstep-icon');
-    if (icon) icon.textContent = '⏳';
-  }
-
-  // progress 텍스트 초기화
-  const progressTitle = document.getElementById('progressTitle');
-  const progressDesc  = document.getElementById('progressDesc');
-  const statusText    = document.getElementById('statusText');
-  if (progressTitle) progressTitle.textContent = 'WordPress 자동 설치 시작';
-  if (progressDesc)  progressDesc.innerHTML = '자체 패널로 WordPress를 자동으로 설치합니다. 약 5~10분 소요됩니다.<br><small style="opacity:.7">다른 탭으로 이동해도 설치가 계속 진행됩니다.</small>';
-  if (statusText)    statusText.textContent = 'WordPress 설치 중... (약 5~10분 소요)';
-
-  // 에러 메시지 초기화
-  const errMsg = document.getElementById('errMsg');
-  if (errMsg) { errMsg.style.display = 'none'; errMsg.textContent = ''; }
-
-  // 크롬 알림 배너 재표시 (이미 허용된 경우 숨김)
-  if (Notification.permission !== 'granted' && 'Notification' in window) {
-    const nb = document.getElementById('notifBanner');
-    if (nb) nb.style.display = '';
-  }
-
-  // step1으로 이동
-  goStep(1);
-}
-
 function togglePw() {
   const inp = document.getElementById('credPw');
-  const ico = document.getElementById('eyeIco');
-  if (inp.type === 'password') {
-    inp.type = 'text';
-    ico.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="1" y1="1" x2="23" y2="23" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>';
-  } else {
-    inp.type = 'password';
-    ico.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>';
-  }
+  inp.type = inp.type === 'password' ? 'text' : 'password';
 }
 
 function copyText(id, isInput = false) {
   const el = document.getElementById(id);
   const text = isInput ? el.value : el.textContent;
   navigator.clipboard.writeText(text).then(() => {
-    const btn = el.parentElement?.querySelector('.copy-btn') || el.nextElementSibling;
-    if (btn) {
-      const orig = btn.textContent;
-      btn.textContent = '✓';
-      setTimeout(() => btn.textContent = orig, 1500);
+    const btn = el.closest('.cred-row')?.querySelector('.copy-btn');
+    if (btn) { const orig = btn.textContent; btn.textContent = '복사됨!'; setTimeout(() => btn.textContent = orig, 1500); }
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+  });
+}
+
+function resetWizard() {
+  clearInterval(pollInterval); pollInterval = null;
+  currentSiteId = null;
+  Object.keys(WD).forEach(k => WD[k] = '');
+  document.getElementById('siteName').value    = '';
+  document.getElementById('adminLogin').value  = 'admin';
+  document.getElementById('personalDomain').value = '';
+  document.getElementById('cfEmail').value     = '';
+  document.getElementById('cfApiKey').value    = '';
+  document.getElementById('cfAccountId').value = '';
+  document.getElementById('createBtn').disabled = false;
+  document.getElementById('errMsg1').style.display = 'none';
+  document.getElementById('errMsg2').style.display = 'none';
+  // 로그 초기화
+  const logBox = document.getElementById('logBox');
+  if (logBox) { logBox.innerHTML = '<div class="cur">▶ 사이트 생성 요청 전송됨</div>'; }
+  // provision step 초기화
+  for (let i = 1; i <= 4; i++) {
+    const el = document.getElementById('pstep' + i);
+    if (el) {
+      el.className = 'provision-step';
+      const icon = el.querySelector('.pstep-icon');
+      if (icon) icon.textContent = '⏳';
     }
-  }).catch(() => {});
+  }
+  goStep(1);
 }
 
 // 초기화
-(async () => {
-  const u = await CP.requireAuth();
-  if (!u) return;
-  document.getElementById('sbName').textContent = u.name || '—';
-  document.getElementById('sbEmail').textContent = u.email || '—';
-  document.getElementById('sbAvatar').textContent = (u.name || 'U')[0].toUpperCase();
-
-  // Service Worker 등록
-  await registerServiceWorker();
-
-  // 알림 권한 배너 표시
-  if ('Notification' in window && Notification.permission === 'default') {
-    document.getElementById('notifBanner').style.display = '';
-  }
-})();
+document.addEventListener('DOMContentLoaded', () => {
+  if (typeof CP !== 'undefined' && CP.requireAuth) CP.requireAuth();
+});
 </script>
 </body>
 </html>
