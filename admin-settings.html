@@ -72,6 +72,52 @@
     <div class="content">
       <div id="toast" style="display:none;position:fixed;top:20px;right:20px;z-index:9999;padding:12px 18px;border-radius:10px;font-size:.85rem;font-weight:600;color:#fff"></div>
 
+      <!-- WordPress 복제 소스 설정 (신규) -->
+      <div class="settings-section">
+        <div class="settings-title">🔁 WordPress 복제 소스 설정</div>
+        <p style="font-size:.83rem;color:var(--muted);margin-bottom:14px">
+          사용자가 사이트를 생성할 때 아래에 설정된 <strong>마스터 WordPress 사이트를 복제</strong>하여 동일한 사이트를 자동으로 만듭니다.<br>
+          아래 VP 로그인 정보를 사용해 복제 작업이 수행됩니다.
+        </p>
+        <div class="field">
+          <label>마스터 WordPress 주소 (복제 원본)</label>
+          <input type="url" id="clone_source_url" placeholder="https://master.example.com"/>
+          <div class="hint">복제할 원본 WordPress 사이트의 전체 URL (예: https://master.yourdomain.com)</div>
+        </div>
+        <div class="field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="field">
+            <label>VP 관리자 아이디 (VP LOGIN)</label>
+            <input type="text" id="clone_vp_username" placeholder="vp_admin"/>
+            <div class="hint">복제 작업에 사용할 VP 패널 아이디</div>
+          </div>
+          <div class="field">
+            <label>VP 관리자 비밀번호</label>
+            <input type="password" id="clone_vp_password" placeholder="••••••••"/>
+            <div class="hint">복제 작업에 사용할 VP 패널 비밀번호</div>
+          </div>
+        </div>
+        <div class="field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="field">
+            <label>VP 패널 URL</label>
+            <input type="url" id="clone_vp_panel_url" placeholder="https://vp.yourdomain.com"/>
+            <div class="hint">VP 관리 패널 접속 주소</div>
+          </div>
+          <div class="field">
+            <label>서버 도메인</label>
+            <input type="text" id="clone_server_domain" placeholder="yourdomain.com"/>
+            <div class="hint">복제 사이트가 생성될 기본 도메인</div>
+          </div>
+        </div>
+        <div style="background:rgba(59,130,246,.05);border:1px solid rgba(59,130,246,.18);border-radius:10px;padding:12px;margin-bottom:14px;font-size:.82rem;color:var(--muted)">
+          <strong style="color:#2563eb">ℹ️ 복제 방식 안내</strong><br>
+          1. 마스터 WordPress의 파일 및 DB를 VP 계정을 통해 복사<br>
+          2. 새 사이트 도메인으로 wp-config.php 및 DB URL 자동 교체<br>
+          3. 사용자 지정 관리자 계정으로 WordPress 관리자 정보 변경<br>
+          4. 마스터 사이트와 동일한 테마·플러그인·설정이 그대로 적용됨
+        </div>
+        <button class="btn btn-primary" onclick="saveCloneSettings()">복제 설정 저장</button>
+      </div>
+
       <!-- 플랜 설정 -->
       <div class="settings-section">
         <div class="settings-title">💳 플랜별 사이트 한도</div>
@@ -291,6 +337,19 @@ async function loadSettings() {
       ? '••••••••  (이미 저장됨)'
       : '••••••••';
   }
+
+  // 복제 설정 로드
+  setVal('clone_source_url', 'clone_source_url', '');
+  setVal('clone_vp_username', 'clone_vp_username', '');
+  setVal('clone_vp_panel_url', 'clone_vp_panel_url', '');
+  setVal('clone_server_domain', 'clone_server_domain', '');
+  const clonePwEl = document.getElementById('clone_vp_password');
+  if (clonePwEl) {
+    clonePwEl.value = '';
+    clonePwEl.placeholder = settings.clone_vp_password
+      ? '••••••••  (이미 저장됨)'
+      : '••••••••';
+  }
   setChk('auto_ssl', 'auto_ssl', true);
   setChk('auto_breeze', 'auto_breeze', true);
   setChk('maintenance_mode', 'maintenance_mode', false);
@@ -312,6 +371,28 @@ async function saveSettings(updates) {
   const data = await res.json();
   if (data.ok) showToast('설정이 저장되었습니다.');
   else showToast('저장 실패: ' + (data.error || ''), false);
+}
+
+async function saveCloneSettings() {
+  const sourceUrl   = document.getElementById('clone_source_url').value.trim();
+  const vpUsername  = document.getElementById('clone_vp_username').value.trim();
+  const vpPanelUrl  = document.getElementById('clone_vp_panel_url').value.trim();
+  const serverDomain= document.getElementById('clone_server_domain').value.trim();
+  const vpPassword  = document.getElementById('clone_vp_password').value;
+
+  if (!sourceUrl) { showToast('마스터 WordPress 주소를 입력해주세요.', false); return; }
+  if (!vpUsername) { showToast('VP 관리자 아이디를 입력해주세요.', false); return; }
+
+  const updates = {
+    clone_source_url:    sourceUrl,
+    clone_vp_username:   vpUsername,
+    clone_vp_panel_url:  vpPanelUrl,
+    clone_server_domain: serverDomain,
+  };
+  if (vpPassword && !vpPassword.startsWith('••')) {
+    updates.clone_vp_password = vpPassword;
+  }
+  await saveSettings(updates);
 }
 
 async function savePlanSettings() {
