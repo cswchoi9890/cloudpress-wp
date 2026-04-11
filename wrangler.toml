@@ -26,8 +26,8 @@ id        = "e1acf814c1244a59bbc24865723e479d"   # wrangler kv namespace create 
 # ── 환경 변수 (민감한 값은 wrangler secret put으로 설정) ──
 [vars]
 # Worker가 읽는 WP origin URL (wrangler secret put WP_ORIGIN_URL 으로 설정 권장)
-WP_ORIGIN_URL    = ""   # 예: https://origin.cloudpress.site
-WP_ORIGIN_SECRET = ""   # mu-plugin 공유 시크릿 (wrangler secret put WP_ORIGIN_SECRET)
+WP_ORIGIN_URL    = "https://wpjiwungum100.dpdns.org"   # 예: https://origin.cloudpress.site
+WP_ORIGIN_SECRET = "Swsh120327!"   # mu-plugin 공유 시크릿 (wrangler secret put WP_ORIGIN_SECRET)
 
 # ── 배포된 단일 Worker 설정 (worker.js) ──
 # worker.js는 별도 wrangler.worker.toml로 배포
