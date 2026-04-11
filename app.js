@@ -135,6 +135,8 @@ const CP = {
       provisioning:  { label: '구축 중', color: '#f97316' },
       installing_wp: { label: '설치 중', color: '#f97316' },
       pending:       { label: '대기 중', color: '#f97316' },
+      init:          { label: '설치 중', color: '#f97316' },
+      starting:      { label: '설치 중', color: '#f97316' },
       failed:        { label: '실패',    color: '#ef4444' },
       error:         { label: '오류',    color: '#ef4444' },
       stopped:       { label: '중지',    color: '#6b7280' },
