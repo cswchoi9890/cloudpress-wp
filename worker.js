@@ -34,15 +34,18 @@ export default {
         site = cached;
       } else {
         // D1에서 조회
+        // www_domain 컬럼이 없는 구형 DB 호환:
+        // primary_domain 으로만 조회하되, www. 접두어는 제거 후 비교
+        const lookupHost = url.hostname.replace(/^www\./, '');
         const row = await env.DB.prepare(
           `SELECT id, name, site_prefix, wp_admin_url, status, suspended, suspension_reason
            FROM sites
-           WHERE (primary_domain=? OR www_domain=?)
+           WHERE primary_domain=?
              AND status='active'
              AND (deleted_at IS NULL)
              AND suspended=0
            LIMIT 1`
-        ).bind(host, url.hostname).first();
+        ).bind(lookupHost).first();
 
         if (row) {
           site = row;
