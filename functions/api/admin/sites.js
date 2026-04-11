@@ -47,11 +47,11 @@ export async function onRequest({ request, env }) {
       const binds = [];
 
       if (search) {
-        where += ' AND (s.name LIKE ? OR u.email LIKE ? OR s.hosting_domain LIKE ?)';
+        where += ' AND (s.name LIKE ? OR u.email LIKE ? OR s.primary_domain LIKE ?)';
         binds.push(`%${search}%`, `%${search}%`, `%${search}%`);
       }
       if (status) { where += ' AND s.status=?'; binds.push(status); }
-      if (provider) { where += ' AND s.hosting_provider=?'; binds.push(provider); }
+      if (provider) { /* hosting_provider 컬럼 없음 — 무시 */ }
 
       const [totalRow, { results }] = await Promise.all([
         env.DB.prepare(`SELECT COUNT(*) as c FROM sites s JOIN users u ON s.user_id=u.id WHERE ${where}`).bind(...binds).first(),
