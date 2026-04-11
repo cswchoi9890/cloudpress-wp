@@ -20,9 +20,17 @@ CREATE TABLE IF NOT EXISTS users (
   twofa_enabled       INTEGER DEFAULT 0,
   twofa_pending_code  TEXT,
   twofa_code_expires  INTEGER,
+  cf_global_api_key   TEXT,
+  cf_account_email    TEXT,
+  cf_account_id       TEXT,
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 기존 DB 마이그레이션용 (이미 테이블이 있을 경우 실행)
+ALTER TABLE users ADD COLUMN cf_global_api_key TEXT;
+ALTER TABLE users ADD COLUMN cf_account_email TEXT;
+ALTER TABLE users ADD COLUMN cf_account_id TEXT;
 
 -- ── sessions ───────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS sessions (
