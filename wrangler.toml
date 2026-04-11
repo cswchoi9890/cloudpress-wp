@@ -1,5 +1,10 @@
-# CloudPress v11.0 — wrangler.toml
+# CloudPress v12.0 — wrangler.toml
 # Pages Functions + 단일 Worker 배포 설정
+#
+# v12 변경사항:
+#   - R2 바인딩 제거 (R2 미사용)
+#   - CF_ACCOUNT_ID / CF_API_TOKEN 환경변수 추가
+#     (Worker에서 사이트 전용 KV REST API 접근에 필요)
 
 name = "cloudpress-wp"
 compatibility_date = "2024-09-23"
@@ -7,31 +12,34 @@ compatibility_date = "2024-09-23"
 # ── Pages Functions 빌드 설정 ──
 pages_build_output_dir = "."
 
-# ── D1 Database ──
+# ── 메인 D1 Database (사용자/사이트 메타 저장) ──
 [[d1_databases]]
-binding  = "DB"
+binding       = "DB"
 database_name = "cloudpress-db"
-database_id   = "02d86436-b49f-4efa-a93b-baa90f3ee095"   # wrangler d1 create cloudpress-db 실행 후 채우기
+database_id   = "02d86436-b49f-4efa-a93b-baa90f3ee095"  # wrangler d1 create cloudpress-db
 
-# ── KV Namespace ──
-# 용도: 도메인→사이트 매핑 캐시 + 페이지 캐시 + 세션
+# ── KV: 세션 ──
 [[kv_namespaces]]
-binding   = "SESSIONS"
-id        = "9cb18ceb35d24067a124b6c05e29915f"   # wrangler kv namespace create SESSIONS 실행 후 채우기
+binding = "SESSIONS"
+id      = "9cb18ceb35d24067a124b6c05e29915f"  # wrangler kv namespace create SESSIONS
 
+# ── KV: 도메인→사이트 매핑 캐시 (전역) ──
 [[kv_namespaces]]
-binding   = "CACHE"
-id        = "e1acf814c1244a59bbc24865723e479d"   # wrangler kv namespace create CACHE 실행 후 채우기
+binding = "CACHE"
+id      = "e1acf814c1244a59bbc24865723e479d"  # wrangler kv namespace create CACHE
 
-# ── 환경 변수 (민감한 값은 wrangler secret put으로 설정) ──
+# ── 환경 변수 ──
+# 민감한 값은 반드시 wrangler secret put 으로 설정
 [vars]
-# Worker가 읽는 WP origin URL (wrangler secret put WP_ORIGIN_URL 으로 설정 권장)
-WP_ORIGIN_URL    = "https://wpjiwungum100.dpdns.org"   # 예: https://origin.cloudpress.site
-WP_ORIGIN_SECRET = "Swsh120327!"   # mu-plugin 공유 시크릿 (wrangler secret put WP_ORIGIN_SECRET)
+# WP origin 프록시 타겟 (origin에 부하 없이 Worker만 프록시)
+WP_ORIGIN_URL    = "https://wpjiwungum100.dpdns.org/"   # wrangler secret put WP_ORIGIN_URL
+WP_ORIGIN_SECRET = "Swsh120327!"   # wrangler secret put WP_ORIGIN_SECRET
 
-# ── 배포된 단일 Worker 설정 (worker.js) ──
-# worker.js는 별도 wrangler.worker.toml로 배포
-# Pages Functions와 별개로 Workers에 배포됨
+# Cloudflare 계정 정보 (사이트 전용 D1/KV REST API 접근용)
+# Worker에서 사이트별 KV 페이지 캐시 읽기/쓰기에 사용
+CF_ACCOUNT_ID = ""      # wrangler secret put CF_ACCOUNT_ID
+CF_API_TOKEN  = ""      # wrangler secret put CF_API_TOKEN
+                        # 필요 권한: D1 Read, KV Read/Write
 
 # ── 개발 환경 ──
 [dev]
