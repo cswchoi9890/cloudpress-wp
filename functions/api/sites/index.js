@@ -142,11 +142,18 @@ export async function onRequestPost({ request, env }) {
     return err('WP Origin URL이 설정되지 않았습니다. 관리자 → 설정에서 먼저 입력해주세요.', 503);
   }
 
-  // CF 설정 확인 (provision 단계에서 D1/KV 생성에 필요)
-  const cfToken   = await getSetting(env, 'cf_api_token');
-  const cfAccount = await getSetting(env, 'cf_account_id');
-  if (!cfToken || !cfAccount) {
-    return err('Cloudflare API Token과 Account ID가 설정되지 않았습니다. 관리자 → 설정을 확인해주세요.', 503);
+  // 사용자 개인 CF API Key 확인
+  const userCfRow = await env.DB.prepare(
+    'SELECT cf_global_api_key, cf_account_id FROM users WHERE id=?'
+  ).bind(user.id).first();
+
+  if (!userCfRow?.cf_global_api_key || !userCfRow?.cf_account_id) {
+    // 관리자 전역 CF 설정도 없으면 에러
+    const cfToken   = await getSetting(env, 'cf_api_token');
+    const cfAccount = await getSetting(env, 'cf_account_id');
+    if (!cfToken || !cfAccount) {
+      return err('Cloudflare API 키가 등록되지 않았습니다. 내 계정 → Cloudflare API 설정을 먼저 완료해주세요.', 503);
+    }
   }
 
   // 도메인 중복 확인
@@ -171,8 +178,10 @@ export async function onRequestPost({ request, env }) {
   const sitePrefix = genPrefix();
   const wpAdminPw  = genPw(20);
 
+  // 개인 도메인 기준 wp-admin URL (provision 완료 후에도 동일)
+  const wpAdminUrl = `https://${domain}/wp-admin/`;
+
   // DB 레코드 생성
-  // site_d1_id / site_kv_id 는 provision 단계에서 채워짐
   try {
     await env.DB.prepare(
       `INSERT INTO sites (
@@ -188,7 +197,7 @@ export async function onRequestPost({ request, env }) {
       domain, 'pending',
       sitePrefix,
       adminLogin, wpAdminPw, user.email,
-      wpOrigin.replace(/\/$/, '') + '/wp-admin',
+      wpAdminUrl,
       'pending', 'init', effectivePlan
     ).run();
   } catch (e) {
