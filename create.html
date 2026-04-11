@@ -565,14 +565,24 @@ async function startCreation() {
 
 /* provision_step → 단계 UI 매핑 */
 const STEP_MAP = {
-  'initializing':        { step: 0, msg: '초기화 중...',                                       title: '⏳ 설치 준비 중...' },
-  'wordpress_install':   { step: 1, msg: '① WordPress 설치 중 (PHP 8.3 + 한국어 + 반응형)...', title: '① WordPress 설치 중...' },
-  'cron_setup':          { step: 2, msg: '② 플러그인 설치 및 최적화 중...',                    title: '② 플러그인 설치 중...' },
-  'suspend_protection':  { step: 2, msg: '② 플러그인 설치 및 최적화 중...',                    title: '② 플러그인 설치 중...' },
-  'speed_optimization':  { step: 2, msg: '② 속도 최적화 적용 중...',                          title: '② 속도 최적화 중...' },
-  'worker_deploy':       { step: 3, msg: '③ Cloudflare Worker 배포 중...',                   title: '③ CF Worker 배포 중...' },
-  'dns_setup':           { step: 4, msg: '④ DNS 설정 및 사이트 활성화 중...',                  title: '④ 사이트 활성화 중...' },
-  'completed':           { step: 4, msg: '✅ 사이트 생성 완료!',                               title: '✅ 사이트 생성 완료!' },
+  // ── 실제 파이프라인 provision_step 값 ──
+  'init':                 { step: 1, msg: '① 초기화 중...',                               title: '⏳ 설치 준비 중...' },
+  'provisioning_account': { step: 1, msg: '① 호스팅 계정 확보 중...',                    title: '① 계정 준비 중...' },
+  'installing_wp':        { step: 2, msg: '② WordPress 설치 중 (PHP 8.3 + 한국어)...',    title: '② WordPress 설치 중...' },
+  'configuring':          { step: 2, msg: '② 공유 호스팅 환경 설정 중...',               title: '② 환경 설정 중...' },
+  'cloning_site':         { step: 2, msg: '② 사이트 복제 중...',                         title: '② 사이트 복제 중...' },
+  'cloudflare_setup':     { step: 3, msg: '③ Cloudflare CDN 연동 중...',                title: '③ CDN 설정 중...' },
+  'optimizing':           { step: 3, msg: '③ 속도 최적화 적용 중...',                   title: '③ 속도 최적화 중...' },
+  'completed':            { step: 4, msg: '✅ 사이트 생성 완료!',                         title: '✅ 사이트 생성 완료!' },
+  'pipeline_error':       { step: 1, msg: '❌ 파이프라인 오류',                           title: '❌ 오류 발생' },
+  // ── 레거시 값 호환 ──
+  'initializing':         { step: 1, msg: '① 초기화 중...',                              title: '⏳ 설치 준비 중...' },
+  'wordpress_install':    { step: 2, msg: '② WordPress 설치 중...',                      title: '② WordPress 설치 중...' },
+  'cron_setup':           { step: 3, msg: '③ 플러그인 설치 및 최적화 중...',             title: '③ 플러그인 설치 중...' },
+  'suspend_protection':   { step: 3, msg: '③ 보호 설정 중...',                          title: '③ 보호 설정 중...' },
+  'speed_optimization':   { step: 3, msg: '③ 속도 최적화 적용 중...',                   title: '③ 속도 최적화 중...' },
+  'worker_deploy':        { step: 4, msg: '④ Cloudflare Worker 배포 중...',             title: '④ CF Worker 배포 중...' },
+  'dns_setup':            { step: 4, msg: '④ DNS 설정 및 사이트 활성화 중...',           title: '④ 사이트 활성화 중...' },
 };
 
 function updateProvisionSteps(provisionStep, status) {
@@ -636,11 +646,15 @@ function startPolling(siteId) {
 
       if (provStep !== prevProvisionStep) {
         prevProvisionStep = provStep;
-        if (provStep === 'wordpress_install') addLog('📦 [1/4] WordPress 설치 중... (PHP 8.3 + 한국어 + 반응형)');
-        if (provStep === 'cron_setup')        addLog('🔧 [2/4] 플러그인 및 환경 설정 중...');
-        if (provStep === 'speed_optimization') addLog('⚡ [2/4] 속도 최적화 적용 중...');
-        if (provStep === 'worker_deploy')     addLog('☁️ [3/4] Cloudflare Worker 배포 중 (' + WD.personalDomain + ')...');
-        if (provStep === 'dns_setup')         addLog('🌐 [4/4] DNS 레코드 설정 및 사이트 활성화 중...');
+        if (provStep === 'provisioning_account') addLog('🔑 [1/4] 호스팅 계정 슬롯 확보 중...');
+        if (provStep === 'installing_wp')        addLog('📦 [2/4] WordPress 설치 중... (PHP 8.3 + 한국어)');
+        if (provStep === 'configuring')          addLog('🔧 [2/4] 공유 호스팅 환경 설정 중...');
+        if (provStep === 'cloudflare_setup')     addLog('☁️ [3/4] Cloudflare CDN 연동 중...');
+        if (provStep === 'optimizing')           addLog('⚡ [3/4] 속도 최적화 적용 중...');
+        if (provStep === 'completed')            addLog('✅ [4/4] 사이트 생성 완료!');
+        if (provStep === 'wordpress_install')    addLog('📦 [2/4] WordPress 설치 중...');
+        if (provStep === 'worker_deploy')        addLog('☁️ [3/4] Cloudflare Worker 배포 중...');
+        if (provStep === 'dns_setup')            addLog('🌐 [4/4] DNS 설정 및 사이트 활성화 중...');
         if (site.error_message && status !== 'failed') addLog('⚠️ ' + site.error_message);
       }
 
