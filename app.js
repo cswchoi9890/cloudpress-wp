@@ -5,15 +5,23 @@ const CP = {
   TOKEN_KEY: 'cp_token',
   USER_KEY:  'cp_user',
 
-  getToken() { return localStorage.getItem(this.TOKEN_KEY); },
-  setToken(t) { localStorage.setItem(this.TOKEN_KEY, t); },
+  getToken() {
+    try { return localStorage.getItem(this.TOKEN_KEY); } catch { return null; }
+  },
+  setToken(t) {
+    try { localStorage.setItem(this.TOKEN_KEY, t); } catch {}
+  },
   getUser() {
     try { return JSON.parse(localStorage.getItem(this.USER_KEY) || 'null'); } catch { return null; }
   },
-  setUser(u) { localStorage.setItem(this.USER_KEY, JSON.stringify(u)); },
+  setUser(u) {
+    try { localStorage.setItem(this.USER_KEY, JSON.stringify(u)); } catch {}
+  },
   clearAuth() {
-    localStorage.removeItem(this.TOKEN_KEY);
-    localStorage.removeItem(this.USER_KEY);
+    try {
+      localStorage.removeItem(this.TOKEN_KEY);
+      localStorage.removeItem(this.USER_KEY);
+    } catch {}
   },
 
   async api(path, opts = {}) {
@@ -28,7 +36,7 @@ const CP = {
     });
     let data;
     try { data = await res.json(); } catch { data = { ok: false, error: '서버 오류' }; }
-    if (res.status === 401) { this.clearAuth(); const _p=window.location.pathname; if(!['/auth','/auth.html','/login','/signup','/register'].some(x=>_p.startsWith(x))) window.location.href = '/auth.html'; }
+    if (res.status === 401) { this.clearAuth(); this._redirectToLogin(); }
     return data;
   },
 
@@ -54,12 +62,22 @@ const CP = {
     this.clearAuth();
     window.location.href = '/';
   },
+  _isAuthPage() {
+    const p = window.location.pathname;
+    return ['/auth', '/auth.html', '/login', '/signup', '/register'].some(x => p.startsWith(x));
+  },
+  _redirectToLogin() {
+    if (this._isAuthPage()) return;
+    // 현재 URL을 returnTo 파라미터로 전달해 로그인 후 복귀 가능하게
+    const returnTo = encodeURIComponent(window.location.pathname + window.location.search);
+    window.location.href = '/auth.html?returnTo=' + returnTo;
+  },
   async requireAuth() {
-    if (!this.getToken()) { const _p=window.location.pathname; if(!['/auth','/auth.html','/login','/signup','/register'].some(x=>_p.startsWith(x))) window.location.href = '/auth.html'; return null; }
+    if (!this.getToken()) { this._redirectToLogin(); return null; }
     const cached = this.getUser();
     if (cached) return cached;
     const d = await this.get('/auth/me');
-    if (!d.ok) { this.clearAuth(); const _p=window.location.pathname; if(!['/auth','/auth.html','/login','/signup','/register'].some(x=>_p.startsWith(x))) window.location.href = '/auth.html'; return null; }
+    if (!d.ok) { this.clearAuth(); this._redirectToLogin(); return null; }
     this.setUser(d.user);
     return d.user;
   },
