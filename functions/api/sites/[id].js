@@ -74,8 +74,10 @@ export async function onRequest({ request, env, params }) {
 
   // DELETE
   if (request.method === 'DELETE') {
+    const cfToken   = await getSetting(env, 'cf_api_token');
+    const cfAccount = await getSetting(env, 'cf_account_id');
+
     // 1. CF Worker Route 삭제
-    const cfToken = await getSetting(env, 'cf_api_token');
     if (cfToken && site.cf_zone_id) {
       const deleteRoute = async (routeId) => {
         if (!routeId) return;
@@ -88,22 +90,27 @@ export async function onRequest({ request, env, params }) {
       await deleteRoute(site.worker_route_www_id);
     }
 
-    // 2. KV 캐시 삭제
+    // 2. 전역 CACHE KV 도메인 매핑 삭제
     try {
       await env.CACHE.delete(`site_domain:${site.primary_domain}`);
-      await env.CACHE.delete(`site_domain:${`www.${site.primary_domain}`}`);
+      await env.CACHE.delete(`site_domain:www.${site.primary_domain}`);
       await env.CACHE.delete(`site_prefix:${site.site_prefix}`);
     } catch (_) {}
 
-    // 3. WP origin 테이블 삭제 요청
-    const wpOrigin = await getSetting(env, 'wp_origin_url');
-    const wpSecret = await getSetting(env, 'wp_origin_secret');
-    if (wpOrigin) {
-      fetch(wpOrigin.replace(/\/$/, '') + '/wp-json/cloudpress/v1/delete-site', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json', 'X-CloudPress-Secret': wpSecret },
-        body: JSON.stringify({ site_prefix: site.site_prefix }),
-      }).catch(() => {});
+    // 3. 사이트 전용 D1 / KV 리소스 삭제 (CF API, 비동기)
+    if (cfToken && cfAccount) {
+      if (site.site_d1_id) {
+        fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/d1/database/${site.site_d1_id}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': 'Bearer ' + cfToken },
+        }).catch(() => {});
+      }
+      if (site.site_kv_id) {
+        fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/storage/kv/namespaces/${site.site_kv_id}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': 'Bearer ' + cfToken },
+        }).catch(() => {});
+      }
     }
 
     // 4. DB soft delete
