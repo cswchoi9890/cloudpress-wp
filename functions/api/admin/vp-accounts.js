@@ -1,5 +1,6 @@
 // functions/api/admin/vp-accounts.js
-// VP 계정 관리 API — v9.0: clone_zip_url 불필요 (PHP installer 자동 설치)
+// VP 계정 관리 API — v9.1: wp_download_url (공식 WP 다운로드 링크)
+// clone_zip_url 완전 제거 → wp_download_url (선택 입력, 비어 있으면 자동 공식 링크 사용)
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -30,6 +31,40 @@ function genId() {
   return 'vp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+// wp_download_url 유효성 검사 (선택 필드)
+// 비어 있으면 → 공식 링크 자동 사용
+// 입력 시 → wordpress.org 공식 다운로드 링크만 허용
+function validateWpDownloadUrl(url) {
+  if (!url || !url.trim()) return { ok: true, value: null }; // 비어 있으면 자동 처리
+  const u = url.trim();
+  if (!u.startsWith('https://')) return { ok: false, error: 'URL은 https://로 시작해야 합니다.' };
+  // 공식 WP 다운로드 도메인만 허용
+  const allowedDomains = [
+    'wordpress.org',
+    'downloads.wordpress.org',
+    'ko.wordpress.org',
+  ];
+  try {
+    const parsed = new URL(u);
+    if (!allowedDomains.some(d => parsed.hostname === d || parsed.hostname.endsWith('.' + d))) {
+      return { ok: false, error: '공식 WordPress 다운로드 링크만 사용 가능합니다. (wordpress.org 또는 downloads.wordpress.org)' };
+    }
+    if (!u.endsWith('.zip')) {
+      return { ok: false, error: 'WordPress .zip 다운로드 링크를 입력해주세요. (예: https://wordpress.org/latest.zip)' };
+    }
+  } catch {
+    return { ok: false, error: '올바른 URL 형식이 아닙니다.' };
+  }
+  return { ok: true, value: u };
+}
+
+// DB 컬럼 마이그레이션 (clone_zip_url → wp_download_url 추가)
+async function ensureWpDownloadUrlColumn(DB) {
+  try {
+    await DB.prepare(`ALTER TABLE vp_accounts ADD COLUMN wp_download_url TEXT`).run();
+  } catch (_) {}
+}
+
 export const onRequestOptions = () => new Response(null, { status: 204, headers: CORS });
 
 // GET — VP 계정 목록
@@ -37,10 +72,12 @@ export async function onRequestGet({ request, env }) {
   const admin = await requireAdmin(env, request);
   if (!admin) return err('관리자 권한이 필요합니다.', 403);
 
+  await ensureWpDownloadUrlColumn(env.DB);
+
   try {
     const { results } = await env.DB.prepare(
       `SELECT id, label, vp_username, panel_url, server_domain, web_root,
-              php_bin, mysql_host, clone_zip_url, max_sites, current_sites,
+              php_bin, mysql_host, wp_download_url, max_sites, current_sites,
               is_active, created_at, updated_at
        FROM vp_accounts
        ORDER BY created_at DESC`
@@ -56,27 +93,23 @@ export async function onRequestPost({ request, env }) {
   const admin = await requireAdmin(env, request);
   if (!admin) return err('관리자 권한이 필요합니다.', 403);
 
+  await ensureWpDownloadUrlColumn(env.DB);
+
   let body;
   try { body = await request.json(); } catch { return err('요청 형식 오류'); }
 
   const { label, vp_username, vp_password, panel_url, server_domain,
-          web_root, php_bin, mysql_host, clone_zip_url, max_sites } = body;
+          web_root, php_bin, mysql_host, wp_download_url, max_sites } = body;
 
   if (!label?.trim())         return err('계정 레이블을 입력해주세요.');
   if (!vp_username?.trim())   return err('VP 사용자명을 입력해주세요.');
   if (!vp_password?.trim())   return err('VP 비밀번호를 입력해주세요.');
   if (!panel_url?.trim())     return err('패널 URL을 입력해주세요.');
   if (!server_domain?.trim()) return err('서버 도메인을 입력해주세요.');
-  if (!clone_zip_url?.trim()) return err('복제 압축 파일 URL을 입력해주세요.');
 
-  // GitHub Raw URL 형식 검증 (.zip / .7z 지원)
-  const zipUrl = clone_zip_url.trim();
-  if (!zipUrl.startsWith('http://') && !zipUrl.startsWith('https://')) {
-    return err('올바른 URL 형식이 아닙니다. (https://... 로 시작해야 합니다)');
-  }
-  if (!/\.(zip|7z)(\?.*)?$/i.test(zipUrl)) {
-    return err('지원하지 않는 파일 형식입니다. (.zip 또는 .7z 파일 URL을 입력해주세요)');
-  }
+  // wp_download_url 검증 (선택)
+  const urlCheck = validateWpDownloadUrl(wp_download_url);
+  if (!urlCheck.ok) return err(urlCheck.error);
 
   const vpId = genId();
 
@@ -84,7 +117,7 @@ export async function onRequestPost({ request, env }) {
     await env.DB.prepare(
       `INSERT INTO vp_accounts (
         id, label, vp_username, vp_password, panel_url, server_domain,
-        web_root, php_bin, mysql_host, clone_zip_url, max_sites,
+        web_root, php_bin, mysql_host, wp_download_url, max_sites,
         current_sites, is_active, created_at, updated_at
       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,datetime('now'),datetime('now'))`
     ).bind(
@@ -97,7 +130,7 @@ export async function onRequestPost({ request, env }) {
       web_root?.trim() || '/htdocs',
       php_bin?.trim() || 'php8.3',
       mysql_host?.trim() || 'localhost',
-      zipUrl,
+      urlCheck.value,
       parseInt(max_sites, 10) || 50
     ).run();
 
@@ -112,44 +145,45 @@ export async function onRequestPut({ request, env }) {
   const admin = await requireAdmin(env, request);
   if (!admin) return err('관리자 권한이 필요합니다.', 403);
 
+  await ensureWpDownloadUrlColumn(env.DB);
+
   let body;
   try { body = await request.json(); } catch { return err('요청 형식 오류'); }
 
   const { id, label, vp_username, vp_password, panel_url, server_domain,
-          web_root, php_bin, mysql_host, clone_zip_url, max_sites, is_active } = body;
+          web_root, php_bin, mysql_host, wp_download_url, max_sites, is_active } = body;
 
   if (!id) return err('계정 ID가 필요합니다.');
 
   const existing = await env.DB.prepare('SELECT id FROM vp_accounts WHERE id=?').bind(id).first();
   if (!existing) return err('존재하지 않는 VP 계정입니다.', 404);
 
-  // clone_zip_url URL 형식 검증 (.zip / .7z 지원)
-  if (clone_zip_url !== undefined && clone_zip_url !== null && clone_zip_url.trim()) {
-    const zipUrl = clone_zip_url.trim();
-    if (!zipUrl.startsWith('http://') && !zipUrl.startsWith('https://')) {
-      return err('올바른 URL 형식이 아닙니다. (https://... 로 시작해야 합니다)');
-    }
-    if (!/\.(zip|7z)(\?.*)?$/i.test(zipUrl)) {
-      return err('지원하지 않는 파일 형식입니다. (.zip 또는 .7z 파일 URL을 입력해주세요)');
-    }
+  // wp_download_url 검증 (수정 시)
+  if (wp_download_url !== undefined) {
+    const urlCheck = validateWpDownloadUrl(wp_download_url);
+    if (!urlCheck.ok) return err(urlCheck.error);
   }
 
   try {
     const updates = [];
     const values = [];
 
-    if (label !== undefined)        { updates.push('label=?');         values.push(label.trim()); }
-    if (vp_username !== undefined)  { updates.push('vp_username=?');   values.push(vp_username.trim()); }
+    if (label !== undefined)          { updates.push('label=?');           values.push(label.trim()); }
+    if (vp_username !== undefined)    { updates.push('vp_username=?');     values.push(vp_username.trim()); }
     if (vp_password !== undefined && vp_password.trim()) {
-                                      updates.push('vp_password=?');   values.push(vp_password.trim()); }
-    if (panel_url !== undefined)    { updates.push('panel_url=?');     values.push(panel_url.trim()); }
-    if (server_domain !== undefined){ updates.push('server_domain=?'); values.push(server_domain.trim()); }
-    if (web_root !== undefined)     { updates.push('web_root=?');      values.push(web_root?.trim() || '/htdocs'); }
-    if (php_bin !== undefined)      { updates.push('php_bin=?');       values.push(php_bin?.trim() || 'php8.3'); }
-    if (mysql_host !== undefined)   { updates.push('mysql_host=?');    values.push(mysql_host?.trim() || 'localhost'); }
-    if (clone_zip_url !== undefined){ updates.push('clone_zip_url=?'); values.push(clone_zip_url?.trim() || null); }
-    if (max_sites !== undefined)    { updates.push('max_sites=?');     values.push(parseInt(max_sites, 10) || 50); }
-    if (is_active !== undefined)    { updates.push('is_active=?');     values.push(is_active ? 1 : 0); }
+                                        updates.push('vp_password=?');     values.push(vp_password.trim()); }
+    if (panel_url !== undefined)      { updates.push('panel_url=?');       values.push(panel_url.trim()); }
+    if (server_domain !== undefined)  { updates.push('server_domain=?');   values.push(server_domain.trim()); }
+    if (web_root !== undefined)       { updates.push('web_root=?');        values.push(web_root?.trim() || '/htdocs'); }
+    if (php_bin !== undefined)        { updates.push('php_bin=?');         values.push(php_bin?.trim() || 'php8.3'); }
+    if (mysql_host !== undefined)     { updates.push('mysql_host=?');      values.push(mysql_host?.trim() || 'localhost'); }
+    if (wp_download_url !== undefined){ 
+      const urlCheck = validateWpDownloadUrl(wp_download_url);
+      updates.push('wp_download_url=?');
+      values.push(urlCheck.value);
+    }
+    if (max_sites !== undefined)      { updates.push('max_sites=?');       values.push(parseInt(max_sites, 10) || 50); }
+    if (is_active !== undefined)      { updates.push('is_active=?');       values.push(is_active ? 1 : 0); }
 
     if (updates.length === 0) return ok({ message: '변경사항 없음' });
 
