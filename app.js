@@ -131,12 +131,17 @@ const CP = {
   },
   statusBadge(s) {
     const m = {
-      active:       { label: '활성',    color: '#22c55e' },
-      provisioning: { label: '구축 중', color: '#f97316' },
-      error:        { label: '오류',    color: '#ef4444' },
-      stopped:      { label: '중지',    color: '#6b7280' },
+      active:        { label: '활성',    color: '#22c55e' },
+      provisioning:  { label: '구축 중', color: '#f97316' },
+      installing_wp: { label: '설치 중', color: '#f97316' },
+      pending:       { label: '대기 중', color: '#f97316' },
+      failed:        { label: '실패',    color: '#ef4444' },
+      error:         { label: '오류',    color: '#ef4444' },
+      stopped:       { label: '중지',    color: '#6b7280' },
+      suspended:     { label: '정지됨',  color: '#6b7280' },
+      deleted:       { label: '삭제됨',  color: '#6b7280' },
     };
-    return m[s] || m.stopped;
+    return m[s] || { label: s || '알 수 없음', color: '#6b7280' };
   },
   roleName(r) {
     return { admin: '어드민', manager: '매니저', user: '일반' }[r] || r;
