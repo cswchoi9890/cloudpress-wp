@@ -911,7 +911,13 @@ export async function onRequestPost({ request, env, ctx }) {
       });
     });
 
-  if (ctx?.waitUntil) ctx.waitUntil(pipelinePromise);
+  // ctx.waitUntil이 있으면 사용, 없으면 직접 실행 (응답 후에도 계속 실행)
+  if (ctx?.waitUntil) {
+    ctx.waitUntil(pipelinePromise);
+  } else {
+    // waitUntil 없는 환경: Promise를 detach하여 백그라운드 실행
+    pipelinePromise.catch(() => {});
+  }
 
   return ok({
     siteId,
