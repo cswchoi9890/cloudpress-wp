@@ -370,7 +370,12 @@ async function changePw(){
   if(r.ok){document.getElementById('curPw').value='';document.getElementById('newPw').value='';document.getElementById('newPw2').value='';showToast('비밀번호 변경 완료','success');}
   else{e.textContent=r.error||'실패';e.style.display='';}
 }
-init();
+// DOM이 완전히 로드된 후 init 실행 (app.js 의존성 보장)
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
 </script>
 </body>
 </html>
