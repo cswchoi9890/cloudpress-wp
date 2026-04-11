@@ -234,40 +234,10 @@
               </div>
             </div>
 
-            <!-- Cloudflare API -->
-            <div class="cf-section">
-              <div class="cf-section-title">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" stroke-width="1.5"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5" stroke="currentColor" stroke-width="1.5"/></svg>
-                Cloudflare 연동 (필수)
-              </div>
-              <div class="info-box">
-                <strong>왜 필요한가요?</strong><br>
-                입력하신 개인 도메인에 <strong>Cloudflare Worker</strong>를 자동 배포합니다. 이 워커가 개인 도메인 ↔ 실제 WordPress 서버를 투명하게 연결하여, 크론잡·관리자 페이지·모든 기능이 개인 도메인에서 완벽히 동작합니다.<br><br>
-                <strong>Global API Key 위치:</strong> Cloudflare 대시보드 → 프로필 → API 토큰 → Global API Key
-              </div>
-              <div class="field">
-                <label>Cloudflare 계정 이메일 <span style="color:var(--error)">*</span></label>
-                <input type="email" id="cfEmail" placeholder="your@email.com" autocomplete="off"/>
-              </div>
-              <div class="field">
-                <label>Cloudflare Global API Key <span style="color:var(--error)">*</span></label>
-                <div class="pw-wrap">
-                  <input type="password" class="pw-inp" id="cfApiKey" placeholder="Global API Key (40자 영숫자)" autocomplete="off"/>
-                  <button class="eye-btn" onclick="toggleCfKey()" title="보기/숨기기">
-                    <svg id="cfKeyEye" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/></svg>
-                  </button>
-                </div>
-                <div class="hint">Cloudflare 프로필 → API 토큰 → Global API Key에서 복사</div>
-              </div>
-              <div class="field" style="margin-bottom:0">
-                <label>Cloudflare Account ID <span style="color:var(--error)">*</span></label>
-                <input type="text" id="cfAccountId" placeholder="32자리 Account ID" autocomplete="off" spellcheck="false"/>
-                <div class="hint">Cloudflare 대시보드 우측 사이드바 → Account ID</div>
-              </div>
-            </div>
-
-            <div class="warn-box">
-              ⚠️ <strong>보안 안내:</strong> API 키는 사이트 생성 시 Cloudflare Worker 배포에만 사용되며, 서버에 저장되지 않습니다. 생성 후 즉시 폐기됩니다.
+            <div class="info-box">
+              ☁️ <strong>Cloudflare Worker가 자동으로 연결됩니다.</strong><br>
+              별도의 API 키 입력 없이 서버 관리자가 미리 설정한 Worker가 개인 도메인과 자동으로 연결됩니다.<br>
+              도메인 DNS에서 CNAME 레코드만 Worker 주소로 지정하면 완료됩니다.
             </div>
 
             <div id="errMsg2" style="display:none;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:12px;font-size:.85rem;color:var(--error);margin-bottom:16px"></div>
@@ -282,48 +252,39 @@
           </div>
         </div>
 
-        <!-- ════ Step 3: 설치 진행 ════ -->
+        <!-- ════ Step 3: 인프라 구성 중 ════ -->
         <div id="step3" style="display:none">
           <div class="card" style="padding:32px;text-align:center">
             <div class="spin"></div>
-            <h3 style="font-family:var(--font-head);font-size:1.05rem;font-weight:700;margin-bottom:8px" id="progressTitle">WordPress 설치 준비 중...</h3>
-            <p style="color:var(--muted);font-size:.85rem" id="progressDesc">개인 도메인과 Cloudflare Worker를 설정하고 WordPress를 설치합니다.<br><small style="opacity:.7">다른 탭으로 이동해도 설치가 계속 진행됩니다.</small></p>
-
-            <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin:12px 0">
-              <span class="spec-badge php">PHP 8.3</span>
-              <span class="spec-badge wp">WP 최신</span>
-              <span class="spec-badge tz">KST</span>
-              <span class="spec-badge mysql" style="background:rgba(249,115,22,.1);color:#ea580c">CF Worker</span>
-              <span class="spec-badge wp" style="background:rgba(16,185,129,.1);color:#059669">개인도메인</span>
-            </div>
+            <h3 style="font-family:var(--font-head);font-size:1.05rem;font-weight:700;margin-bottom:8px" id="progressTitle">인프라 구성 중...</h3>
+            <p style="color:var(--muted);font-size:.85rem;margin-bottom:16px" id="progressDesc">Cloudflare Worker · D1 · KV를 설정하고 도메인을 연결합니다.<br><small style="opacity:.7">다른 탭으로 이동해도 계속 진행됩니다.</small></p>
 
             <div style="margin:16px 0;text-align:left">
               <div class="provision-step" id="pstep1">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">1단계: 인스톨러 업로드 + PHP 환경 확인</span>
+                <span class="pstep-name">1단계: 사이트 전용 D1 데이터베이스 생성</span>
               </div>
               <div class="provision-step" id="pstep2">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">2단계: WordPress 다운로드 + 설정 파일 생성</span>
+                <span class="pstep-name">2단계: 사이트 전용 KV 네임스페이스 생성</span>
               </div>
               <div class="provision-step" id="pstep3">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">3단계: DB 설치 + 플러그인 (breeze 등) 적용</span>
+                <span class="pstep-name">3단계: 도메인 → 사이트 KV 매핑 저장</span>
               </div>
               <div class="provision-step" id="pstep4">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">4단계: 최종 설정 (cron, permalink, KST) + 활성화</span>
+                <span class="pstep-name">4단계: CF DNS + Worker Route 등록</span>
               </div>
             </div>
 
             <div class="status-polling">
-              <div class="pulse-dot"></div>
-              <span id="statusText">WordPress 설치 중... (약 5~10분 소요)</span>
+              <div class="pulse-dot" style="width:8px;height:8px;border-radius:50%;background:var(--accent);flex-shrink:0;animation:pulse 1.2s ease-in-out infinite"></div>
+              <span id="statusText">인프라 구성 중... (보통 30초 이내 완료)</span>
             </div>
 
             <div class="log" id="logBox">
-              <div class="cur">▶ 사이트 생성 요청 전송됨</div>
-              <div class="cur">▶ WordPress 설치 준비 중...</div>
+              <div class="cur">▶ 사이트 레코드 생성됨</div>
             </div>
           </div>
         </div>
@@ -334,13 +295,13 @@
             <div class="success-icon">
               <svg width="36" height="36" viewBox="0 0 24 24" fill="none"><polyline points="20 6 9 17 4 12" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </div>
-            <h3 style="font-family:var(--font-head);font-size:1.15rem;font-weight:700;margin-bottom:6px">WordPress 설치 완료! 🎉</h3>
-            <p style="color:var(--muted);font-size:.85rem;margin-bottom:24px" id="successDesc">WordPress가 성공적으로 설치되었습니다.</p>
+            <h3 style="font-family:var(--font-head);font-size:1.15rem;font-weight:700;margin-bottom:6px">사이트 구성 완료! 🎉</h3>
+            <p style="color:var(--muted);font-size:.85rem;margin-bottom:24px" id="successDesc">Cloudflare 인프라가 성공적으로 구성되었습니다.</p>
 
             <div style="display:flex;gap:10px;justify-content:center;margin-bottom:28px;flex-wrap:wrap">
               <a id="wpSiteLink" href="#" target="_blank" class="wp-link">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M2 12h20" stroke="currentColor" stroke-width="1.5"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" stroke="currentColor" stroke-width="1.5"/></svg>
-                내 WordPress 사이트 방문
+                내 사이트 방문
               </a>
               <a id="wpAdminLink" href="#" target="_blank" class="wp-link wp-link-admin">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>
@@ -349,9 +310,9 @@
             </div>
 
             <div style="background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:18px;text-align:left;margin-bottom:20px">
-              <div style="font-size:.82rem;font-weight:700;color:var(--muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">WordPress 로그인 정보</div>
+              <div style="font-size:.82rem;font-weight:700;color:var(--muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">사이트 접속 정보</div>
               <div class="cred-row">
-                <div class="cred-label">🌐 개인 도메인</div>
+                <div class="cred-label">🌐 내 도메인</div>
                 <div class="cred-val" id="credPersonalDomain">—</div>
                 <button class="copy-btn" onclick="copyText('credPersonalDomain')">복사</button>
               </div>
@@ -361,56 +322,40 @@
                 <button class="copy-btn" onclick="copyText('credAdminUrl')">복사</button>
               </div>
               <div class="cred-row">
-                <div class="cred-label">👤 아이디</div>
+                <div class="cred-label">👤 관리자 아이디</div>
                 <div class="cred-val" id="credUser">—</div>
                 <button class="copy-btn" onclick="copyText('credUser')">복사</button>
               </div>
               <div class="cred-row">
-                <div class="cred-label">🔑 비밀번호</div>
+                <div class="cred-label">🔑 관리자 비밀번호</div>
                 <div class="pw-wrap">
                   <input type="password" class="pw-inp" id="credPw" readonly/>
-                  <button class="eye-btn" onclick="togglePw()" title="보기/숨기기">
-                    <svg id="eyeIco" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/></svg>
+                  <button class="eye-btn" onclick="togglePw()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/></svg>
                   </button>
                   <button class="copy-btn" onclick="copyText('credPw', true)">복사</button>
                 </div>
               </div>
               <div class="cred-row">
-                <div class="cred-label">☁️ CF Worker</div>
+                <div class="cred-label">🗄️ D1 DB ID</div>
+                <div class="cred-val" id="credD1">—</div>
+              </div>
+              <div class="cred-row">
+                <div class="cred-label">⚡ KV ID</div>
+                <div class="cred-val" id="credKV">—</div>
+              </div>
+              <div class="cred-row">
+                <div class="cred-label">☁️ Worker</div>
                 <div class="cred-val" id="credWorker">—</div>
-              </div>
-              <div class="cred-row">
-                <div class="cred-label">⚡ PHP 버전</div>
-                <div class="cred-val" id="credPhp">PHP 8.3 ✅</div>
-              </div>
-              <div class="cred-row">
-                <div class="cred-label">📦 WP 버전</div>
-                <div class="cred-val" id="credWpVer">최신 (한국어) ✅</div>
-              </div>
-              <div class="cred-row">
-                <div class="cred-label">🕐 서버 시간</div>
-                <div class="cred-val">Asia/Seoul (KST, UTC+9) ✅</div>
-              </div>
-              <div class="cred-row">
-                <div class="cred-label">⏰ Cron Job</div>
-                <div class="cred-val" id="credCron">✅ 활성화됨</div>
-              </div>
-              <div class="cred-row">
-                <div class="cred-label">🚀 속도 최적화</div>
-                <div class="cred-val" id="credSpeed">—</div>
-              </div>
-              <div class="cred-row">
-                <div class="cred-label">🗄️ 데이터 저장</div>
-                <div class="cred-val">Cloudflare D1 + KV ✅</div>
               </div>
             </div>
 
             <div class="warn-box" style="text-align:left;margin-bottom:16px">
-              ⚠️ <strong>중요:</strong> 위 비밀번호를 안전한 곳에 저장하세요. 대시보드에서도 언제든지 확인할 수 있습니다.
+              ⚠️ <strong>중요:</strong> 관리자 비밀번호를 안전한 곳에 저장하세요. 대시보드에서도 언제든지 확인할 수 있습니다.
             </div>
 
-            <div class="info-box" style="text-align:left;margin-bottom:20px">
-              🌐 <strong>DNS 전파 안내:</strong> 개인 도메인이 완전히 적용되려면 DNS 전파에 최대 48시간이 소요될 수 있습니다. 보통 1~2시간 내 접속 가능합니다.
+            <div class="info-box" style="text-align:left;margin-bottom:20px" id="dnsNotice">
+              🌐 <strong>DNS 전파 안내:</strong> 도메인이 완전히 적용되려면 최대 48시간이 소요될 수 있습니다. 보통 1~2시간 내 접속 가능합니다.
             </div>
 
             <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
@@ -420,7 +365,7 @@
           </div>
         </div>
 
-        <!-- 실패 상태 -->
+                <!-- 실패 상태 -->
         <div id="stepFail" style="display:none">
           <div class="card" style="padding:32px;text-align:center">
             <div style="width:76px;height:76px;border-radius:50%;background:rgba(239,68,68,.1);border:2px solid rgba(239,68,68,.25);display:flex;align-items:center;justify-content:center;margin:0 auto 20px">
@@ -442,32 +387,25 @@
 
 <script src="app.js"></script>
 <script>
-/* ── 상태 변수 ── */
+/* ── 상태 ── */
 let currentSiteId = null;
 let pollInterval  = null;
-// 위저드 데이터
-const WD = {
-  siteName: '', adminLogin: '',
-  personalDomain: '', cfEmail: '', cfApiKey: '', cfAccountId: ''
-};
+const WD = { siteName: '', adminLogin: '', personalDomain: '' };
 
-/* ══════════════════════════════════════════
-   Step 이동
-══════════════════════════════════════════ */
+/* ── 스텝 이동 ── */
 function goStep(n) {
   ['step1','step2','step3','step4','stepFail'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   });
-  const target = document.getElementById('step' + n);
-  if (target) target.style.display = '';
-
+  const t = document.getElementById('step' + n);
+  if (t) t.style.display = '';
   for (let i = 1; i <= 4; i++) {
     const el = document.getElementById('s' + i + 'i');
     if (!el) continue;
-    if (i < n) el.className = 'stp done';
+    if (i < n)      el.className = 'stp done';
     else if (i === n) el.className = 'stp active';
-    else el.className = 'stp';
+    else            el.className = 'stp';
   }
 }
 
@@ -476,11 +414,9 @@ function goToStep2() {
   const adminLogin = document.getElementById('adminLogin').value.trim();
   const errEl      = document.getElementById('errMsg1');
   errEl.style.display = 'none';
-
-  if (!siteName)                            { errEl.textContent = '사이트 이름을 입력해주세요.'; errEl.style.display = ''; return; }
-  if (!adminLogin || adminLogin.length < 3) { errEl.textContent = '관리자 아이디는 3자 이상 입력해주세요.'; errEl.style.display = ''; return; }
-  if (!/^[a-zA-Z0-9_]+$/.test(adminLogin)) { errEl.textContent = '관리자 아이디는 영문/숫자/언더바만 사용 가능합니다.'; errEl.style.display = ''; return; }
-
+  if (!siteName)                             { errEl.textContent = '사이트 이름을 입력해주세요.';             errEl.style.display = ''; return; }
+  if (!adminLogin || adminLogin.length < 3)  { errEl.textContent = '관리자 아이디는 3자 이상 입력해주세요.'; errEl.style.display = ''; return; }
+  if (!/^[a-zA-Z0-9_]+$/.test(adminLogin))  { errEl.textContent = '관리자 아이디는 영문/숫자/언더바만 사용 가능합니다.'; errEl.style.display = ''; return; }
   WD.siteName   = siteName;
   WD.adminLogin = adminLogin;
   goStep(2);
@@ -491,35 +427,23 @@ function toggleCfKey() {
   inp.type = inp.type === 'password' ? 'text' : 'password';
 }
 
-/* ══════════════════════════════════════════
-   사이트 생성 시작
-══════════════════════════════════════════ */
+/* ── 사이트 생성 시작 ── */
 async function startCreation() {
   const personalDomain = document.getElementById('personalDomain').value.trim().toLowerCase()
     .replace(/^https?:\/\//, '').replace(/\/$/, '');
-  const cfEmail     = document.getElementById('cfEmail').value.trim();
-  const cfApiKey    = document.getElementById('cfApiKey').value.trim();
-  const cfAccountId = document.getElementById('cfAccountId').value.trim();
-  const errEl       = document.getElementById('errMsg2');
+  const errEl = document.getElementById('errMsg2');
   errEl.style.display = 'none';
 
   if (!personalDomain) { errEl.textContent = '개인 도메인을 입력해주세요.'; errEl.style.display = ''; return; }
   if (!/^[a-z0-9\-\.]+\.[a-z]{2,}$/.test(personalDomain)) { errEl.textContent = '올바른 도메인 형식이 아닙니다. (예: myblog.com)'; errEl.style.display = ''; return; }
-  if (!cfEmail || !/^[^@]+@[^@]+\.[^@]+$/.test(cfEmail)) { errEl.textContent = 'Cloudflare 계정 이메일을 올바르게 입력해주세요.'; errEl.style.display = ''; return; }
-  if (!cfApiKey || cfApiKey.length < 30) { errEl.textContent = 'Cloudflare Global API Key를 입력해주세요. (최소 30자)'; errEl.style.display = ''; return; }
-  if (!cfAccountId || cfAccountId.length < 20) { errEl.textContent = 'Cloudflare Account ID를 입력해주세요. (32자리)'; errEl.style.display = ''; return; }
 
   WD.personalDomain = personalDomain;
-  WD.cfEmail        = cfEmail;
-  WD.cfApiKey       = cfApiKey;
-  WD.cfAccountId    = cfAccountId;
-
   document.getElementById('createBtn').disabled = true;
   goStep(3);
 
   const token = CP.getToken();
 
-  // ── Step A: 사이트 레코드 생성 ──
+  // A: 사이트 레코드 생성
   let data;
   try {
     const res = await fetch('/api/sites', {
@@ -529,21 +453,11 @@ async function startCreation() {
         siteName:       WD.siteName,
         adminLogin:     WD.adminLogin,
         personalDomain: WD.personalDomain,
-        cfEmail:        WD.cfEmail,
-        cfApiKey:       WD.cfApiKey,
-        cfAccountId:    WD.cfAccountId,
       }),
     });
-
-    const ct = res.headers.get('content-type') || '';
-    if (!ct.includes('application/json')) {
-      showFail('서버 오류 (' + res.status + '): 잠시 후 다시 시도해주세요.');
-      document.getElementById('createBtn').disabled = false;
-      return;
-    }
     data = await res.json();
   } catch (e) {
-    showFail('네트워크 오류 (사이트 생성): ' + e.message);
+    showFail('네트워크 오류: ' + e.message);
     document.getElementById('createBtn').disabled = false;
     return;
   }
@@ -555,71 +469,54 @@ async function startCreation() {
   }
 
   currentSiteId = data.siteId;
-  addLog(`✅ 사이트 레코드 생성 완료 (ID: ${data.siteId})`);
-  addLog(`📋 플랜: ${data.plan || 'free'} | VP: ${data.vpAccount || '—'}`);
-  addLog(`🚀 WordPress 자동 설치를 시작합니다...`);
+  addLog(`✅ 사이트 레코드 생성 완료 (prefix: ${data.sitePrefix})`);
 
-  // ── Step B: provision 엔드포인트 호출 (파이프라인 시작) ──
-  // 응답을 기다리지 않고 폴링으로 진행상황 추적
+  // B: provision 호출 (비동기 — 폴링으로 추적)
   fetch(`/api/sites/${data.siteId}/provision`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
   }).then(async r => {
-    const ct = r.headers.get('content-type') || '';
-    if (ct.includes('application/json')) {
-      const pd = await r.json().catch(() => ({}));
-      if (!pd.ok && pd.error) addLog('⚠️ ' + pd.error);
-    }
-  }).catch(() => {
-    // 네트워크 끊겨도 폴링이 상태를 추적하므로 무시
-  });
+    const pd = await r.json().catch(() => ({}));
+    if (!pd.ok && pd.error) addLog('⚠️ ' + pd.error);
+  }).catch(() => {});
 
-  // ── Step C: 폴링 시작 ──
+  // C: 폴링 시작
   startPolling(data.siteId);
 }
 
-/* provision_step → 단계 UI 매핑 */
+/* ── provision_step → 단계 UI 매핑 ── */
 const STEP_MAP = {
-  // ── 실제 파이프라인 provision_step 값 (v10 PHP installer) ──
-  'init':                  { step: 1, msg: '① 설치 준비 중...',                            title: '⏳ 설치 준비 중...' },
-  'starting':              { step: 1, msg: '① 파이프라인 시작 중...',                      title: '⏳ 파이프라인 시작...' },
-  'uploading_installer':   { step: 1, msg: '① installer.php 업로드 중...',                 title: '① 인스톨러 업로드 중...' },
-  'checking_php':          { step: 1, msg: '① PHP 환경 확인 중...',                        title: '① PHP 환경 확인 중...' },
-  'provisioning_account':  { step: 1, msg: '① 호스팅 계정 확보 중...',                    title: '① 계정 준비 중...' },
-  'installing_wp':         { step: 2, msg: '② WordPress 다운로드 + 설치 중...',            title: '② WordPress 설치 중...' },
-  'configuring':           { step: 2, msg: '② 설정 파일 생성 중 (wp-config, .htaccess)...',title: '② 환경 설정 중...' },
-  'cloning_site':          { step: 2, msg: '② 사이트 복제 중...',                          title: '② 사이트 복제 중...' },
-  'installing_plugins':    { step: 3, msg: '③ 플러그인 설치 중 (breeze 등)...',            title: '③ 플러그인 설치 중...' },
-  'cloudflare_setup':      { step: 3, msg: '③ Cloudflare CDN 연동 중...',                 title: '③ CDN 설정 중...' },
-  'optimizing':            { step: 3, msg: '③ 속도 최적화 적용 중...',                    title: '③ 속도 최적화 중...' },
-  'completed':             { step: 4, msg: '✅ 사이트 생성 완료!',                          title: '✅ 사이트 생성 완료!' },
-  'pipeline_error':        { step: 1, msg: '❌ 파이프라인 오류',                            title: '❌ 오류 발생' },
-  // ── 레거시 값 호환 ──
-  'initializing':          { step: 1, msg: '① 초기화 중...',                               title: '⏳ 설치 준비 중...' },
-  'wordpress_install':     { step: 2, msg: '② WordPress 설치 중...',                       title: '② WordPress 설치 중...' },
-  'cron_setup':            { step: 3, msg: '③ 플러그인 설치 및 최적화 중...',              title: '③ 플러그인 설치 중...' },
-  'suspend_protection':    { step: 3, msg: '③ 보호 설정 중...',                            title: '③ 보호 설정 중...' },
-  'speed_optimization':    { step: 3, msg: '③ 속도 최적화 적용 중...',                    title: '③ 속도 최적화 중...' },
-  'worker_deploy':         { step: 4, msg: '④ Cloudflare Worker 배포 중...',              title: '④ CF Worker 배포 중...' },
-  'dns_setup':             { step: 4, msg: '④ DNS 설정 및 사이트 활성화 중...',            title: '④ 사이트 활성화 중...' },
+  'init':         { step: 0, msg: '시작 준비 중...' },
+  'starting':     { step: 0, msg: '파이프라인 시작 중...' },
+  'd1_create':    { step: 1, msg: '① D1 데이터베이스 생성 중...' },
+  'kv_create':    { step: 2, msg: '② KV 네임스페이스 생성 중...' },
+  'kv_mapping':   { step: 3, msg: '③ 도메인 매핑 저장 중...' },
+  'dns_setup':    { step: 4, msg: '④ DNS 레코드 등록 중...' },
+  'worker_route': { step: 4, msg: '④ Worker Route 등록 중...' },
+  'completed':    { step: 4, msg: '✅ 인프라 구성 완료!' },
+  // 오류
+  'config_missing':  { step: 0, msg: '❌ 설정 누락' },
+  'd1_create_fail':  { step: 1, msg: '❌ D1 생성 실패' },
+  'kv_create_fail':  { step: 2, msg: '❌ KV 생성 실패' },
+  'pipeline_error':  { step: 0, msg: '❌ 파이프라인 오류' },
 };
 
-function updateProvisionSteps(provisionStep, status) {
-  if (!provisionStep) return;
-  const info = STEP_MAP[provisionStep] || {};
-  const currentStepNum = info.step || 0;
+function updateProvisionSteps(provStep, status) {
+  if (!provStep) return;
+  const info = STEP_MAP[provStep] || {};
+  const cur  = info.step || 0;
 
   for (let i = 1; i <= 4; i++) {
-    const el = document.getElementById('pstep' + i);
+    const el   = document.getElementById('pstep' + i);
     if (!el) continue;
     const icon = el.querySelector('.pstep-icon');
     if (status === 'active') {
       el.className = 'provision-step done';
       if (icon) icon.textContent = '✅';
-    } else if (i < currentStepNum) {
+    } else if (i < cur) {
       el.className = 'provision-step done';
       if (icon) icon.textContent = '✅';
-    } else if (i === currentStepNum) {
+    } else if (i === cur) {
       el.className = 'provision-step active';
       if (icon) icon.textContent = '🔄';
     } else {
@@ -627,96 +524,54 @@ function updateProvisionSteps(provisionStep, status) {
       if (icon) icon.textContent = '⏳';
     }
   }
-
-  if (info.msg)   document.getElementById('statusText').textContent   = info.msg;
-  if (info.title) document.getElementById('progressTitle').textContent = info.title;
+  if (info.msg) document.getElementById('statusText').textContent = info.msg;
+  if (info.msg) document.getElementById('progressTitle').textContent =
+    status === 'active' ? '✅ 구성 완료!' : info.msg;
 }
 
 function startPolling(siteId) {
-  let prevProvisionStep = null;
-  let pollCount = 0;
-  const MAX_POLLS = 200; // ~13분
+  let prevStep = null;
+  let count    = 0;
+  const MAX    = 60; // 60 * 4s = 4분
 
   pollInterval = setInterval(async () => {
-    pollCount++;
-    if (pollCount > MAX_POLLS) {
-      clearInterval(pollInterval);
-      pollInterval = null;
-      showFail('설치 시간이 초과되었습니다 (13분). 관리자에게 문의하거나 다시 시도해주세요.');
+    count++;
+    if (count > MAX) {
+      clearInterval(pollInterval); pollInterval = null;
+      showFail('인프라 구성 시간이 초과되었습니다. 관리자에게 문의하거나 다시 시도해주세요.');
       return;
     }
-
     try {
       const token = CP.getToken();
       const res = await fetch(`/api/sites/${siteId}`, {
         headers: { 'Authorization': 'Bearer ' + token },
       });
       if (!res.ok) return;
-      const ct = res.headers.get('content-type') || '';
-      if (!ct.includes('application/json')) return;
       const data = await res.json();
       if (!data.ok) return;
 
-      const site   = data.site;
-      const status = site.status;
-      const provStep = site.provision_step;
+      const site  = data.site;
+      const step  = site.provision_step;
+      const st    = site.status;
 
-      updateProvisionSteps(provStep, status);
+      updateProvisionSteps(step, st);
 
-      if (provStep !== prevProvisionStep) {
-        prevProvisionStep = provStep;
-        if (provStep === 'uploading_installer')  addLog('📤 [1/4] installer.php 업로드 중...');
-        if (provStep === 'checking_php')         addLog('🔍 [1/4] PHP 환경 확인 중...');
-        if (provStep === 'provisioning_account') addLog('🔑 [1/4] 호스팅 계정 슬롯 확보 중...');
-        if (provStep === 'installing_wp')        addLog('📦 [2/4] WordPress 다운로드 + 설치 중... (한국어)');
-        if (provStep === 'configuring')          addLog('🔧 [2/4] 설정 파일 생성 중 (wp-config, .htaccess)...');
-        if (provStep === 'installing_plugins')   addLog('🔌 [3/4] 플러그인 설치 중 (breeze 등)...');
-        if (provStep === 'cloudflare_setup')     addLog('☁️ [3/4] Cloudflare CDN 연동 중...');
-        if (provStep === 'optimizing')           addLog('⚡ [3/4] 속도 최적화 적용 중...');
-        if (provStep === 'completed')            addLog('✅ [4/4] 사이트 생성 완료!');
-        if (provStep === 'wordpress_install')    addLog('📦 [2/4] WordPress 설치 중...');
-        if (provStep === 'worker_deploy')        addLog('☁️ [3/4] Cloudflare Worker 배포 중...');
-        if (provStep === 'dns_setup')            addLog('🌐 [4/4] DNS 설정 및 사이트 활성화 중...');
-        if (site.error_message && status !== 'failed') addLog('⚠️ ' + site.error_message);
+      if (step !== prevStep) {
+        prevStep = step;
+        if (step === 'd1_create')    addLog('🗄️ [1/4] D1 데이터베이스 생성 중...');
+        if (step === 'kv_create')    addLog('⚡ [2/4] KV 네임스페이스 생성 중...');
+        if (step === 'kv_mapping')   addLog('🔗 [3/4] 도메인 → 사이트 매핑 저장 중...');
+        if (step === 'dns_setup')    addLog('🌐 [4/4] DNS CNAME 레코드 등록 중...');
+        if (step === 'worker_route') addLog('☁️ [4/4] Cloudflare Worker Route 등록 중...');
+        if (step === 'completed')    addLog('✅ 인프라 구성 완료!');
       }
 
-      if (status === 'active') {
-        clearInterval(pollInterval);
-        pollInterval = null;
-
-        for (let i = 1; i <= 4; i++) {
-          const el = document.getElementById('pstep' + i);
-          if (el) {
-            el.className = 'provision-step done';
-            const icon = el.querySelector('.pstep-icon');
-            if (icon) icon.textContent = '✅';
-          }
-        }
-
-        addLog('⚡ PHP ' + (site.php_version || '8.x') + ' 환경 설정 완료');
-        addLog('📦 WordPress ' + (site.wp_version || '최신') + ' (한국어) 설치 완료');
-        addLog('🕐 timezone: Asia/Seoul (KST) 설정 완료');
-        addLog('⏰ Cron Job 활성화 완료');
-        if (site.speed_optimized) addLog('⚡ Breeze 캐시 플러그인 설치 완료');
-        addLog('🎉 WordPress 설치 완료! wp-admin으로 접속하세요.');
-
+      if (st === 'active') {
+        clearInterval(pollInterval); pollInterval = null;
         showSuccess(site);
-
-      } else if (status === 'failed') {
-        clearInterval(pollInterval);
-        pollInterval = null;
-        if (provStep) {
-          const info = STEP_MAP[provStep] || {};
-          if (info.step) {
-            const el = document.getElementById('pstep' + info.step);
-            if (el) {
-              el.className = 'provision-step error';
-              const icon = el.querySelector('.pstep-icon');
-              if (icon) icon.textContent = '❌';
-            }
-          }
-        }
-        showFail(site.error_message || 'WordPress 설치에 실패했습니다.');
+      } else if (st === 'failed') {
+        clearInterval(pollInterval); pollInterval = null;
+        showFail(site.error_message || '인프라 구성에 실패했습니다.');
       }
     } catch (e) {
       console.warn('폴링 오류:', e);
@@ -727,45 +582,46 @@ function startPolling(siteId) {
 function showSuccess(site) {
   goStep(4);
 
-  // wp_url = 실제 호스팅 도메인 (subdomain.server_domain)
-  // personalDomain = 사용자 도메인 (CNAME 연결 후 사용)
-  const hostingUrl   = site.wp_url || '';
-  const personalD    = site.custom_domain || WD.personalDomain || '';
-  const displayUrl   = personalD ? 'https://' + personalD : hostingUrl;
-  const adminUrl     = hostingUrl ? hostingUrl.replace(/\/$/, '') + '/wp-admin/' : (site.wp_admin_url || '#');
-  const loginUrl     = site.login_url || (hostingUrl ? hostingUrl.replace(/\/$/, '') + '/wp-login.php' : '#');
+  // 모든 URL을 개인 도메인 기준으로
+  const domain   = site.primary_domain || WD.personalDomain;
+  const siteUrl  = 'https://' + domain;
+  const adminUrl = 'https://' + domain + '/wp-admin/';
 
-  document.getElementById('credPersonalDomain').textContent = displayUrl || hostingUrl || '—';
+  document.getElementById('credPersonalDomain').textContent = siteUrl;
   document.getElementById('credAdminUrl').textContent       = adminUrl;
   document.getElementById('credUser').textContent           = site.wp_username || WD.adminLogin || '—';
   document.getElementById('credPw').value                   = site.wp_password || '—';
-  document.getElementById('credWorker').textContent         = personalD ? personalD + ' (CNAME 연결 필요)' : '호스팅 도메인 직접 사용';
-  document.getElementById('credPhp').textContent            = (site.php_version || 'PHP 8.x') + ' ✅';
-  document.getElementById('credWpVer').textContent          = (site.wp_version  || '최신') + ' (한국어) ✅';
-  document.getElementById('credCron').textContent           = site.cron_enabled ? '✅ 활성화됨' : '⏳ 설정 중';
-  document.getElementById('credSpeed').textContent          = site.speed_optimized ? '✅ Breeze 최적화' : '⏳ 적용 중';
+  document.getElementById('credD1').textContent             = site.site_d1_id  || '(provision 완료 후 확인)';
+  document.getElementById('credKV').textContent             = site.site_kv_id  || '(provision 완료 후 확인)';
+  document.getElementById('credWorker').textContent         = site.worker_name || '—';
 
-  document.getElementById('wpSiteLink').href  = hostingUrl || '#';
+  document.getElementById('wpSiteLink').href  = siteUrl;
   document.getElementById('wpAdminLink').href = adminUrl;
 
   document.getElementById('successDesc').textContent =
-    `"${site.name}" 사이트가 성공적으로 설치되었습니다. 아래 wp-admin으로 접속하세요.`;
+    `"${site.name}" 사이트가 성공적으로 구성되었습니다.`;
+
+  // DNS 수동 설정 안내
+  if (site.domain_status === 'manual_required' && site.error_message) {
+    document.getElementById('dnsNotice').innerHTML =
+      `⚠️ <strong>DNS 수동 설정 필요:</strong><br>${site.error_message}`;
+    document.getElementById('dnsNotice').style.background = 'rgba(234,179,8,.06)';
+    document.getElementById('dnsNotice').style.borderColor = 'rgba(234,179,8,.25)';
+  }
 }
 
 function showFail(msg) {
-  clearInterval(pollInterval);
-  pollInterval = null;
+  clearInterval(pollInterval); pollInterval = null;
   document.getElementById('stepFail').style.display = '';
-  document.getElementById('step3').style.display = 'none';
-  document.getElementById('failMsg').textContent = msg;
+  document.getElementById('step3').style.display    = 'none';
+  document.getElementById('failMsg').textContent    = msg;
 }
 
 function addLog(msg) {
   const box = document.getElementById('logBox');
+  if (!box) return;
   const div = document.createElement('div');
-  div.className = msg.startsWith('✅') || msg.startsWith('🎉') ? 'ok' :
-                  msg.startsWith('❌') ? 'err' :
-                  msg.startsWith('⚠️') ? 'warn' : 'cur';
+  div.className = msg.startsWith('✅') ? 'ok' : msg.startsWith('❌') ? 'err' : msg.startsWith('⚠️') ? 'warn' : 'cur';
   div.textContent = msg;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
@@ -777,11 +633,11 @@ function togglePw() {
 }
 
 function copyText(id, isInput = false) {
-  const el = document.getElementById(id);
+  const el   = document.getElementById(id);
   const text = isInput ? el.value : el.textContent;
   navigator.clipboard.writeText(text).then(() => {
     const btn = el.closest('.cred-row')?.querySelector('.copy-btn');
-    if (btn) { const orig = btn.textContent; btn.textContent = '복사됨!'; setTimeout(() => btn.textContent = orig, 1500); }
+    if (btn) { const o = btn.textContent; btn.textContent = '복사됨!'; setTimeout(() => btn.textContent = o, 1500); }
   }).catch(() => {
     const ta = document.createElement('textarea');
     ta.value = text; document.body.appendChild(ta); ta.select();
@@ -793,59 +649,40 @@ function resetWizard() {
   clearInterval(pollInterval); pollInterval = null;
   currentSiteId = null;
   Object.keys(WD).forEach(k => WD[k] = '');
-  document.getElementById('siteName').value    = '';
-  document.getElementById('adminLogin').value  = 'admin';
-  document.getElementById('personalDomain').value = '';
-  document.getElementById('cfEmail').value     = '';
-  document.getElementById('cfApiKey').value    = '';
-  document.getElementById('cfAccountId').value = '';
+  ['siteName','adminLogin','personalDomain'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = id === 'adminLogin' ? 'admin' : '';
+  });
   document.getElementById('createBtn').disabled = false;
   document.getElementById('errMsg1').style.display = 'none';
   document.getElementById('errMsg2').style.display = 'none';
-  // 로그 초기화
   const logBox = document.getElementById('logBox');
-  if (logBox) { logBox.innerHTML = '<div class="cur">▶ 사이트 생성 요청 전송됨</div>'; }
-  // provision step 초기화
+  if (logBox) logBox.innerHTML = '<div class="cur">▶ 사이트 레코드 생성됨</div>';
   for (let i = 1; i <= 4; i++) {
     const el = document.getElementById('pstep' + i);
-    if (el) {
-      el.className = 'provision-step';
-      const icon = el.querySelector('.pstep-icon');
-      if (icon) icon.textContent = '⏳';
-    }
+    if (el) { el.className = 'provision-step'; const ico = el.querySelector('.pstep-icon'); if (ico) ico.textContent = '⏳'; }
   }
   goStep(1);
 }
 
-// 초기화
 document.addEventListener('DOMContentLoaded', async () => {
   if (typeof CP !== 'undefined' && CP.requireAuth) {
     const u = await CP.requireAuth();
-    if (u && u.role === 'admin') {
-      const adminMenu = document.getElementById('adminMenu');
-      if (adminMenu) adminMenu.style.display = '';
+    if (u?.role === 'admin') {
+      const el = document.getElementById('adminMenu');
+      if (el) el.style.display = '';
     }
     if (u) {
-      const sbName = document.getElementById('sbName');
-      const sbEmail = document.getElementById('sbEmail');
-      const sbAvatar = document.getElementById('sbAvatar');
-      if (sbName) sbName.textContent = u.name || u.email || '—';
-      if (sbEmail) sbEmail.textContent = u.email || '—';
-      if (sbAvatar) sbAvatar.textContent = (u.name || u.email || '?')[0].toUpperCase();
+      const setEl = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+      setEl('sbName',  u.name  || u.email || '—');
+      setEl('sbEmail', u.email || '—');
+      const av = document.getElementById('sbAvatar');
+      if (av) av.textContent = (u.name || u.email || '?')[0].toUpperCase();
     }
   }
 });
 
-function openSidebar() {
-  document.getElementById('sidebar').classList.add('open');
-  const ov = document.getElementById('overlay');
-  if (ov) ov.classList.add('open');
-}
-function closeSidebar() {
-  document.getElementById('sidebar').classList.remove('open');
-  const ov = document.getElementById('overlay');
-  if (ov) ov.classList.remove('open');
-}
+function openSidebar()  { document.getElementById('sidebar').classList.add('open');    const o = document.getElementById('overlay'); if (o) o.classList.add('open'); }
+function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); const o = document.getElementById('overlay'); if (o) o.classList.remove('open'); }
 </script>
 </body>
-</html>
