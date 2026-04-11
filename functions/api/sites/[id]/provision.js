@@ -59,7 +59,7 @@ export async function onRequestPost({ request, env, ctx, params }) {
 
   const siteId = params.id;
   const site = await env.DB.prepare(
-    `SELECT id, user_id, name, primary_domain, www_domain, site_prefix,
+    `SELECT id, user_id, name, primary_domain, site_prefix,
             wp_username, wp_password, wp_admin_email, status, provision_step, plan
      FROM sites WHERE id=? AND user_id=?`
   ).bind(siteId, user.id).first();
