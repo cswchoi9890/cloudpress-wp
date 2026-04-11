@@ -72,6 +72,35 @@
     <div class="content">
       <div id="toast" style="display:none;position:fixed;top:20px;right:20px;z-index:9999;padding:12px 18px;border-radius:10px;font-size:.85rem;font-weight:600;color:#fff"></div>
 
+      <!-- WP Origin URL 설정 -->
+      <div class="settings-section">
+        <div class="settings-title">🌐 WP Origin 설정 (핵심)</div>
+        <p style="font-size:.83rem;color:var(--muted);margin-bottom:14px">
+          CloudPress가 WordPress 요청을 프록시할 <strong>단일 Origin 서버</strong> 정보를 입력합니다.<br>
+          Worker는 이 Origin URL로 요청을 전달하며, 공유 시크릿으로 인증합니다.
+        </p>
+        <div class="field">
+          <label>WP Origin URL</label>
+          <input type="url" id="wp_origin_url" placeholder="https://origin.cloudpress.site"/>
+          <div class="hint">WordPress가 실제로 실행 중인 Origin 서버의 전체 URL (예: https://origin.yourdomain.com)</div>
+        </div>
+        <div class="field">
+          <label>WP Origin 시크릿 (Shared Secret)</label>
+          <input type="password" id="wp_origin_secret" placeholder="••••••••"/>
+          <div class="hint">Worker와 Origin mu-plugin이 공유하는 인증 시크릿. wrangler.toml의 WP_ORIGIN_SECRET과 동일하게 설정.</div>
+        </div>
+        <div class="field">
+          <label>WP Admin Base URL</label>
+          <input type="url" id="wp_admin_base_url" placeholder="https://origin.cloudpress.site/wp-admin"/>
+          <div class="hint">Origin WordPress 관리자 페이지의 기본 URL (선택사항)</div>
+        </div>
+        <div style="background:rgba(249,115,22,.05);border:1px solid rgba(249,115,22,.18);border-radius:10px;padding:12px;margin-bottom:14px;font-size:.82rem;color:var(--muted)">
+          <strong style="color:var(--accent)">⚠️ 변경 후 Worker 재배포 필요</strong><br>
+          WP Origin URL 또는 시크릿을 변경한 경우, <code>wrangler.toml</code>의 환경변수(<code>WP_ORIGIN_URL</code>, <code>WP_ORIGIN_SECRET</code>)도 함께 업데이트하고 Worker를 재배포해야 합니다.
+        </div>
+        <button class="btn btn-primary" onclick="saveWpOriginSettings()">Origin 설정 저장</button>
+      </div>
+
       <!-- WordPress 복제 소스 설정 (신규) -->
       <div class="settings-section">
         <div class="settings-title">🔁 WordPress 복제 소스 설정</div>
@@ -309,6 +338,17 @@ async function loadSettings() {
     if (el) el.checked = (settings[key] === '1' || settings[key] === true) ?? def;
   };
 
+  // WP Origin 설정 로드
+  setVal('wp_origin_url', 'wp_origin_url', '');
+  setVal('wp_admin_base_url', 'wp_admin_base_url', '');
+  const wpSecretEl = document.getElementById('wp_origin_secret');
+  if (wpSecretEl) {
+    wpSecretEl.value = '';
+    wpSecretEl.placeholder = settings.wp_origin_secret
+      ? '••••••••  (이미 저장됨, 변경하려면 새로 입력)'
+      : '••••••••';
+  }
+
   setVal('plan_free_sites', 'plan_free_sites', '1');
   setVal('plan_starter_sites', 'plan_starter_sites', '3');
   setVal('plan_pro_sites', 'plan_pro_sites', '10');
@@ -371,6 +411,23 @@ async function saveSettings(updates) {
   const data = await res.json();
   if (data.ok) showToast('설정이 저장되었습니다.');
   else showToast('저장 실패: ' + (data.error || ''), false);
+}
+
+async function saveWpOriginSettings() {
+  const originUrl   = document.getElementById('wp_origin_url').value.trim();
+  const adminBase   = document.getElementById('wp_admin_base_url').value.trim();
+  const secret      = document.getElementById('wp_origin_secret').value;
+
+  if (!originUrl) { showToast('WP Origin URL을 입력해주세요.', false); return; }
+
+  const updates = {
+    wp_origin_url:     originUrl,
+    wp_admin_base_url: adminBase,
+  };
+  if (secret && !secret.startsWith('••')) {
+    updates.wp_origin_secret = secret;
+  }
+  await saveSettings(updates);
 }
 
 async function saveCloneSettings() {
