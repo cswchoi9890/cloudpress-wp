@@ -137,21 +137,7 @@ export async function onRequestPost({ request, env }) {
     return err('올바른 도메인 형식이 아닙니다. (예: myblog.com 또는 myblog.co.kr)');
   }
 
-  // WP Origin 설정 확인 (없어도 provision 단계에서 처리)
-  const wpOrigin = await getSetting(env, 'wp_origin_url');
-
-  // 사용자 개인 CF API Key 확인 — 없으면 관리자 전역 설정 확인
-  const userCfRow = await env.DB.prepare(
-    'SELECT cf_global_api_key, cf_account_id FROM users WHERE id=?'
-  ).bind(user.id).first();
-
-  if (!userCfRow?.cf_global_api_key || !userCfRow?.cf_account_id) {
-    const cfToken   = await getSetting(env, 'cf_api_token');
-    const cfAccount = await getSetting(env, 'cf_account_id');
-    if (!cfToken || !cfAccount) {
-      return err('Cloudflare API 키가 등록되지 않았습니다. 내 계정 → Cloudflare API 설정을 먼저 완료해주세요.', 503);
-    }
-  }
+  // CF API 키 사전 확인은 provision.js에서 수행 — 여기서는 차단하지 않음
 
   // 도메인 중복 확인
   const existing = await env.DB.prepare(
