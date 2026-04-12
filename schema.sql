@@ -257,6 +257,7 @@ CREATE TABLE IF NOT EXISTS vp_accounts (
 ALTER TABLE vp_accounts ADD COLUMN wp_download_url TEXT;
 ALTER TABLE vp_accounts ADD COLUMN phpsessid TEXT;
 ALTER TABLE vp_accounts ADD COLUMN phpsessid_updated_at TEXT;
+ALTER TABLE vp_accounts ADD COLUMN panel_type TEXT; -- v16: hestia|vesta|vistapanel|spanel|cyberpanel|aapanel|directadmin|plesk|null(자동감지)
 
 -- ── sites 마이그레이션 (v15.0 추가 컬럼) ───────────────────────────
 ALTER TABLE sites ADD COLUMN vp_account_id TEXT;
