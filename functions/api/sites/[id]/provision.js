@@ -479,9 +479,7 @@ function escapeRegex(s) {
   return s;
 }
 function rewriteOrigin(text, originBase, personalBase, originHost, personalHost) {
-function rewriteOrigin(text, originBase, personalBase, originHost, personalHost) {
   return text.replace(new RegExp(escapeRegex(originBase),'g'), personalBase).replace(new RegExp(escapeRegex(originHost),'g'), personalHost);
-}
 }
 function errorPage(status, title, detail) {
   return new Response('<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>'+title+'</title><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8f9fa}.box{text-align:center;padding:40px;max-width:420px}h1{color:#333;font-size:1.4rem}p{color:#666;font-size:.88rem}</style></head><body><div class="box"><h1>'+title+'</h1><p>'+detail+'</p></div></body></html>',
