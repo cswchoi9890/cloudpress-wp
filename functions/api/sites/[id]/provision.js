@@ -263,26 +263,48 @@ async function getWorkerSubdomain(auth, accountId, workerName) {
 // ══════════════════════════════════════════════════════════════════
 
 // VP 패널 로그인 → 새 PHPSESSID 반환
+// HestiaCP: POST /login/ → 302 Location + Set-Cookie: PHPSESSID=xxx
+// VestaCP:  POST /vpanel/login → 302 or 200 + Set-Cookie: PHPSESSID=xxx
 async function vpLogin(panelUrl, username, password) {
-  try {
-    const res = await fetch(`${panelUrl}/vpanel/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
-      redirect: 'manual',
-    });
-    // Set-Cookie에서 PHPSESSID 추출
-    const setCookie = res.headers.get('set-cookie') || '';
-    const match = setCookie.match(/PHPSESSID=([^;]+)/i);
-    if (match) return { ok: true, phpsessid: match[1] };
-    // 302 리다이렉트도 성공으로 간주
-    if (res.status === 302 || res.status === 200) {
-      return { ok: false, error: 'PHPSESSID not found in response' };
+  // 시도할 로그인 경로 목록 (HestiaCP 우선, VestaCP 폴백)
+  const loginPaths = ['/login/', '/vpanel/login'];
+
+  for (const loginPath of loginPaths) {
+    try {
+      const res = await fetch(`${panelUrl}${loginPath}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
+        redirect: 'manual',
+      });
+
+      // Set-Cookie 헤더에서 PHPSESSID 추출 (대소문자 무시)
+      const setCookie = res.headers.get('set-cookie') || '';
+      const match = setCookie.match(/PHPSESSID=([^;,\s]+)/i);
+      if (match && match[1]) {
+        console.log(`[vpLogin] 로그인 성공 (${loginPath}), status=${res.status}`);
+        return { ok: true, phpsessid: match[1], loginPath };
+      }
+
+      // 302/303 리다이렉트이면 로그인 자체는 성공일 수 있으나 쿠키가 없는 경우
+      // → 다음 경로로 폴백하지 않고 에러 반환
+      if (res.status === 302 || res.status === 303 || res.status === 200) {
+        console.warn(`[vpLogin] ${loginPath} → HTTP ${res.status} 이지만 PHPSESSID 없음`);
+        // 다음 경로 시도
+        continue;
+      }
+
+      // 404는 해당 경로 없음 → 다음 경로 시도
+      if (res.status === 404) continue;
+
+      // 그 외 에러
+      console.warn(`[vpLogin] ${loginPath} → HTTP ${res.status}`);
+    } catch (e) {
+      console.warn(`[vpLogin] ${loginPath} 연결 실패:`, e.message);
     }
-    return { ok: false, error: `로그인 실패 (HTTP ${res.status})` };
-  } catch (e) {
-    return { ok: false, error: 'VP 패널 연결 실패: ' + e.message };
   }
+
+  return { ok: false, error: 'VP 패널 로그인 실패: 모든 경로에서 PHPSESSID를 받지 못했습니다.' };
 }
 
 // VP API 요청 (쿠키 포함)
@@ -309,6 +331,7 @@ async function vpApi(panelUrl, phpsessid, path, method = 'GET', body) {
 }
 
 // VP 폼 POST (application/x-www-form-urlencoded)
+// HestiaCP는 성공 시 302 리다이렉트를 반환하므로 302/303도 ok로 처리
 async function vpPost(panelUrl, phpsessid, path, params) {
   const body = Object.entries(params)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
@@ -325,8 +348,10 @@ async function vpPost(panelUrl, phpsessid, path, params) {
       redirect: 'manual',
     });
     const text = await res.text().catch(() => '');
-    try { return { ok: res.ok || res.status < 400, status: res.status, data: JSON.parse(text) }; }
-    catch { return { ok: res.ok || res.status < 400, status: res.status, data: text }; }
+    // 302/303 리다이렉트 = HestiaCP 성공 응답
+    const isSuccess = res.ok || res.status === 302 || res.status === 303;
+    try { return { ok: isSuccess, status: res.status, data: JSON.parse(text) }; }
+    catch { return { ok: isSuccess, status: res.status, data: text }; }
   } catch (e) {
     return { ok: false, status: 0, error: e.message };
   }
@@ -336,11 +361,18 @@ async function vpPost(panelUrl, phpsessid, path, params) {
 async function ensureVpSession(DB, vpAccount) {
   const { id, panel_url, vp_username, vp_password, phpsessid } = vpAccount;
 
-  // 기존 세션으로 테스트
+  // 기존 세션으로 테스트 (HestiaCP: /list/web/, VestaCP: /vpanel/api/status)
   if (phpsessid) {
-    const test = await vpApi(panel_url, phpsessid, '/vpanel/api/status', 'GET');
-    if (test.ok && test.status < 400) {
-      return { ok: true, phpsessid };
+    // 여러 상태 확인 경로 시도 — 하나라도 401/403 이외이면 세션 유효
+    const testPaths = ['/list/web/', '/vpanel/api/status', '/'];
+    for (const testPath of testPaths) {
+      try {
+        const test = await vpApi(panel_url, phpsessid, testPath, 'GET');
+        // 401/403은 세션 만료, 나머지(200, 302, 404 포함)는 패널 자체 접속 OK
+        if (test.status !== 401 && test.status !== 403 && test.status !== 0) {
+          return { ok: true, phpsessid };
+        }
+      } catch (_) {}
     }
   }
 
@@ -367,65 +399,98 @@ async function ensureVpSession(DB, vpAccount) {
 }
 
 // VP 서브도메인 생성
+// HestiaCP: POST /add/web/ → 302 성공 / 200+error 실패
+// VestaCP:  POST /vpanel/web/add → 200 JSON 성공
 async function vpCreateSubdomain(panelUrl, phpsessid, subdomain, serverDomain) {
   const fullDomain = `${subdomain}.${serverDomain}`;
   console.log(`[provision] VP 서브도메인 생성: ${fullDomain}`);
 
-  // Vesta Panel 방식
-  let res = await vpPost(panelUrl, phpsessid, '/vpanel/web/add', {
-    domain: fullDomain,
-    ip: 'default',
+  // HestiaCP 방식 (우선 시도 — 더 일반적)
+  let res = await vpPost(panelUrl, phpsessid, '/add/web/', {
+    v_domain:   fullDomain,
+    v_ip:       'default',
+    v_aliases:  '',
+    v_stats:    'awstats',
+    v_ssl:      '0',
   });
-  if (res.ok) return { ok: true, domain: fullDomain };
 
-  // HestiaCP 방식
-  res = await vpPost(panelUrl, phpsessid, '/add/web/', {
-    v_domain: fullDomain,
-    v_ip: 'default',
-    v_aliases: '',
-    v_stats: 'awstats',
-    v_ssl: '0',
-  });
-  if (res.ok) return { ok: true, domain: fullDomain };
+  // 302/303/200 → 성공
+  if (res.ok) {
+    console.log(`[provision] HestiaCP 서브도메인 생성 성공: ${fullDomain} (HTTP ${res.status})`);
+    return { ok: true, domain: fullDomain };
+  }
 
-  console.warn('[provision] VP 서브도메인 생성 응답:', res.status, JSON.stringify(res.data).slice(0, 200));
-  // 이미 존재하면 OK로 처리
-  if (String(res.data).toLowerCase().includes('exist') || res.status === 409) {
+  // 이미 존재하는 경우 → 성공으로 처리
+  const resStr = String(typeof res.data === 'object' ? JSON.stringify(res.data) : res.data).toLowerCase();
+  if (resStr.includes('exist') || resStr.includes('already') || res.status === 409) {
+    console.log(`[provision] 서브도메인 이미 존재(무시): ${fullDomain}`);
     return { ok: true, domain: fullDomain, existed: true };
   }
 
-  return { ok: false, error: `서브도메인 생성 실패 (HTTP ${res.status})` };
+  // 세션 만료(401/403) — 호출자가 재로그인 후 재시도하도록 에러 코드 구분
+  if (res.status === 401 || res.status === 403) {
+    return { ok: false, error: `세션 만료 (HTTP ${res.status})`, sessionExpired: true };
+  }
+
+  console.log(`[provision] HestiaCP 실패(${res.status}), VestaCP 방식 시도...`);
+
+  // VestaCP 방식 폴백
+  res = await vpPost(panelUrl, phpsessid, '/vpanel/web/add', {
+    domain: fullDomain,
+    ip:     'default',
+  });
+  if (res.ok) {
+    console.log(`[provision] VestaCP 서브도메인 생성 성공: ${fullDomain}`);
+    return { ok: true, domain: fullDomain };
+  }
+
+  const resStr2 = String(typeof res.data === 'object' ? JSON.stringify(res.data) : res.data).toLowerCase();
+  if (resStr2.includes('exist') || resStr2.includes('already') || res.status === 409) {
+    console.log(`[provision] 서브도메인 이미 존재(무시): ${fullDomain}`);
+    return { ok: true, domain: fullDomain, existed: true };
+  }
+
+  console.warn('[provision] VP 서브도메인 생성 최종 실패:', res.status, JSON.stringify(res.data).slice(0, 200));
+  return { ok: false, error: `서브도메인 생성 실패 (HTTP ${res.status}): ${resStr2.slice(0, 100)}` };
 }
 
 // VP DB 생성
+// HestiaCP: POST /add/db/ → 302 성공
+// VestaCP:  POST /vpanel/db/add → 200 JSON
 async function vpCreateDatabase(panelUrl, phpsessid, dbName, dbUser, dbPass) {
   console.log(`[provision] VP DB 생성: ${dbName}`);
 
-  // Vesta Panel
-  let res = await vpPost(panelUrl, phpsessid, '/vpanel/db/add', {
-    database: dbName,
-    dbuser: dbUser,
-    password: dbPass,
-    host: 'localhost',
-  });
-  if (res.ok) return { ok: true };
-
-  // HestiaCP
-  res = await vpPost(panelUrl, phpsessid, '/add/db/', {
+  // HestiaCP 방식 (우선)
+  let res = await vpPost(panelUrl, phpsessid, '/add/db/', {
     v_database: dbName,
-    v_dbuser: dbUser,
-    v_dbpass: dbPass,
-    v_host: 'localhost',
-    v_type: 'mysql',
-    v_charset: 'utf8mb4',
+    v_dbuser:   dbUser,
+    v_dbpass:   dbPass,
+    v_host:     'localhost',
+    v_type:     'mysql',
+    v_charset:  'utf8mb4',
   });
   if (res.ok) return { ok: true };
 
-  if (String(res.data).toLowerCase().includes('exist') || res.status === 409) {
+  const resStr = String(typeof res.data === 'object' ? JSON.stringify(res.data) : res.data).toLowerCase();
+  if (resStr.includes('exist') || resStr.includes('already') || res.status === 409) {
     return { ok: true, existed: true };
   }
 
-  return { ok: false, error: `DB 생성 실패 (HTTP ${res.status})` };
+  // VestaCP 방식 폴백
+  res = await vpPost(panelUrl, phpsessid, '/vpanel/db/add', {
+    database: dbName,
+    dbuser:   dbUser,
+    password: dbPass,
+    host:     'localhost',
+  });
+  if (res.ok) return { ok: true };
+
+  const resStr2 = String(typeof res.data === 'object' ? JSON.stringify(res.data) : res.data).toLowerCase();
+  if (resStr2.includes('exist') || resStr2.includes('already') || res.status === 409) {
+    return { ok: true, existed: true };
+  }
+
+  return { ok: false, error: `DB 생성 실패 (HTTP ${res.status}): ${resStr2.slice(0, 100)}` };
 }
 
 // VP에서 WP 설치 명령 실행 (exec API)
@@ -843,7 +908,23 @@ export async function onRequestPost({ request, env, params }) {
   // ── Step 2: VP 서브도메인 생성 ─────────────────────────────────
   await updateSite(env.DB, siteId, { provision_step: 'vp_subdomain' });
   const subdomain   = prefix;  // e.g. s_abc12
-  const subRes = await vpCreateSubdomain(vpAccount.panel_url, phpsessid, subdomain, vpAccount.server_domain);
+  let subRes = await vpCreateSubdomain(vpAccount.panel_url, phpsessid, subdomain, vpAccount.server_domain);
+
+  // 세션 만료로 실패한 경우 재로그인 후 1회 재시도
+  if (!subRes.ok && subRes.sessionExpired) {
+    console.log('[provision] 서브도메인 생성 중 세션 만료 감지 → 재로그인 후 재시도');
+    const reloginRes = await vpLogin(vpAccount.panel_url, vpAccount.vp_username, vpAccount.vp_password);
+    if (reloginRes.ok) {
+      const newSession = reloginRes.phpsessid;
+      try {
+        await env.DB.prepare(
+          "UPDATE vp_accounts SET phpsessid=?, phpsessid_updated_at=datetime('now'), updated_at=datetime('now') WHERE id=?"
+        ).bind(newSession, vpAccount.id).run();
+      } catch (_) {}
+      subRes = await vpCreateSubdomain(vpAccount.panel_url, newSession, subdomain, vpAccount.server_domain);
+    }
+  }
+
   if (!subRes.ok) {
     await failSite(env.DB, siteId, 'vp_subdomain', subRes.error);
     return jsonRes({ ok: false, error: 'VP 서브도메인 생성 실패: ' + subRes.error }, 500);
