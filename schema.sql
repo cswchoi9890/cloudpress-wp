@@ -185,6 +185,10 @@ INSERT OR IGNORE INTO settings (key, value) VALUES
   ('cf_account_id',          ''),
   ('cf_worker_name',         'cloudpress-proxy'),
   ('worker_cname_target',    ''),
+  -- Worker Script Upload 바인딩에 필요한 wrangler.toml 리소스 ID
+  ('main_db_id',             ''),   -- wrangler.toml [[d1_databases]] database_id
+  ('cache_kv_id',            ''),   -- wrangler.toml [[kv_namespaces]] CACHE id
+  ('sessions_kv_id',         ''),   -- wrangler.toml [[kv_namespaces]] SESSIONS id
   ('maintenance_mode',       '0'),
   ('site_name',              '클라우드프레스'),
   ('site_domain',            'cloud-press.co.kr),
