@@ -100,7 +100,12 @@ export async function onRequest({ request, env, params }) {
 
   if (!site) return err('사이트를 찾을 수 없습니다.', 404);
 
-  const cnameTarget = await getSetting(env, 'worker_cname_target', 'cloudpress-proxy.workers.dev');
+  // CNAME 타겟: settings에 저장된 값 우선, 없으면 워커 이름으로 구성
+  let cnameTarget = await getSetting(env, 'worker_cname_target', '');
+  if (!cnameTarget) {
+    const workerName = await getSetting(env, 'cf_worker_name', 'cloudpress-proxy');
+    cnameTarget = workerName + '.workers.dev';
+  }
   const url = new URL(request.url);
   const action = url.searchParams.get('action');
 
@@ -128,6 +133,12 @@ export async function onRequest({ request, env, params }) {
         primaryDomain: site.primary_domain,
         domain_status: site.domain_status,
         cnameTarget,
+        cname_instructions: {
+          type: 'CNAME',
+          root: { host: '@',   value: cnameTarget, ttl: 3600 },
+          www:  { host: 'www', value: cnameTarget, ttl: 3600 },
+          note: '외부 DNS(가비아, 후이즈 등)에서 위 값으로 CNAME 레코드를 추가하세요.',
+        },
         domains,
         verifications: verifications || [],
       });
