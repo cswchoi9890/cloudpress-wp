@@ -1,10 +1,8 @@
--- CloudPress v12 — schema.sql
--- D1 콘솔 또는: wrangler d1 execute <DB명> --file=schema.sql --remote
+-- CloudPress v12.7 — schema.sql (완전 수정판)
+-- D1 Console 또는: wrangler d1 execute cloudpress-db --file=schema.sql --remote
 --
--- v12 변경사항:
---   sites 테이블에 site_d1_id, site_d1_name, site_kv_id, site_kv_title 컬럼 추가
---   각 사이트는 독립된 D1 DB + KV 네임스페이스를 가짐
---   vp_accounts 테이블 제거 (VP 방식 미사용)
+-- 이 파일 하나만 실행하면 모든 테이블·인덱스·기본값이 세팅됩니다.
+-- 이미 존재하는 테이블은 IF NOT EXISTS로 보호, 컬럼 추가는 ALTER TABLE로 처리.
 
 -- ── users ──────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (
@@ -14,7 +12,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash       TEXT NOT NULL,
   role                TEXT NOT NULL DEFAULT 'user',
   plan                TEXT NOT NULL DEFAULT 'free',
-  plan_expires_at     INTEGER,
+  plan_expires_at     TEXT,
   twofa_type          TEXT,
   twofa_secret        TEXT,
   twofa_enabled       INTEGER DEFAULT 0,
@@ -26,11 +24,6 @@ CREATE TABLE IF NOT EXISTS users (
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
-
--- 기존 DB 마이그레이션용 (이미 테이블이 있을 경우 실행)
-ALTER TABLE users ADD COLUMN cf_global_api_key TEXT;
-ALTER TABLE users ADD COLUMN cf_account_email TEXT;
-ALTER TABLE users ADD COLUMN cf_account_id TEXT;
 
 -- ── sessions ───────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS sessions (
@@ -51,13 +44,13 @@ CREATE TABLE IF NOT EXISTS sites (
   domain_status       TEXT DEFAULT 'pending',
 
   -- 사이트 격리 ID
-  site_prefix         TEXT UNIQUE,           -- 7자 고유 prefix (예: s_a3k9x2)
+  site_prefix         TEXT UNIQUE,
 
-  -- 사이트 전용 Cloudflare 리소스 (CF API로 생성)
-  site_d1_id          TEXT,                  -- 사이트 전용 D1 DB UUID
-  site_d1_name        TEXT,                  -- 사이트 전용 D1 DB 이름
-  site_kv_id          TEXT,                  -- 사이트 전용 KV 네임스페이스 ID
-  site_kv_title       TEXT,                  -- 사이트 전용 KV 이름
+  -- 사이트 전용 Cloudflare 리소스
+  site_d1_id          TEXT,
+  site_d1_name        TEXT,
+  site_kv_id          TEXT,
+  site_kv_title       TEXT,
 
   -- Cloudflare Worker/DNS
   worker_name         TEXT,
@@ -69,7 +62,7 @@ CREATE TABLE IF NOT EXISTS sites (
   dns_record_id       TEXT,
   dns_record_www_id   TEXT,
 
-  -- WordPress 접속 정보 (origin WP admin)
+  -- WordPress 접속 정보
   wp_username         TEXT,
   wp_password         TEXT,
   wp_admin_email      TEXT,
@@ -169,6 +162,48 @@ CREATE INDEX IF NOT EXISTS idx_payments_user_id     ON payments(user_id);
 CREATE INDEX IF NOT EXISTS idx_payments_order_id    ON payments(order_id);
 CREATE INDEX IF NOT EXISTS idx_traffic_created_at   ON traffic_logs(created_at);
 
+-- ── 기존 DB 마이그레이션 (컬럼 없으면 추가, 있으면 무시) ──────────
+-- 아래 ALTER TABLE 구문들은 D1 Console에서 개별 실행 또는 wrangler로 실행
+-- (이미 컬럼이 있으면 "table already has column" 오류가 나지만 무시하면 됨)
+
+-- users 컬럼 마이그레이션
+ALTER TABLE users ADD COLUMN cf_global_api_key TEXT;
+ALTER TABLE users ADD COLUMN cf_account_email TEXT;
+ALTER TABLE users ADD COLUMN cf_account_id TEXT;
+ALTER TABLE users ADD COLUMN twofa_type TEXT;
+ALTER TABLE users ADD COLUMN twofa_secret TEXT;
+ALTER TABLE users ADD COLUMN twofa_enabled INTEGER DEFAULT 0;
+ALTER TABLE users ADD COLUMN twofa_pending_code TEXT;
+ALTER TABLE users ADD COLUMN twofa_code_expires INTEGER;
+ALTER TABLE users ADD COLUMN plan_expires_at TEXT;
+ALTER TABLE users ADD COLUMN updated_at TEXT DEFAULT (datetime('now'));
+
+-- sites 컬럼 마이그레이션
+ALTER TABLE sites ADD COLUMN site_d1_id TEXT;
+ALTER TABLE sites ADD COLUMN site_d1_name TEXT;
+ALTER TABLE sites ADD COLUMN site_kv_id TEXT;
+ALTER TABLE sites ADD COLUMN site_kv_title TEXT;
+ALTER TABLE sites ADD COLUMN primary_domain TEXT;
+ALTER TABLE sites ADD COLUMN domain_status TEXT DEFAULT 'pending';
+ALTER TABLE sites ADD COLUMN site_prefix TEXT;
+ALTER TABLE sites ADD COLUMN worker_name TEXT;
+ALTER TABLE sites ADD COLUMN worker_route TEXT;
+ALTER TABLE sites ADD COLUMN worker_route_www TEXT;
+ALTER TABLE sites ADD COLUMN worker_route_id TEXT;
+ALTER TABLE sites ADD COLUMN worker_route_www_id TEXT;
+ALTER TABLE sites ADD COLUMN cf_zone_id TEXT;
+ALTER TABLE sites ADD COLUMN dns_record_id TEXT;
+ALTER TABLE sites ADD COLUMN dns_record_www_id TEXT;
+ALTER TABLE sites ADD COLUMN wp_username TEXT;
+ALTER TABLE sites ADD COLUMN wp_password TEXT;
+ALTER TABLE sites ADD COLUMN wp_admin_email TEXT;
+ALTER TABLE sites ADD COLUMN wp_admin_url TEXT;
+ALTER TABLE sites ADD COLUMN provision_step TEXT DEFAULT 'init';
+ALTER TABLE sites ADD COLUMN suspension_reason TEXT;
+ALTER TABLE sites ADD COLUMN disk_used INTEGER DEFAULT 0;
+ALTER TABLE sites ADD COLUMN bandwidth_used INTEGER DEFAULT 0;
+ALTER TABLE sites ADD COLUMN deleted_at TEXT;
+
 -- ── settings 기본값 ────────────────────────────────────────────────
 INSERT OR IGNORE INTO settings (key, value) VALUES
   ('plan_free_sites',        '1'),
@@ -185,19 +220,14 @@ INSERT OR IGNORE INTO settings (key, value) VALUES
   ('cf_account_id',          ''),
   ('cf_worker_name',         'cloudpress-proxy'),
   ('worker_cname_target',    ''),
-  -- Worker Script Upload 바인딩에 필요한 wrangler.toml 리소스 ID
-  ('main_db_id',             ''),   -- wrangler.toml [[d1_databases]] database_id
-  ('cache_kv_id',            ''),   -- wrangler.toml [[kv_namespaces]] CACHE id
-  ('sessions_kv_id',         ''),   -- wrangler.toml [[kv_namespaces]] SESSIONS id
+  ('main_db_id',             ''),
+  ('cache_kv_id',            ''),
+  ('sessions_kv_id',         ''),
   ('maintenance_mode',       '0'),
   ('site_name',              '클라우드프레스'),
   ('site_domain',            'cloud-press.co.kr'),
   ('toss_client_key',        ''),
-  ('toss_secret_key',        '');
-
--- ── 기존 DB 마이그레이션 (컬럼 추가) ──────────────────────────────
--- 이미 sites 테이블이 있는 경우 아래 ALTER를 실행하세요:
--- ALTER TABLE sites ADD COLUMN site_d1_id    TEXT;
--- ALTER TABLE sites ADD COLUMN site_d1_name  TEXT;
--- ALTER TABLE sites ADD COLUMN site_kv_id    TEXT;
--- ALTER TABLE sites ADD COLUMN site_kv_title TEXT;
+  ('toss_secret_key',        ''),
+  ('auto_ssl',               '1'),
+  ('auto_breeze',            '1'),
+  ('cloudflare_cdn_enabled', '1');
