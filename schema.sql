@@ -218,7 +218,7 @@ INSERT OR IGNORE INTO settings (key, value) VALUES
   ('wp_admin_base_url',      ''),
   ('cf_api_token',           ''),
   ('cf_account_id',          ''),
-  ('cf_worker_name',         'cloudpress-proxy'),
+  ('cf_worker_name',         ''),
   ('worker_cname_target',    ''),
   ('main_db_id',             ''),
   ('cache_kv_id',            ''),
