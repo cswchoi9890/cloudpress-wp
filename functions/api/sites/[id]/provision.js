@@ -262,12 +262,15 @@ async function getWorkerSubdomain(auth, accountId, workerName) {
 // VP 패널 자동화 — 멀티 패널 자동 감지
 //
 // 지원 패널:
-//   HestiaCP   — :8083  POST /login/      web: /add/web/   db: /add/db/
-//   VestaCP    — :8083  POST /vpanel/login web: /vpanel/web/add
-//   CyberPanel — :8090  REST JSON API     (Authorization: Basic)
-//   aaPanel    — :7800  POST /login       cookie: session  web: /site  db: /database
-//   DirectAdmin— :2222  GET  /CMD_LOGIN   web: /CMD_API    (session cookie)
-//   Plesk      — :8443  POST /login_up.php web: /api/v2/domains
+//   HestiaCP   — :8083  POST /login/        web: /add/web/   db: /add/db/
+//   VestaCP    — :8083  POST /vpanel/login  web: /vpanel/web/add
+//   CyberPanel — :8090  REST JSON API       (Authorization: Basic)
+//   aaPanel    — :7800  POST /login         cookie: session  web: /site  db: /database
+//   DirectAdmin— :2222  GET  /CMD_LOGIN     web: /CMD_API    (session cookie)
+//   Plesk      — :8443  POST /login_up.php  web: /api/v2/domains
+//   VistaPanel — :2082  POST /login2.php    web: /createsite.php  db: /databases.php
+//                (byethost, InfinityFree, 기타 무료호스팅 사용)
+//   SPanel     — :2083  POST /login         web: /api/v1/domain   db: /api/v1/mysql
 // ══════════════════════════════════════════════════════════════════
 
 // ── 공통 헬퍼 ──────────────────────────────────────────────────────
@@ -307,6 +310,10 @@ async function detectPanelType(panelUrl) {
     if (port === '7800' || port === '7788') return 'aapanel';
     if (port === '2222') return 'directadmin';
     if (port === '8443') return 'plesk';
+    if (port === '2082' || port === '2083') {
+      // 2082 = VistaPanel(byethost/InfinityFree), 2083 = cPanel SSL or SPanel
+      // 응답으로 구분
+    }
     // 8083 = HestiaCP 또는 VestaCP → 응답으로 구분
   } catch (_) {}
 
@@ -320,13 +327,20 @@ async function detectPanelType(panelUrl) {
     const text = (await res.text().catch(() => '')).toLowerCase();
     const server = (res.headers.get('server') || '').toLowerCase();
 
-    if (text.includes('hestia') || text.includes('hestiacp'))   return 'hestia';
-    if (text.includes('vesta')  || text.includes('vestacp'))    return 'vesta';
-    if (text.includes('cyberpanel'))                            return 'cyberpanel';
-    if (text.includes('aapanel') || text.includes('宝塔'))      return 'aapanel';
-    if (text.includes('directadmin'))                           return 'directadmin';
-    if (text.includes('plesk'))                                 return 'plesk';
-    if (server.includes('hestia'))                              return 'hestia';
+    if (text.includes('hestia') || text.includes('hestiacp'))         return 'hestia';
+    if (text.includes('vesta')  || text.includes('vestacp'))          return 'vesta';
+    if (text.includes('cyberpanel'))                                   return 'cyberpanel';
+    if (text.includes('aapanel') || text.includes('宝塔'))            return 'aapanel';
+    if (text.includes('directadmin'))                                  return 'directadmin';
+    if (text.includes('plesk'))                                        return 'plesk';
+    // VistaPanel 감지: byethost/InfinityFree 등이 사용하는 패널
+    if (text.includes('vistapanel') || text.includes('vista panel') ||
+        text.includes('byethost') || text.includes('infinityfree') ||
+        text.includes('login2.php') || text.includes('ifastnet'))      return 'vistapanel';
+    // SPanel 감지
+    if (text.includes('spanel') || text.includes('s-panel') ||
+        server.includes('spanel'))                                     return 'spanel';
+    if (server.includes('hestia'))                                     return 'hestia';
 
     // /login/ 경로 존재 여부로 Hestia vs Vesta 구분
     const r2 = await fetch(panelUrl + '/login/', {
@@ -340,6 +354,13 @@ async function detectPanelType(panelUrl) {
       signal: AbortSignal.timeout(4000),
     });
     if (r3.status !== 404) return 'vesta';
+
+    // /login2.php 감지 → VistaPanel
+    const r4 = await fetch(panelUrl + '/login2.php', {
+      method: 'GET', redirect: 'manual',
+      signal: AbortSignal.timeout(4000),
+    });
+    if (r4.status !== 404) return 'vistapanel';
   } catch (_) {}
 
   return 'unknown';
@@ -490,6 +511,80 @@ async function loginPlesk(panelUrl, username, password) {
   return { ok: false, error: `Plesk 로그인 실패 (HTTP ${res.status})` };
 }
 
+// ── VistaPanel (byethost / InfinityFree / iFastNet 계열) ──────────
+//
+// 공식 API 없음. 웹 폼 스크래핑으로 동작.
+// 로그인: POST /login2.php  (btid=username, bpw=password, ssl_login=)
+// 세션:   PHPSESSID 쿠키
+// 서브도메인 생성: POST /createsite.php
+// DB 생성: POST /databases.php
+// 명령 실행: 불가 (공유 호스팅이므로 shell 없음)
+//            → WP 설치는 /wp-admin/install.php HTTP 요청으로 대체
+//
+async function loginVistaPanel(panelUrl, username, password) {
+  // VistaPanel은 로그인 시 hidden CSRF 토큰이 있을 수 있음 → 먼저 GET으로 폼 가져옴
+  let token = '';
+  try {
+    const getRes = await fetch(`${panelUrl}/login2.php`, {
+      method: 'GET',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(8000),
+    });
+    const html = await getRes.text().catch(() => '');
+    // csrf_token 또는 token 히든 필드 추출
+    const m = html.match(/name=["'](?:csrf_token|token|_token)["'][^>]*value=["']([^"']+)["']/i)
+           || html.match(/value=["']([^"']+)["'][^>]*name=["'](?:csrf_token|token|_token)["']/i);
+    if (m) token = m[1];
+  } catch (_) {}
+
+  const params = { btid: username, bpw: password, ssl_login: '' };
+  if (token) params.csrf_token = token;
+
+  const res = await formPost(`${panelUrl}/login2.php`, null, params);
+  const sid = extractCookie(res.headers, 'PHPSESSID');
+  if (sid) return { ok: true, cookie: `PHPSESSID=${sid}`, type: 'vistapanel' };
+
+  // 일부 서버는 302 리다이렉트 후 쿠키가 Location 응답에 포함됨
+  if (res.status === 302 || res.status === 200) {
+    const raw = res.headers.get('set-cookie') || '';
+    if (raw) {
+      const cookieVal = raw.split(';')[0].trim();
+      if (cookieVal && cookieVal.includes('=')) {
+        return { ok: true, cookie: cookieVal, type: 'vistapanel' };
+      }
+    }
+  }
+
+  // btpass 필드명 폴백 (구버전 VistaPanel)
+  const res2 = await formPost(`${panelUrl}/login2.php`, null,
+    { username, password, btid: username, btpass: password });
+  const sid2 = extractCookie(res2.headers, 'PHPSESSID');
+  if (sid2) return { ok: true, cookie: `PHPSESSID=${sid2}`, type: 'vistapanel' };
+
+  return { ok: false, error: `VistaPanel 로그인 실패 (HTTP ${res.status})` };
+}
+
+// ── SPanel (ScalaHosting 계열) ─────────────────────────────────────
+//
+// SPanel은 REST API를 제공.
+// 로그인: POST /login  → Bearer token 반환
+// 서브도메인: POST /api/v1/domain
+// DB: POST /api/v1/mysql/database
+//
+async function loginSPanel(panelUrl, username, password) {
+  const res = await jsonPost(`${panelUrl}/login`, null,
+    { username, password });
+  const token = res.data?.token || res.data?.access_token || res.data?.data?.token;
+  if (token) {
+    return { ok: true, cookie: `__spanel_token=${token}`, type: 'spanel', basicAuth: `Bearer ${token}` };
+  }
+  // 폼 폴백
+  const res2 = await formPost(`${panelUrl}/login`, null, { username, password });
+  const sid = extractCookie(res2.headers, 'PHPSESSID') || extractCookie(res2.headers, 'spanel_session');
+  if (sid) return { ok: true, cookie: `PHPSESSID=${sid}`, type: 'spanel' };
+  return { ok: false, error: `SPanel 로그인 실패 (HTTP ${res.status})` };
+}
+
 // ── 통합 로그인 (패널 타입 자동 감지 + 로그인) ────────────────────
 
 async function vpDetectAndLogin(panelUrl, username, password, cachedType) {
@@ -500,6 +595,8 @@ async function vpDetectAndLogin(panelUrl, username, password, cachedType) {
     if (type === 'aapanel')     return loginAaPanel(panelUrl, username, password);
     if (type === 'directadmin') return loginDirectAdmin(panelUrl, username, password);
     if (type === 'plesk')       return loginPlesk(panelUrl, username, password);
+    if (type === 'vistapanel')  return loginVistaPanel(panelUrl, username, password);
+    if (type === 'spanel')      return loginSPanel(panelUrl, username, password);
     return { ok: false, error: 'unknown type' };
   };
 
@@ -518,7 +615,7 @@ async function vpDetectAndLogin(panelUrl, username, password, cachedType) {
 
   // unknown이거나 감지 실패 → 모든 타입 순차 시도
   if (detected === 'unknown' || !r.ok) {
-    for (const t of ['hestia', 'vesta', 'aapanel', 'cyberpanel', 'directadmin', 'plesk']) {
+    for (const t of ['hestia', 'vesta', 'vistapanel', 'spanel', 'aapanel', 'cyberpanel', 'directadmin', 'plesk']) {
       if (t === detected) continue;
       const fallback = await tryLogin(t);
       if (fallback.ok) {
@@ -538,8 +635,8 @@ async function ensureVpSession(DB, vpAccount) {
 
   // 기존 저장 쿠키/세션으로 유효성 확인
   if (phpsessid) {
-    // 패널별 ping 경로
-    const pingPaths = ['/list/web/', '/vpanel/api/status', '/api/verifyConn', '/'];
+    // 패널별 ping 경로 — vistapanel은 /index.php (메인 대시보드)
+    const pingPaths = ['/list/web/', '/vpanel/api/status', '/api/verifyConn', '/index.php', '/'];
     for (const path of pingPaths) {
       try {
         const res = await fetch(`${panel_url}${path}`, {
@@ -702,6 +799,76 @@ async function vpCreateSubdomain(panelUrl, sessionInfo, subdomain, serverDomain)
     }
   }
 
+  // ── VistaPanel (byethost / InfinityFree / iFastNet) ──────────────
+  // 공식 API 없음 — 웹 폼 POST 스크래핑
+  // 서브도메인 생성: POST /createsite.php
+  // 필드: sitename(서브도메인 prefix), subdomain(서버의 베이스 도메인 선택값)
+  if (!panelType || panelType === 'vistapanel' || panelType === 'unknown') {
+    tried.push('vistapanel');
+
+    // 1단계: createsite.php GET → subdomain 드롭다운 옵션 파싱
+    let domainOption = serverDomain; // 기본값
+    try {
+      const getRes = await fetch(`${panelUrl}/createsite.php`, {
+        method: 'GET',
+        headers: { Cookie: cookie },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(8000),
+      });
+      const html = await getRes.text().catch(() => '');
+      // <option value="xxx.byethost.com">xxx.byethost.com</option> 형태
+      const re = new RegExp(`<option[^>]*value=["']([^"']*${serverDomain}[^"']*)["']`, 'i');
+      const m  = html.match(re);
+      if (m) domainOption = m[1];
+      // 아무것도 못 찾으면 첫 번째 옵션 사용
+      if (!m) {
+        const m2 = html.match(/<option[^>]*value=["']([^"']+)["']/i);
+        if (m2) domainOption = m2[1];
+      }
+    } catch (_) {}
+
+    // 2단계: POST 서브도메인 생성
+    const vRes = await formPost(`${panelUrl}/createsite.php`, cookie, {
+      sitename:  subdomain,
+      subdomain: domainOption,
+      submit:    'Create+website',
+    });
+    if (vRes.ok || vRes.status === 302) {
+      // 성공 여부는 응답 본문으로 확인 (에러 메시지가 없으면 성공)
+      const body = String(typeof vRes.data === 'object' ? JSON.stringify(vRes.data) : vRes.data).toLowerCase();
+      if (!body.includes('error') && !body.includes('invalid') && !body.includes('not allowed')) {
+        console.log(`[provision] VistaPanel 서브도메인 성공`);
+        return { ok: true, domain: fullDomain };
+      }
+      if (isAlreadyExists(body, vRes.status)) return { ok: true, domain: fullDomain, existed: true };
+      console.warn(`[provision] VistaPanel createsite.php 응답: ${resSummary(vRes.data)}`);
+    }
+    // 세션 만료 감지
+    if (isSessionExpired(vRes.status)) return { ok: false, error: '세션 만료', sessionExpired: true };
+    if (vRes.status !== 404 && vRes.status !== 0) {
+      console.warn(`[provision] VistaPanel 실패: ${vRes.status} ${resSummary(vRes.data)}`);
+    }
+  }
+
+  // ── SPanel ───────────────────────────────────────────────────────
+  if (!panelType || panelType === 'spanel' || panelType === 'unknown') {
+    tried.push('spanel');
+    const auth = basicAuth || null;
+    const res  = await jsonPost(`${panelUrl}/api/v1/domain`, auth, {
+      domain:     fullDomain,
+      doc_root:   `/home/${fullDomain}/public_html`,
+      php_version: '8.2',
+    });
+    if (res.ok || res.data?.status === 'success') {
+      console.log(`[provision] SPanel 서브도메인 성공`);
+      return { ok: true, domain: fullDomain };
+    }
+    if (isAlreadyExists(JSON.stringify(res.data), res.status)) return { ok: true, domain: fullDomain, existed: true };
+    if (res.status !== 404 && res.status !== 0) {
+      console.warn(`[provision] SPanel 실패: ${res.status} ${resSummary(res.data)}`);
+    }
+  }
+
   console.error(`[provision] 서브도메인 생성 전체 실패. 시도한 패널: ${tried.join(', ')}`);
   return {
     ok: false,
@@ -769,6 +936,46 @@ async function vpCreateDatabase(panelUrl, sessionInfo, dbName, dbUser, dbPass) {
     if (isAlreadyExists(res.data, res.status)) return { ok: true, existed: true };
   }
 
+  // VistaPanel — POST /databases.php
+  // 필드: db (DB 이름 suffix), dbpassword, submit
+  // VistaPanel DB명은 "계정명_suffix" 형태로 자동 prefix됨
+  if (!panelType || panelType === 'vistapanel' || panelType === 'unknown') {
+    // dbName에서 prefix(계정명_) 제거해서 suffix만 전달
+    const dbSuffix = dbName.includes('_') ? dbName.split('_').slice(1).join('_') : dbName;
+    const vRes = await formPost(`${panelUrl}/databases.php`, cookie, {
+      db:         dbSuffix,
+      dbpassword: dbPass,
+      submit:     'Create+database',
+    });
+    if (vRes.ok || vRes.status === 302) {
+      const body = String(typeof vRes.data === 'object' ? JSON.stringify(vRes.data) : vRes.data).toLowerCase();
+      if (!body.includes('error') && !body.includes('invalid')) {
+        console.log(`[provision] VistaPanel DB 생성 성공`);
+        return { ok: true };
+      }
+      if (isAlreadyExists(body, vRes.status)) return { ok: true, existed: true };
+      console.warn(`[provision] VistaPanel DB 응답: ${resSummary(vRes.data)}`);
+    }
+    // DB 사용자도 별도 생성 시도 (dbusers.php)
+    await formPost(`${panelUrl}/dbusers.php`, cookie, {
+      dbuser:     dbUser.includes('_') ? dbUser.split('_').slice(1).join('_') : dbUser,
+      dbpassword: dbPass,
+      submit:     'Create+user',
+    }).catch(() => {});
+  }
+
+  // SPanel — POST /api/v1/mysql/database
+  if (!panelType || panelType === 'spanel' || panelType === 'unknown') {
+    const auth = basicAuth || null;
+    const res  = await jsonPost(`${panelUrl}/api/v1/mysql/database`, auth, {
+      name:     dbName,
+      username: dbUser,
+      password: dbPass,
+    });
+    if (res.ok || res.data?.status === 'success') return { ok: true };
+    if (isAlreadyExists(JSON.stringify(res.data), res.status)) return { ok: true, existed: true };
+  }
+
   return { ok: false, error: `DB 생성 실패 (패널: ${panelType || 'unknown'})` };
 }
 
@@ -803,6 +1010,111 @@ async function vpInstallWordPress(panelUrl, sessionInfo, params) {
     `find "${docRoot}" -type f -exec chmod 644 {} \\; 2>/dev/null || true`,
   ];
   const fullCmd = cmds.join(' && ');
+
+  // ── VistaPanel: shell 불가 → 파일 관리자 API로 WP 업로드 시도 ──
+  // VistaPanel(byethost/InfinityFree)은 공유 호스팅으로 shell 실행 불가.
+  // 대신 패널의 파일 관리자(/filemanager.php)를 통해 파일 업로드 후
+  // WP 설치 페이지(wp-admin/install.php)를 HTTP로 호출하는 방식 사용.
+  if (panelType === 'vistapanel') {
+    console.log('[provision] VistaPanel: shell 없음 → HTTP 기반 WP 설치 시도');
+
+    // 1) 파일 관리자 upload API로 wp-config.php 직접 생성
+    //    VistaPanel /filemanager.php?file_name=...&dir=... POST로 파일 업로드
+    const wpConfigContent = [
+      '<?php',
+      `define('DB_NAME',     '${dbName}');`,
+      `define('DB_USER',     '${dbUser}');`,
+      `define('DB_PASSWORD', '${dbPass}');`,
+      `define('DB_HOST',     'localhost');`,
+      `define('DB_CHARSET',  'utf8mb4');`,
+      `define('DB_COLLATE',  '');`,
+      `define('WP_HOME',    '${siteUrl}');`,
+      `define('WP_SITEURL', '${siteUrl}');`,
+      `define('DISABLE_WP_CRON', true);`,
+      `define('WP_DEBUG', false);`,
+      `$table_prefix = 'wp_';`,
+      `if (!defined('ABSPATH')) define('ABSPATH', __DIR__ . '/');`,
+      `require_once ABSPATH . 'wp-settings.php';`,
+    ].join('\n');
+
+    // 파일 관리자 업로드 시도 (VistaPanel은 /filemanager.php 사용)
+    try {
+      const formData = new FormData();
+      formData.append('action', 'upload');
+      formData.append('dir', `/htdocs/${fullDomain}`);
+      formData.append('file', new Blob([wpConfigContent], { type: 'text/plain' }), 'wp-config.php');
+
+      await fetch(`${panelUrl}/filemanager.php`, {
+        method: 'POST',
+        headers: { Cookie: cookie },
+        body: formData,
+        signal: AbortSignal.timeout(15000),
+      }).catch(() => {});
+    } catch (_) {}
+
+    // 2) WP 설치 확인: /wp-admin/install.php가 응답하는지 체크
+    //    실제 WP 파일은 이미 업로드됐거나 사용자가 FTP로 올린 상태 가정
+    try {
+      const installUrl = `${siteUrl}/wp-admin/install.php`;
+      const checkRes = await fetch(installUrl, {
+        method: 'GET',
+        signal: AbortSignal.timeout(10000),
+        redirect: 'follow',
+      });
+      if (checkRes.ok) {
+        // install.php가 살아있으면 HTTP POST로 WP 설치 진행
+        const installRes = await fetch(`${siteUrl}/wp-admin/install.php?step=2`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            weblog_title:    siteTitle,
+            user_name:       wpUser,
+            admin_password:  wpPass,
+            admin_password2: wpPass,
+            admin_email:     wpEmail,
+            blog_public:     '1',
+          }).toString(),
+          signal: AbortSignal.timeout(30000),
+        });
+        if (installRes.ok) {
+          console.log('[provision] VistaPanel WP HTTP 설치 성공');
+          return { ok: true, output: 'VistaPanel HTTP 설치 완료' };
+        }
+      }
+    } catch (_) {}
+
+    // 3) 파일 매니저나 HTTP 설치 모두 불가한 경우 → 부분 성공 반환
+    //    (서브도메인/DB는 생성됐으므로 사용자가 FTP로 WP 업로드 필요)
+    console.warn('[provision] VistaPanel WP 자동 설치 불가 — 수동 FTP 업로드 필요');
+    return {
+      ok: true,
+      skipped: true,
+      message: 'VistaPanel은 shell 접근이 없어 WP 파일을 FTP로 직접 업로드해야 합니다. ' +
+               '서브도메인과 DB는 생성 완료. wp-config.php 설정값: DB=' + dbName + ' / User=' + dbUser,
+    };
+  }
+
+  // ── SPanel: REST API로 WP 설치 명령 실행 ──────────────────────────
+  if (panelType === 'spanel') {
+    const auth = basicAuth || null;
+    const res  = await jsonPost(`${panelUrl}/api/v1/wordpress/install`, auth, {
+      domain:         fullDomain,
+      admin_user:     wpUser,
+      admin_password: wpPass,
+      admin_email:    wpEmail,
+      site_title:     siteTitle,
+      db_name:        dbName,
+      db_user:        dbUser,
+      db_password:    dbPass,
+    });
+    if (res.ok || res.data?.status === 'success') {
+      console.log('[provision] SPanel WP 설치 API 성공');
+      return { ok: true, output: 'SPanel WP 설치 완료' };
+    }
+    // API 실패 시 shell exec 폴백
+    const shellRes = await jsonPost(`${panelUrl}/api/v1/command/run`, auth, { command: fullCmd });
+    if (shellRes.ok) return { ok: true, output: String(shellRes.data).slice(0, 500) };
+  }
 
   // HestiaCP / VestaCP exec
   const execPaths = [
