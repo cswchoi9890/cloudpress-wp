@@ -231,3 +231,33 @@ INSERT OR IGNORE INTO settings (key, value) VALUES
   ('auto_ssl',               '1'),
   ('auto_breeze',            '1'),
   ('cloudflare_cdn_enabled', '1');
+
+-- ── vp_accounts (VP 패널 계정 — v15.0) ─────────────────────────────
+CREATE TABLE IF NOT EXISTS vp_accounts (
+  id                   TEXT PRIMARY KEY,
+  label                TEXT NOT NULL,
+  vp_username          TEXT NOT NULL,
+  vp_password          TEXT NOT NULL,
+  panel_url            TEXT NOT NULL,
+  server_domain        TEXT NOT NULL,
+  web_root             TEXT DEFAULT '/htdocs',
+  php_bin              TEXT DEFAULT 'php8.3',
+  mysql_host           TEXT DEFAULT 'localhost',
+  wp_download_url      TEXT,
+  phpsessid            TEXT,
+  phpsessid_updated_at TEXT,
+  max_sites            INTEGER DEFAULT 50,
+  current_sites        INTEGER DEFAULT 0,
+  is_active            INTEGER DEFAULT 1,
+  created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ── vp_accounts 마이그레이션 ────────────────────────────────────────
+ALTER TABLE vp_accounts ADD COLUMN wp_download_url TEXT;
+ALTER TABLE vp_accounts ADD COLUMN phpsessid TEXT;
+ALTER TABLE vp_accounts ADD COLUMN phpsessid_updated_at TEXT;
+
+-- ── sites 마이그레이션 (v15.0 추가 컬럼) ───────────────────────────
+ALTER TABLE sites ADD COLUMN vp_account_id TEXT;
+ALTER TABLE sites ADD COLUMN vp_origin_url TEXT;
