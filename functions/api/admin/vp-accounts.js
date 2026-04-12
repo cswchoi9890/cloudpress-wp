@@ -40,6 +40,7 @@ async function ensureColumns(DB) {
     'ALTER TABLE vp_accounts ADD COLUMN wp_download_url TEXT',
     'ALTER TABLE vp_accounts ADD COLUMN phpsessid TEXT',
     'ALTER TABLE vp_accounts ADD COLUMN phpsessid_updated_at TEXT',
+    'ALTER TABLE vp_accounts ADD COLUMN panel_type TEXT',
   ];
   for (const sql of cols) {
     try { await DB.prepare(sql).run(); } catch (_) {}
@@ -63,6 +64,7 @@ async function ensureTable(DB) {
         wp_download_url     TEXT,
         phpsessid           TEXT,
         phpsessid_updated_at TEXT,
+        panel_type          TEXT,
         max_sites           INTEGER DEFAULT 50,
         current_sites       INTEGER DEFAULT 0,
         is_active           INTEGER DEFAULT 1,
@@ -87,7 +89,7 @@ export async function onRequestGet({ request, env }) {
     const { results } = await env.DB.prepare(
       `SELECT id, label, vp_username, panel_url, server_domain, web_root,
               php_bin, mysql_host, wp_download_url,
-              phpsessid_updated_at,
+              phpsessid_updated_at, panel_type,
               CASE WHEN phpsessid IS NOT NULL AND phpsessid != '' THEN 1 ELSE 0 END as has_phpsessid,
               max_sites, current_sites, is_active, created_at, updated_at
        FROM vp_accounts
@@ -111,7 +113,7 @@ export async function onRequestPost({ request, env }) {
 
   const { label, vp_username, vp_password, panel_url, server_domain,
           web_root, php_bin, mysql_host, wp_download_url,
-          phpsessid, max_sites } = body;
+          phpsessid, panel_type, max_sites } = body;
 
   if (!label?.trim())         return err('계정 레이블을 입력해주세요.');
   if (!vp_username?.trim())   return err('VP 사용자명을 입력해주세요.');
@@ -127,10 +129,10 @@ export async function onRequestPost({ request, env }) {
       `INSERT INTO vp_accounts (
         id, label, vp_username, vp_password, panel_url, server_domain,
         web_root, php_bin, mysql_host, wp_download_url,
-        phpsessid, phpsessid_updated_at,
+        phpsessid, phpsessid_updated_at, panel_type,
         max_sites, current_sites, is_active,
         created_at, updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,datetime('now'),datetime('now'))`
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,datetime('now'),datetime('now'))`
     ).bind(
       vpId,
       label.trim(),
@@ -144,6 +146,7 @@ export async function onRequestPost({ request, env }) {
       wp_download_url?.trim() || null,
       phpsessid?.trim() || null,
       phpsessid?.trim() ? now : null,
+      panel_type?.trim() || null,
       parseInt(max_sites, 10) || 50
     ).run();
 
@@ -165,7 +168,7 @@ export async function onRequestPut({ request, env }) {
 
   const { id, label, vp_username, vp_password, panel_url, server_domain,
           web_root, php_bin, mysql_host, wp_download_url,
-          phpsessid, max_sites, is_active } = body;
+          phpsessid, panel_type, max_sites, is_active } = body;
 
   if (!id) return err('계정 ID가 필요합니다.');
 
@@ -185,6 +188,7 @@ export async function onRequestPut({ request, env }) {
     if (php_bin !== undefined)       { updates.push('php_bin=?');         values.push(php_bin?.trim() || 'php8.3'); }
     if (mysql_host !== undefined)    { updates.push('mysql_host=?');      values.push(mysql_host?.trim() || 'localhost'); }
     if (wp_download_url !== undefined){ updates.push('wp_download_url=?'); values.push(wp_download_url?.trim() || null); }
+    if (panel_type !== undefined)    { updates.push('panel_type=?');      values.push(panel_type?.trim() || null); }
     if (phpsessid !== undefined) {
       updates.push('phpsessid=?');
       updates.push('phpsessid_updated_at=?');
