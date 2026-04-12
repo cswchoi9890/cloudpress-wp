@@ -30,6 +30,7 @@ function getToken(req) {
 
 async function getUser(env, req) {
   try {
+    if (!env || !env.SESSIONS || !env.DB) return null;
     const t = getToken(req);
     if (!t) return null;
     const uid = await env.SESSIONS.get(`session:${t}`);
@@ -80,6 +81,7 @@ async function getMaxSites(env, plan) {
 export const onRequestOptions = () => new Response(null, { status: 204, headers: CORS });
 
 export async function onRequestGet({ request, env }) {
+  if (!env || !env.DB || !env.SESSIONS) return err('서버 설정 오류: DB/SESSIONS 바인딩 없음 (Cloudflare Pages 설정 확인)', 503);
   const user = await getUser(env, request);
   if (!user) return err('로그인이 필요합니다.', 401);
 
@@ -103,6 +105,7 @@ export async function onRequestGet({ request, env }) {
 }
 
 export async function onRequestPost({ request, env }) {
+  if (!env || !env.DB || !env.SESSIONS) return err('서버 설정 오류: DB/SESSIONS 바인딩 없음 (Cloudflare Pages 설정 확인)', 503);
   const user = await getUser(env, request);
   if (!user) return err('로그인이 필요합니다.', 401);
 
