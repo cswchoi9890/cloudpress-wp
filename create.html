@@ -278,11 +278,11 @@
               </div>
               <div class="provision-step" id="pstep3">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">3단계: 도메인 → 사이트 KV 매핑 저장</span>
+                <span class="pstep-name">3단계: 도메인 매핑 + WordPress 초기화 (테이블·관리자·설정)</span>
               </div>
               <div class="provision-step" id="pstep4">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">4단계: CF DNS + Worker Route 등록</span>
+                <span class="pstep-name">4단계: DNS + Worker 업로드 + Route 등록</span>
               </div>
             </div>
 
@@ -535,19 +535,22 @@ async function startCreation() {
 
 /* ── provision_step → 단계 UI 매핑 ── */
 const STEP_MAP = {
-  'init':         { step: 0, msg: '시작 준비 중...' },
-  'starting':     { step: 0, msg: '파이프라인 시작 중...' },
-  'd1_create':    { step: 1, msg: '① D1 데이터베이스 생성 중...' },
-  'kv_create':    { step: 2, msg: '② KV 네임스페이스 생성 중...' },
-  'kv_mapping':   { step: 3, msg: '③ 도메인 매핑 저장 중...' },
-  'dns_setup':    { step: 4, msg: '④ DNS 레코드 등록 중...' },
-  'worker_route': { step: 4, msg: '④ Worker Route 등록 중...' },
-  'completed':    { step: 4, msg: '✅ 인프라 구성 완료!' },
+  'init':          { step: 0, msg: '시작 준비 중...' },
+  'starting':      { step: 0, msg: '파이프라인 시작 중...' },
+  'd1_create':     { step: 1, msg: '① D1 데이터베이스 생성 중...' },
+  'kv_create':     { step: 2, msg: '② KV 네임스페이스 생성 중...' },
+  'kv_mapping':    { step: 3, msg: '③ 도메인 매핑 저장 중...' },
+  'wp_init':       { step: 3, msg: '③ WordPress 사이트 초기화 중 (테이블 생성 + 관리자 계정)...' },
+  'dns_setup':     { step: 4, msg: '④ DNS 레코드 등록 중...' },
+  'worker_upload': { step: 4, msg: '④ Worker 스크립트 업로드 + 바인딩 연결 중...' },
+  'worker_route':  { step: 4, msg: '④ Worker Route 등록 중...' },
+  'completed':     { step: 4, msg: '✅ 인프라 구성 완료!' },
   // 오류
-  'config_missing':  { step: 0, msg: '❌ 설정 누락' },
-  'd1_create_fail':  { step: 1, msg: '❌ D1 생성 실패' },
-  'kv_create_fail':  { step: 2, msg: '❌ KV 생성 실패' },
-  'pipeline_error':  { step: 0, msg: '❌ 파이프라인 오류' },
+  'config_missing': { step: 0, msg: '❌ CF API 키 미등록' },
+  'wp_init':        { step: 3, msg: '❌ WP 초기화 실패' },
+  'd1_create':      { step: 1, msg: '❌ D1 생성 실패' },
+  'kv_create':      { step: 2, msg: '❌ KV 생성 실패' },
+  'pipeline_error': { step: 0, msg: '❌ 파이프라인 오류' },
 };
 
 function updateProvisionSteps(provStep, status) {
@@ -609,8 +612,11 @@ function startPolling(siteId) {
         if (step === 'd1_create')    addLog('🗄️ [1/4] D1 데이터베이스 생성 중...');
         if (step === 'kv_create')    addLog('⚡ [2/4] KV 네임스페이스 생성 중...');
         if (step === 'kv_mapping')   addLog('🔗 [3/4] 도메인 → 사이트 매핑 저장 중...');
-        if (step === 'dns_setup')    addLog('🌐 [4/4] DNS CNAME 레코드 등록 중...');
-        if (step === 'worker_route') addLog('☁️ [4/4] Cloudflare Worker Route 등록 중...');
+        if (step === 'kv_mapping')    addLog('🔗 [3/5] 도메인 → 사이트 매핑 저장 중...');
+        if (step === 'wp_init')       addLog('🔧 [4/5] WordPress 사이트 초기화 중 (테이블 생성 + 관리자 계정 등록)...');
+        if (step === 'dns_setup')     addLog('🌐 [5/5] DNS CNAME 레코드 등록 중...');
+        if (step === 'worker_upload') addLog('🚀 [5/5] Worker 스크립트 업로드 + D1/KV 바인딩 연결 중...');
+        if (step === 'worker_route')  addLog('☁️ [5/5] Cloudflare Worker Route 등록 중...');
         if (step === 'completed')    addLog('✅ 인프라 구성 완료!');
       }
 
