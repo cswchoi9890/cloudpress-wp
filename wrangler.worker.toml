@@ -19,7 +19,7 @@ id      = "e1acf814c1244a59bbc24865723e479d"
 
 # ── 환경 변수 ──
 [vars]
-WP_ORIGIN_URL    = "https://wpjiwungum100.dpdns.org/"   # wrangler secret put WP_ORIGIN_URL    --config wrangler.worker.toml
+WP_ORIGIN_URL    = "https://admin-1775040937976.webcustom-hosting.com/"   # wrangler secret put WP_ORIGIN_URL    --config wrangler.worker.toml
 WP_ORIGIN_SECRET = "Swsh120327!"   # wrangler secret put WP_ORIGIN_SECRET --config wrangler.worker.toml
 CF_ACCOUNT_ID    = ""   # wrangler secret put CF_ACCOUNT_ID    --config wrangler.worker.toml
 CF_API_TOKEN     = ""   # wrangler secret put CF_API_TOKEN     --config wrangler.worker.toml
