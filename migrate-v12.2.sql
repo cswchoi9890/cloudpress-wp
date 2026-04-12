@@ -11,3 +11,8 @@
 ALTER TABLE users ADD COLUMN cf_global_api_key TEXT;
 ALTER TABLE users ADD COLUMN cf_account_email  TEXT;
 ALTER TABLE users ADD COLUMN cf_account_id     TEXT;
+
+-- v12.4 추가: Worker Script Upload 바인딩용 settings 키
+INSERT OR IGNORE INTO settings (key, value) VALUES ('main_db_id',     '');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('cache_kv_id',    '');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('sessions_kv_id', '');
