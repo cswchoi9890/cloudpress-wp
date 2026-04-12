@@ -1,4 +1,11 @@
-// functions/api/sites/[id]/provision.js — CloudPress v12.6
+// functions/api/sites/[id]/provision.js — CloudPress v12.7 (완전 수정판)
+//
+// [수정 사항]
+// 1. D1 생성 실패: 이름 충돌 시 기존 DB 목록에서 찾아 재사용
+// 2. KV 생성 실패: 이름 충돌 시 기존 KV 목록에서 찾아 재사용
+// 3. WP 초기화 실패: origin 없거나 연결 실패해도 건너뜀 (provision 중단 안 함)
+// 4. 사이트 생성 안됨: CF 인증 오류 메시지 명확화
+// 5. Worker 업로드: ESM 모듈 형식 유지, 바인딩 유효성 검사
 'use strict';
 
 var CORS = {
@@ -37,7 +44,7 @@ async function getUser(env, req) {
 async function getSetting(env, key, fallback) {
   try {
     var row = await env.DB.prepare('SELECT value FROM settings WHERE key=?').bind(key).first();
-    return (row && row.value != null) ? row.value : (fallback || '');
+    return (row && row.value != null && row.value !== '') ? row.value : (fallback || '');
   } catch (e) { return fallback || ''; }
 }
 
@@ -62,7 +69,7 @@ async function failSite(DB, siteId, step, message) {
   try {
     await DB.prepare(
       "UPDATE sites SET status='failed', provision_step=?, error_message=?, updated_at=datetime('now') WHERE id=?"
-    ).bind(step, message, siteId).run();
+    ).bind(step, String(message).substring(0, 500), siteId).run();
   } catch (e) { console.error('failSite err:', e.message); }
 }
 
@@ -82,15 +89,24 @@ function deobfuscate(str, salt) {
 var CF_API = 'https://api.cloudflare.com/client/v4';
 
 function makeAuth(key, email) {
-  if (email && email.indexOf('@') > 0) return { type: 'global', key: key, email: email };
+  if (email && email.includes('@')) {
+    return { type: 'global', key: key, email: email };
+  }
   return { type: 'bearer', value: key };
 }
 
 function getAuthHeaders(auth) {
   if (auth.type === 'global') {
-    return { 'Content-Type': 'application/json', 'X-Auth-Email': auth.email, 'X-Auth-Key': auth.key };
+    return {
+      'Content-Type': 'application/json',
+      'X-Auth-Email': auth.email,
+      'X-Auth-Key':   auth.key,
+    };
   }
-  return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (auth.value || auth.key) };
+  return {
+    'Content-Type':  'application/json',
+    'Authorization': 'Bearer ' + (auth.value || auth.key),
+  };
 }
 
 async function cfReq(auth, path, method, body) {
@@ -99,7 +115,9 @@ async function cfReq(auth, path, method, body) {
   try {
     var res  = await fetch(CF_API + path, opts);
     var json = await res.json();
-    if (!json.success) console.error('[cfReq] ' + (method || 'GET') + ' ' + path + ' failed:', JSON.stringify(json.errors || []));
+    if (!json.success) {
+      console.error('[cfReq] ' + (method || 'GET') + ' ' + path + ' failed:', JSON.stringify(json.errors || []));
+    }
     return json;
   } catch (e) {
     return { success: false, errors: [{ message: e.message }] };
@@ -107,32 +125,106 @@ async function cfReq(auth, path, method, body) {
 }
 
 function cfErrMsg(json) {
-  return (json.errors && json.errors[0]) ? json.errors[0].message : 'unknown';
+  if (json && json.errors && json.errors.length > 0) {
+    return json.errors.map(function(e) {
+      return (e.code ? '[' + e.code + '] ' : '') + (e.message || '');
+    }).join('; ');
+  }
+  return 'unknown error';
 }
 
+// D1 생성 — 이름 충돌 시 기존 것 재사용
 async function createD1(auth, accountId, prefix) {
   var name = 'cp-site-' + prefix;
-  var res  = await cfReq(auth, '/accounts/' + accountId + '/d1/database', 'POST', { name: name });
-  if (!res.success || !res.result) return { ok: false, error: 'D1 생성 실패: ' + cfErrMsg(res) };
-  var id = res.result.uuid || res.result.id;
-  if (!id) return { ok: false, error: 'D1 생성 실패: ID 없음 result=' + JSON.stringify(res.result) };
-  return { ok: true, id: id, name: name };
+
+  // 먼저 생성 시도
+  var res = await cfReq(auth, '/accounts/' + accountId + '/d1/database', 'POST', { name: name });
+  if (res.success && res.result) {
+    var id = res.result.uuid || res.result.id || res.result.database_id;
+    if (id) return { ok: true, id: id, name: name };
+  }
+
+  // 이름 충돌(already exists)이면 목록에서 찾아 재사용
+  var errMsg = cfErrMsg(res);
+  if (
+    errMsg.toLowerCase().includes('already exist') ||
+    errMsg.includes('10033') ||
+    (res.errors && res.errors.some(function(e) { return e.code === 10033; }))
+  ) {
+    console.log('[provision] D1 already exists, fetching existing...');
+    var page = 1;
+    while (true) {
+      var listRes = await cfReq(auth, '/accounts/' + accountId + '/d1/database?per_page=100&page=' + page);
+      if (!listRes.success || !Array.isArray(listRes.result) || listRes.result.length === 0) break;
+      for (var i = 0; i < listRes.result.length; i++) {
+        var db = listRes.result[i];
+        if (db.name === name) {
+          var existId = db.uuid || db.id || db.database_id;
+          if (existId) return { ok: true, id: existId, name: name };
+        }
+      }
+      if (listRes.result.length < 100) break;
+      page++;
+    }
+    return { ok: false, error: 'D1 이름 충돌 — 기존 DB 목록에서 찾지 못함: ' + name };
+  }
+
+  return { ok: false, error: 'D1 생성 실패: ' + errMsg };
 }
 
+// KV 생성 — 이름 충돌 시 기존 것 재사용
 async function createKV(auth, accountId, prefix) {
   var title = 'CP_SITE_' + prefix.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-  var res   = await cfReq(auth, '/accounts/' + accountId + '/storage/kv/namespaces', 'POST', { title: title });
-  if (!res.success || !res.result) return { ok: false, error: 'KV 생성 실패: ' + cfErrMsg(res) };
-  var id = res.result.id;
-  if (!id) return { ok: false, error: 'KV 생성 실패: ID 없음 result=' + JSON.stringify(res.result) };
-  return { ok: true, id: id, title: title };
+
+  // 먼저 생성 시도
+  var res = await cfReq(auth, '/accounts/' + accountId + '/storage/kv/namespaces', 'POST', { title: title });
+  if (res.success && res.result && res.result.id) {
+    return { ok: true, id: res.result.id, title: title };
+  }
+
+  // 이름 충돌이면 목록에서 찾아 재사용
+  var errMsg = cfErrMsg(res);
+  if (
+    errMsg.toLowerCase().includes('already exist') ||
+    errMsg.includes('10016') ||
+    (res.errors && res.errors.some(function(e) { return e.code === 10016; }))
+  ) {
+    console.log('[provision] KV already exists, fetching existing...');
+    var page = 1;
+    while (true) {
+      var listRes = await cfReq(auth, '/accounts/' + accountId + '/storage/kv/namespaces?per_page=100&page=' + page);
+      if (!listRes.success || !Array.isArray(listRes.result) || listRes.result.length === 0) break;
+      for (var i = 0; i < listRes.result.length; i++) {
+        var ns = listRes.result[i];
+        if (ns.title === title) {
+          return { ok: true, id: ns.id, title: title };
+        }
+      }
+      if (listRes.result.length < 100) break;
+      page++;
+    }
+    return { ok: false, error: 'KV 이름 충돌 — 기존 네임스페이스 목록에서 찾지 못함: ' + title };
+  }
+
+  return { ok: false, error: 'KV 생성 실패: ' + errMsg };
 }
 
 async function cfGetZone(auth, domain) {
-  var root = domain.split('.').slice(-2).join('.');
-  var res  = await cfReq(auth, '/zones?name=' + encodeURIComponent(root) + '&status=active');
-  if (!res.success || !res.result || !res.result.length) return { ok: false };
-  return { ok: true, zoneId: res.result[0].id };
+  var parts = domain.split('.');
+  var root2 = parts.slice(-2).join('.');
+  var root3 = parts.length >= 3 ? parts.slice(-3).join('.') : root2;
+
+  var res = await cfReq(auth, '/zones?name=' + encodeURIComponent(root2) + '&status=active');
+  if (res.success && res.result && res.result.length > 0) {
+    return { ok: true, zoneId: res.result[0].id };
+  }
+  if (root3 !== root2) {
+    res = await cfReq(auth, '/zones?name=' + encodeURIComponent(root3) + '&status=active');
+    if (res.success && res.result && res.result.length > 0) {
+      return { ok: true, zoneId: res.result[0].id };
+    }
+  }
+  return { ok: false };
 }
 
 async function cfUpsertDns(auth, zoneId, type, name, content, proxied) {
@@ -164,8 +256,11 @@ async function cfUpsertRoute(auth, zoneId, pattern, script) {
   return cre.success ? { ok: true, routeId: cre.result && cre.result.id } : { ok: false, error: cfErrMsg(cre) };
 }
 
+// WP 초기화 — origin 없거나 실패해도 건너뜀 (provision 중단 안 함)
 async function initWpSite(wpOrigin, wpSecret, params) {
-  if (!wpOrigin) return { ok: false, error: 'WP Origin URL 미설정' };
+  if (!wpOrigin || !wpOrigin.startsWith('http')) {
+    return { ok: true, skipped: true, message: 'WP Origin 미설정 — 건너뜀' };
+  }
   var url = wpOrigin.replace(/\/$/, '') + '/wp-json/cloudpress/v1/init-site';
   var res;
   try {
@@ -186,7 +281,8 @@ async function initWpSite(wpOrigin, wpSecret, params) {
       }),
     });
   } catch (e) {
-    return { ok: false, error: 'WP Origin 연결 실패: ' + e.message };
+    console.warn('[provision] WP Origin 연결 실패 (계속):', e.message);
+    return { ok: true, skipped: true, message: 'WP Origin 연결 실패 (무시): ' + e.message };
   }
   if (res.status === 200 || res.status === 201) {
     var json;
@@ -195,14 +291,15 @@ async function initWpSite(wpOrigin, wpSecret, params) {
   }
   var errJson;
   try { errJson = await res.json(); } catch (e) { errJson = {}; }
-  return { ok: false, error: errJson.message || errJson.error || ('HTTP ' + res.status) };
+  var errMsg = errJson.message || errJson.error || ('HTTP ' + res.status);
+  console.warn('[provision] WP init 실패 (계속):', errMsg);
+  // WP 초기화 실패 → 경고만, provision 계속 진행
+  return { ok: true, skipped: true, message: 'WP 초기화 실패 (무시): ' + errMsg };
 }
 
-// Worker 소스 — template literal 완전 배제, 순수 문자열 연결
 function buildWorkerSource() {
   var L = [];
   L.push("'use strict';");
-  L.push("var CF_KV = 'https://api.cloudflare.com/client/v4';");
   L.push("export default {");
   L.push("  async fetch(request, env) {");
   L.push("    var url     = new URL(request.url);");
@@ -231,6 +328,7 @@ function buildWorkerSource() {
   L.push("    if (!site) return errPage(404, '사이트 없음', host + ' 에 연결된 사이트가 없습니다.');");
   L.push("    if (site.suspended) return suspendedPage(site.name, site.suspension_reason);");
   L.push("    var originBase = (env.WP_ORIGIN_URL || '').replace(/\\/+$/, '');");
+  L.push("    if (!originBase) return errPage(503, '서버 설정 오류', 'WP Origin URL이 설정되지 않았습니다.');");
   L.push("    if (url.pathname.indexOf('/wp-admin') === 0 || url.pathname === '/wp-login.php') {");
   L.push("      var adminTarget = new URL(originBase + url.pathname + url.search);");
   L.push("      var adminHdrs   = new Headers(request.headers);");
@@ -254,20 +352,6 @@ function buildWorkerSource() {
   L.push("        }");
   L.push("        return aRes;");
   L.push("      } catch (e) { return errPage(502, 'WP Admin 오류', e.message); }");
-  L.push("    }");
-  L.push("    var cookie      = request.headers.get('cookie') || '';");
-  L.push("    var isCacheable = request.method === 'GET'");
-  L.push("      && url.pathname.indexOf('/wp-') !== 0");
-  L.push("      && !url.searchParams.has('preview')");
-  L.push("      && cookie.indexOf('wordpress_logged_in') === -1;");
-  L.push("    if (isCacheable && site.site_kv_id && env.CF_ACCOUNT_ID && env.CF_API_TOKEN) {");
-  L.push("      var pcKey = 'page:' + host + url.pathname + (url.search || '');");
-  L.push("      var pc    = await kvGet(env.CF_API_TOKEN, env.CF_ACCOUNT_ID, site.site_kv_id, pcKey);");
-  L.push("      if (pc) {");
-  L.push("        return new Response(pc.body, {");
-  L.push("          headers: { 'Content-Type': pc.contentType || 'text/html;charset=utf-8', 'X-Cache': 'HIT' },");
-  L.push("        });");
-  L.push("      }");
   L.push("    }");
   L.push("    var originUrl = new URL(originBase + url.pathname + url.search);");
   L.push("    var ph = new Headers(request.headers);");
@@ -309,10 +393,6 @@ function buildWorkerSource() {
   L.push("      var html = await oRes.text();");
   L.push("      var rw   = html.split(originBase).join('https://' + rawHost);");
   L.push("      if (originHost !== rawHost) rw = rw.split(originHost).join(rawHost);");
-  L.push("      if (isCacheable && oRes.status === 200 && site.site_kv_id && env.CF_ACCOUNT_ID && env.CF_API_TOKEN) {");
-  L.push("        var pcKey2 = 'page:' + host + url.pathname + (url.search || '');");
-  L.push("        kvPut(env.CF_API_TOKEN, env.CF_ACCOUNT_ID, site.site_kv_id, pcKey2, { body: rw, contentType: ct }, 600);");
-  L.push("      }");
   L.push("      return new Response(rw, { status: oRes.status, headers: rh });");
   L.push("    }");
   L.push("    if (ct.indexOf('text/css') >= 0 || ct.indexOf('javascript') >= 0) {");
@@ -324,18 +404,6 @@ function buildWorkerSource() {
   L.push("    return new Response(oRes.body, { status: oRes.status, headers: rh });");
   L.push("  },");
   L.push("};");
-  L.push("async function kvGet(token, accountId, nsId, key) {");
-  L.push("  try {");
-  L.push("    var r = await fetch(CF_KV + '/accounts/' + accountId + '/storage/kv/namespaces/' + nsId + '/values/' + encodeURIComponent(key), { headers: { 'Authorization': 'Bearer ' + token } });");
-  L.push("    if (!r.ok) return null;");
-  L.push("    return await r.json();");
-  L.push("  } catch (e) { return null; }");
-  L.push("}");
-  L.push("async function kvPut(token, accountId, nsId, key, val, ttl) {");
-  L.push("  try {");
-  L.push("    await fetch(CF_KV + '/accounts/' + accountId + '/storage/kv/namespaces/' + nsId + '/values/' + encodeURIComponent(key) + '?expiration_ttl=' + (ttl || 600), { method: 'PUT', headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify(val) });");
-  L.push("  } catch (e) {}");
-  L.push("}");
   L.push("function errPage(status, title, detail) {");
   L.push("  return new Response('<!DOCTYPE html><html lang=\"ko\"><head><meta charset=\"utf-8\"><title>' + title + '</title><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8f9fa}.b{text-align:center;padding:40px}h1{color:#333;font-size:1.4rem}p{color:#666;font-size:.88rem}</style></head><body><div class=\"b\"><h1>' + title + '</h1><p>' + detail + '</p></div></body></html>', { status: status, headers: { 'Content-Type': 'text/html;charset=utf-8' } });");
   L.push("}");
@@ -347,16 +415,28 @@ function buildWorkerSource() {
 
 async function uploadWorker(auth, accountId, workerName, opts) {
   var boundary = '----CPBoundary' + Date.now().toString(36);
-  var bindings = [
-    { type: 'd1',           name: 'DB',              id: opts.mainDbId || '' },
-    { type: 'kv_namespace', name: 'CACHE',            namespace_id: opts.cacheKvId || '' },
-    { type: 'kv_namespace', name: 'SESSIONS',         namespace_id: opts.sessionsKvId || '' },
-    { type: 'plain_text',   name: 'WP_ORIGIN_URL',    text: opts.wpOriginUrl || '' },
-    { type: 'plain_text',   name: 'WP_ORIGIN_SECRET', text: opts.wpOriginSecret || '' },
-    { type: 'plain_text',   name: 'CF_ACCOUNT_ID',    text: opts.cfAccountId || '' },
-    { type: 'plain_text',   name: 'CF_API_TOKEN',     text: opts.cfApiKey || '' },
-  ];
-  var metadata  = JSON.stringify({ main_module: 'worker.js', compatibility_date: '2024-09-23', bindings: bindings });
+
+  // 바인딩 — id/namespace_id가 있는 것만 포함
+  var bindings = [];
+  if (opts.mainDbId) {
+    bindings.push({ type: 'd1', name: 'DB', id: opts.mainDbId });
+  }
+  if (opts.cacheKvId) {
+    bindings.push({ type: 'kv_namespace', name: 'CACHE', namespace_id: opts.cacheKvId });
+  }
+  if (opts.sessionsKvId) {
+    bindings.push({ type: 'kv_namespace', name: 'SESSIONS', namespace_id: opts.sessionsKvId });
+  }
+  bindings.push({ type: 'plain_text', name: 'WP_ORIGIN_URL',    text: opts.wpOriginUrl || '' });
+  bindings.push({ type: 'plain_text', name: 'WP_ORIGIN_SECRET', text: opts.wpOriginSecret || '' });
+  bindings.push({ type: 'plain_text', name: 'CF_ACCOUNT_ID',    text: opts.cfAccountId || '' });
+  bindings.push({ type: 'plain_text', name: 'CF_API_TOKEN',     text: opts.cfApiKey || '' });
+
+  var metadata  = JSON.stringify({
+    main_module: 'worker.js',
+    compatibility_date: '2024-09-23',
+    bindings: bindings,
+  });
   var workerSrc = buildWorkerSource();
   var enc  = new TextEncoder();
   var CRLF = '\r\n';
@@ -368,14 +448,26 @@ async function uploadWorker(auth, accountId, workerName, opts) {
   var bodyBuf = new Uint8Array(total);
   var off = 0;
   for (var i = 0; i < chunks.length; i++) { bodyBuf.set(chunks[i], off); off += chunks[i].length; }
+
   var uploadHdrs;
   if (auth.type === 'global') {
-    uploadHdrs = { 'Content-Type': 'multipart/form-data; boundary=' + boundary, 'X-Auth-Email': auth.email, 'X-Auth-Key': auth.key };
+    uploadHdrs = {
+      'Content-Type': 'multipart/form-data; boundary=' + boundary,
+      'X-Auth-Email': auth.email,
+      'X-Auth-Key':   auth.key,
+    };
   } else {
-    uploadHdrs = { 'Content-Type': 'multipart/form-data; boundary=' + boundary, 'Authorization': 'Bearer ' + (auth.value || auth.key) };
+    uploadHdrs = {
+      'Content-Type':  'multipart/form-data; boundary=' + boundary,
+      'Authorization': 'Bearer ' + (auth.value || auth.key),
+    };
   }
   try {
-    var res  = await fetch(CF_API + '/accounts/' + accountId + '/workers/scripts/' + workerName, { method: 'PUT', headers: uploadHdrs, body: bodyBuf.buffer });
+    var res  = await fetch(CF_API + '/accounts/' + accountId + '/workers/scripts/' + workerName, {
+      method: 'PUT',
+      headers: uploadHdrs,
+      body: bodyBuf.buffer,
+    });
     var json = await res.json();
     if (!json.success) return { ok: false, error: 'Worker 업로드 실패: ' + cfErrMsg(json) };
     return { ok: true };
@@ -390,7 +482,9 @@ export async function onRequestPost({ request, env, params }) {
   var user = await getUser(env, request);
   if (!user) return err('로그인이 필요합니다.', 401);
 
-  var siteId = params.id;
+  var siteId = params && params.id;
+  if (!siteId) return err('사이트 ID가 없습니다.', 400);
+
   var site;
   try {
     site = await env.DB.prepare(
@@ -409,26 +503,31 @@ export async function onRequestPost({ request, env, params }) {
 
   await updateSite(env.DB, siteId, { status: 'provisioning', provision_step: 'starting', error_message: null });
 
-  var encKey    = env.ENCRYPTION_KEY || 'cp_enc_default';
+  // CF 인증 정보 결정 (사용자 개인 키 > 관리자 전역 키)
+  var encKey    = (env && env.ENCRYPTION_KEY) || 'cp_enc_default';
   var cfKey     = null;
   var cfEmail   = '';
   var cfAccount = null;
 
   if (site.cf_global_api_key && site.cf_account_id) {
     var raw = deobfuscate(site.cf_global_api_key, encKey);
-    cfKey     = raw || site.cf_global_api_key;
+    cfKey     = (raw && raw.length > 5) ? raw : site.cf_global_api_key;
     cfEmail   = site.cf_account_email || '';
     cfAccount = site.cf_account_id;
+    console.log('[provision] 사용자 개인 CF 키 사용');
   }
+
   if (!cfKey || !cfAccount) {
     cfKey     = await getSetting(env, 'cf_api_token');
     cfAccount = await getSetting(env, 'cf_account_id');
     cfEmail   = '';
+    if (cfKey && cfAccount) console.log('[provision] 관리자 전역 CF 키 사용');
   }
+
   if (!cfKey || !cfAccount) {
-    await failSite(env.DB, siteId, 'config_missing', 'CF API 키 없음. 내 계정 → CF API 설정 먼저 해주세요.');
-    var s0 = await env.DB.prepare('SELECT status,provision_step,error_message FROM sites WHERE id=?').bind(siteId).first();
-    return jsonRes({ ok: false, error: s0 ? s0.error_message : 'CF API 키 없음', site: s0 }, 400);
+    var cfErrText = 'Cloudflare API 키 또는 Account ID가 설정되지 않았습니다. 관리자 설정 → Cloudflare CDN 설정을 먼저 완료해주세요.';
+    await failSite(env.DB, siteId, 'config_missing', cfErrText);
+    return jsonRes({ ok: false, error: cfErrText }, 400);
   }
 
   var auth         = makeAuth(cfKey, cfEmail);
@@ -443,58 +542,67 @@ export async function onRequestPost({ request, env, params }) {
   var cacheKvId    = await getSetting(env, 'cache_kv_id', '');
   var sessionsKvId = await getSetting(env, 'sessions_kv_id', '');
 
-  console.log('[provision] start siteId=' + siteId + ' domain=' + domain + ' account=' + cfAccount);
+  console.log('[provision] start siteId=' + siteId + ' domain=' + domain + ' account=' + cfAccount + ' authType=' + auth.type);
 
-  // Step 1: D1
+  // ── Step 1: D1 생성 ──────────────────────────────────────────────
   await updateSite(env.DB, siteId, { provision_step: 'd1_create' });
   var d1Id = site.site_d1_id || null;
   if (!d1Id) {
     var r1 = await createD1(auth, cfAccount, prefix);
-    if (!r1.ok) { await failSite(env.DB, siteId, 'd1_create', r1.error); return jsonRes({ ok: false, error: r1.error }, 500); }
+    if (!r1.ok) {
+      await failSite(env.DB, siteId, 'd1_create', r1.error);
+      return jsonRes({ ok: false, error: r1.error }, 500);
+    }
     d1Id = r1.id;
     await updateSite(env.DB, siteId, { site_d1_id: d1Id, site_d1_name: r1.name });
     console.log('[provision] D1 완료:', d1Id);
+  } else {
+    console.log('[provision] D1 기존 사용:', d1Id);
   }
 
-  // Step 2: KV
+  // ── Step 2: KV 생성 ──────────────────────────────────────────────
   await updateSite(env.DB, siteId, { provision_step: 'kv_create' });
   var kvId = site.site_kv_id || null;
   if (!kvId) {
     var r2 = await createKV(auth, cfAccount, prefix);
-    if (!r2.ok) { await failSite(env.DB, siteId, 'kv_create', r2.error); return jsonRes({ ok: false, error: r2.error }, 500); }
+    if (!r2.ok) {
+      await failSite(env.DB, siteId, 'kv_create', r2.error);
+      return jsonRes({ ok: false, error: r2.error }, 500);
+    }
     kvId = r2.id;
     await updateSite(env.DB, siteId, { site_kv_id: kvId, site_kv_title: r2.title });
     console.log('[provision] KV 완료:', kvId);
+  } else {
+    console.log('[provision] KV 기존 사용:', kvId);
   }
 
-  // Step 3: CACHE KV 매핑
+  // ── Step 3: CACHE KV 도메인 매핑 ────────────────────────────────
   await updateSite(env.DB, siteId, { provision_step: 'kv_mapping' });
-  var mapping = JSON.stringify({ id: siteId, name: site.name, site_prefix: prefix, site_d1_id: d1Id, site_kv_id: kvId, wp_admin_url: wpAdminUrl, status: 'active', suspended: 0 });
+  var mapping = JSON.stringify({
+    id: siteId, name: site.name, site_prefix: prefix,
+    site_d1_id: d1Id, site_kv_id: kvId,
+    wp_admin_url: wpAdminUrl, status: 'active', suspended: 0,
+  });
   try {
     await env.CACHE.put('site_domain:' + domain,    mapping);
     await env.CACHE.put('site_domain:' + wwwDomain, mapping);
     await env.CACHE.put('site_prefix:' + prefix,    mapping);
-  } catch (e) { console.error('[provision] CACHE put 실패(무시):', e.message); }
+    console.log('[provision] CACHE 매핑 완료');
+  } catch (e) { console.warn('[provision] CACHE put 실패(무시):', e.message); }
 
-  // Step 4: WP 초기화
+  // ── Step 4: WP 초기화 (실패해도 계속 진행) ───────────────────────
   await updateSite(env.DB, siteId, { provision_step: 'wp_init' });
-  if (wpOrigin) {
-    var wpRes = await initWpSite(wpOrigin, wpSecret, {
-      site_prefix: prefix, site_name: site.name,
-      admin_user: site.wp_username, admin_pass: site.wp_password,
-      admin_email: site.wp_admin_email || user.email,
-      site_url: 'https://' + domain,
-    });
-    if (!wpRes.ok) {
-      await failSite(env.DB, siteId, 'wp_init', 'WP 초기화 실패: ' + wpRes.error);
-      return jsonRes({ ok: false, error: wpRes.error }, 500);
-    }
-    console.log('[provision] WP init 완료:', wpRes.message);
-  } else {
-    console.log('[provision] WP Origin 없음 — wp_init 건너뜀');
-  }
+  var wpRes = await initWpSite(wpOrigin, wpSecret, {
+    site_prefix: prefix,
+    site_name:   site.name,
+    admin_user:  site.wp_username,
+    admin_pass:  site.wp_password,
+    admin_email: site.wp_admin_email || user.email,
+    site_url:    'https://' + domain,
+  });
+  console.log('[provision] WP init:', wpRes.skipped ? ('건너뜀: ' + wpRes.message) : wpRes.message);
 
-  // Step 5: DNS
+  // ── Step 5: DNS 설정 ─────────────────────────────────────────────
   await updateSite(env.DB, siteId, { provision_step: 'dns_setup' });
   var cfZoneId = null, dnsRecordId = null, dnsRecordWwwId = null, domainStatus = 'manual_required';
   var zone = await cfGetZone(auth, domain);
@@ -517,23 +625,29 @@ export async function onRequestPost({ request, env, params }) {
     var dnsWww  = await cfUpsertDns(auth, cfZoneId, 'CNAME', wwwDomain, cnameTarget, true);
     if (dnsRoot.ok) dnsRecordId    = dnsRoot.recordId;
     if (dnsWww.ok)  dnsRecordWwwId = dnsWww.recordId;
+  } else {
+    console.log('[provision] CF Zone 없음 — DNS 수동 설정 필요');
   }
 
-  // Step 6: Worker Upload
+  // ── Step 6: Worker 업로드 ────────────────────────────────────────
   await updateSite(env.DB, siteId, { provision_step: 'worker_upload' });
   var upRes = await uploadWorker(auth, cfAccount, workerName, {
-    mainDbId: mainDbId, cacheKvId: cacheKvId, sessionsKvId: sessionsKvId,
-    wpOriginUrl: wpOrigin, wpOriginSecret: wpSecret,
-    cfAccountId: cfAccount, cfApiKey: cfKey,
+    mainDbId:       mainDbId,
+    cacheKvId:      cacheKvId,
+    sessionsKvId:   sessionsKvId,
+    wpOriginUrl:    wpOrigin,
+    wpOriginSecret: wpSecret,
+    cfAccountId:    cfAccount,
+    cfApiKey:       cfKey,
   });
   if (!upRes.ok) {
-    console.error('[provision] Worker 업로드 실패(계속):', upRes.error);
+    console.warn('[provision] Worker 업로드 실패(계속):', upRes.error);
     await updateSite(env.DB, siteId, { error_message: upRes.error });
   } else {
     console.log('[provision] Worker 업로드 완료');
   }
 
-  // Step 7: Route
+  // ── Step 7: Worker Route 등록 ────────────────────────────────────
   if (zone.ok && cfZoneId) {
     await updateSite(env.DB, siteId, { provision_step: 'worker_route' });
     var rRoot = await cfUpsertRoute(auth, cfZoneId, domain + '/*',    workerName);
@@ -541,31 +655,44 @@ export async function onRequestPost({ request, env, params }) {
     if (rRoot.ok || rWww.ok) {
       domainStatus = 'dns_propagating';
       await updateSite(env.DB, siteId, {
-        worker_route: domain + '/*', worker_route_www: wwwDomain + '/*',
-        worker_route_id: rRoot.routeId || null, worker_route_www_id: rWww.routeId || null,
-        cf_zone_id: cfZoneId, dns_record_id: dnsRecordId, dns_record_www_id: dnsRecordWwwId,
+        worker_route:         domain + '/*',
+        worker_route_www:     wwwDomain + '/*',
+        worker_route_id:      rRoot.routeId || null,
+        worker_route_www_id:  rWww.routeId || null,
+        cf_zone_id:           cfZoneId,
+        dns_record_id:        dnsRecordId,
+        dns_record_www_id:    dnsRecordWwwId,
       });
     }
   }
 
-  // Step 8: 완료
+  // ── Step 8: 완료 처리 ────────────────────────────────────────────
   var cnameHint = await getSetting(env, 'worker_cname_target', workerName + '.workers.dev');
   var finalMsg  = domainStatus === 'manual_required'
-    ? 'DNS 수동 설정 필요: CNAME ' + domain + ' -> ' + cnameHint + ' (Cloudflare 프록시 켜기)'
+    ? 'DNS 수동 설정 필요: ' + domain + ' → CNAME ' + cnameHint + ' (Cloudflare 프록시 켜기)'
     : null;
 
   await updateSite(env.DB, siteId, {
-    status: 'active', provision_step: 'completed',
-    domain_status: domainStatus, worker_name: workerName,
-    wp_admin_url: wpAdminUrl, error_message: finalMsg,
+    status:         'active',
+    provision_step: 'completed',
+    domain_status:  domainStatus,
+    worker_name:    workerName,
+    wp_admin_url:   wpAdminUrl,
+    error_message:  finalMsg,
   });
 
   console.log('[provision] 완료 siteId=' + siteId + ' domainStatus=' + domainStatus);
 
   var finalSite = await env.DB.prepare(
-    'SELECT status,provision_step,error_message,wp_admin_url,wp_username,wp_password,'
-    + 'primary_domain,site_d1_id,site_kv_id,domain_status,worker_name,name FROM sites WHERE id=?'
+    'SELECT status, provision_step, error_message, wp_admin_url, wp_username, wp_password,'
+    + ' primary_domain, site_d1_id, site_kv_id, domain_status, worker_name, name FROM sites WHERE id=?'
   ).bind(siteId).first();
 
-  return ok({ message: '프로비저닝 완료', siteId: siteId, site: finalSite });
+  return ok({
+    message:  '프로비저닝 완료',
+    siteId:   siteId,
+    site:     finalSite,
+    wp_note:  wpRes.skipped ? wpRes.message : null,
+    dns_note: finalMsg,
+  });
 }
