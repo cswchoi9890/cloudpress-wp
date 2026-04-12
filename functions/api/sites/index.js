@@ -129,26 +129,23 @@ export async function onRequestPost({ request, env }) {
   if (!/^[a-zA-Z0-9_]+$/.test(adminLogin)) return err('관리자 아이디는 영문/숫자/언더바만 사용 가능합니다.');
   if (!personalDomain?.trim())  return err('개인 도메인을 입력해주세요.');
 
-  // 도메인 정규화
+  // 도메인 정규화 [FIX] www 제거 후 검증
   const domain = personalDomain.trim().toLowerCase()
     .replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
-  if (!/^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z]{2,})+$/.test(domain)) {
-    return err('올바른 도메인 형식이 아닙니다. (예: myblog.com)');
+  // 유효한 도메인: 영문/숫자/하이픈 + 점 + TLD (한국 .co.kr 등 다중 TLD 허용)
+  if (!/^[a-z0-9]([a-z0-9\-.]{0,61}[a-z0-9])?(\.[a-z]{2,})+$/.test(domain) || domain.includes('..')) {
+    return err('올바른 도메인 형식이 아닙니다. (예: myblog.com 또는 myblog.co.kr)');
   }
 
-  // WP Origin 설정 확인 (프록시 타겟 — 이 시점에서 origin에 요청하지 않음)
+  // WP Origin 설정 확인 (없어도 provision 단계에서 처리)
   const wpOrigin = await getSetting(env, 'wp_origin_url');
-  if (!wpOrigin) {
-    return err('WP Origin URL이 설정되지 않았습니다. 관리자 → 설정에서 먼저 입력해주세요.', 503);
-  }
 
-  // 사용자 개인 CF API Key 확인
+  // 사용자 개인 CF API Key 확인 — 없으면 관리자 전역 설정 확인
   const userCfRow = await env.DB.prepare(
     'SELECT cf_global_api_key, cf_account_id FROM users WHERE id=?'
   ).bind(user.id).first();
 
   if (!userCfRow?.cf_global_api_key || !userCfRow?.cf_account_id) {
-    // 관리자 전역 CF 설정도 없으면 에러
     const cfToken   = await getSetting(env, 'cf_api_token');
     const cfAccount = await getSetting(env, 'cf_account_id');
     if (!cfToken || !cfAccount) {
