@@ -513,10 +513,6 @@ async function kvPut(apiToken, accountId, namespaceId, key, value, ttl) {
   );
 }
 
-function escapeRegex(s) {
-  return s.replace(/[.*+?^${}()|[\]\\\\]/g, '\\\\$&');
-}
-
 function rewriteOrigin(text, originBase, publicBase, originHost, publicHost) {
   var result = text;
   if (originBase) result = result.split(originBase).join(publicBase);
