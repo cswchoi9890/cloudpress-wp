@@ -12,17 +12,19 @@ const CORS = {
   'Access-Control-Allow-Headers': 'Content-Type,Authorization',
 };
 
-// ── tar 파싱 (verify_github용 경량 버전) ─────────────────────────────────────
-// provision.js의 parseTar()와 동일한 로직. CMS 필수 파일 존재 여부만 확인.
-const _DEC = new TextDecoder();
-function _parseOctal(buf, offset, len) {
-  const s = _DEC.decode(buf.slice(offset, offset + len)).replace(/\0/g, '').trim();
+// ── tar 파싱 헬퍼 (verify_github 전용) ───────────────────────────────────────
+// provision.js의 parseTar()와 동일한 ustar/pax 파싱 로직.
+// wantSet에 있는 파일만 찾고, 모두 찾으면 조기 종료.
+const _TAR_DEC = new TextDecoder('utf-8', { fatal: false });
+
+function _tarOctal(buf, offset, len) {
+  const s = _TAR_DEC.decode(buf.slice(offset, offset + len)).replace(/\0/g, '').trim();
   return s ? parseInt(s, 8) : 0;
 }
-function _parsePaxHeader(buf) {
-  const text = _DEC.decode(buf);
+
+function _tarPax(buf) {
   const attrs = {};
-  for (const line of text.split('\n')) {
+  for (const line of _TAR_DEC.decode(buf).split('\n')) {
     const m = line.match(/^\d+ ([^=]+)=(.*)$/);
     if (m) attrs[m[1]] = m[2];
   }
@@ -30,61 +32,81 @@ function _parsePaxHeader(buf) {
 }
 
 /**
- * tarball ArrayBuffer를 파싱해서 발견된 CMS 필수 파일 경로 Set을 반환.
- * provision.js의 CMS_FILES 중 핵심 파일만 확인.
+ * raw tar ArrayBuffer를 파싱해서 wantSet 파일 중 발견된 것의 Set을 반환.
+ * @param {ArrayBuffer} buffer   gzip 해제된 raw tar 데이터
+ * @param {Set<string>} wantSet  찾을 파일 경로 집합
+ * @returns {Set<string>}        발견된 파일 경로 집합
  */
-function verifyTarHasCmsFiles(buffer) {
-  const REQUIRED = new Set([
-    'index.js', 'cp-router.js', 'cp-load.js',
-    'cp-admin/index.js', 'cp-includes/functions.js',
-  ]);
+function _verifyTarFiles(buffer, wantSet) {
   const buf    = new Uint8Array(buffer);
   const total  = buf.length;
   const found  = new Set();
   let offset   = 0;
-  let paxAttrs = {};
-  let repoPrefix = '';
+  let pax      = {};
+  let prefix   = '';  // 레포 최상위 디렉토리 이름 (예: "cloudflare-cms-main")
 
   while (offset + 512 <= total) {
-    const header = buf.slice(offset, offset + 512);
-    if (header.every(b => b === 0)) break;
+    const hdr = buf.slice(offset, offset + 512);
+    if (hdr.every(b => b === 0)) break;
 
-    let rawName = _DEC.decode(header.slice(0, 100)).replace(/\0/g, '');
-    const ustarPrefix = _DEC.decode(header.slice(345, 500)).replace(/\0/g, '');
-    if (ustarPrefix) rawName = ustarPrefix + '/' + rawName;
-    if (paxAttrs.path) rawName = paxAttrs.path;
+    // 파일명 조합 (ustar long name 지원)
+    let name = _TAR_DEC.decode(hdr.slice(0, 100)).replace(/\0/g, '');
+    const up = _TAR_DEC.decode(hdr.slice(345, 500)).replace(/\0/g, '');
+    if (up) name = up + '/' + name;
+    if (pax.path) name = pax.path;
 
-    const typeflag = String.fromCharCode(header[156]) || '0';
-    let fileSize   = _parseOctal(header, 124, 12);
-    if (paxAttrs.size) fileSize = parseInt(paxAttrs.size, 10);
+    const type = String.fromCharCode(hdr[156]) || '0';
+    let size   = _tarOctal(hdr, 124, 12);
+    if (pax.size) size = parseInt(pax.size, 10);
 
-    const dataOffset = offset + 512;
-    const paddedSize = Math.ceil(fileSize / 512) * 512;
-    paxAttrs = {};
+    const dataOff    = offset + 512;
+    const paddedSize = Math.ceil(size / 512) * 512;
+    pax = {};
 
-    if (typeflag === 'x' || typeflag === 'X') {
-      if (dataOffset + fileSize <= total) paxAttrs = _parsePaxHeader(buf.slice(dataOffset, dataOffset + fileSize));
-      offset = dataOffset + paddedSize;
+    // pax extended header
+    if (type === 'x' || type === 'X') {
+      if (dataOff + size <= total) pax = _tarPax(buf.slice(dataOff, dataOff + size));
+      offset = dataOff + paddedSize;
       continue;
     }
 
-    if (!repoPrefix) {
-      const slash = rawName.indexOf('/');
-      repoPrefix = slash > 0 ? rawName.slice(0, slash) : '';
+    // GNU long name
+    if (type === 'L') {
+      if (dataOff + size <= total) name = _TAR_DEC.decode(buf.slice(dataOff, dataOff + size)).replace(/\0/g, '');
+      offset = dataOff + paddedSize;
+      // 다음 헤더가 실제 파일
+      const nh     = buf.slice(offset, offset + 512);
+      const nsize  = _tarOctal(nh, 124, 12);
+      const noff   = offset + 512;
+      const norm   = _normalise(name, prefix || _repoPrefix(name));
+      if (norm && wantSet.has(norm)) found.add(norm);
+      offset = noff + Math.ceil(nsize / 512) * 512;
+      continue;
     }
 
-    let norm = rawName;
-    if (repoPrefix && norm.startsWith(repoPrefix + '/')) norm = norm.slice(repoPrefix.length + 1);
-    if (norm && !norm.endsWith('/') && (typeflag === '0' || typeflag === '\0')) {
-      if (REQUIRED.has(norm)) found.add(norm);
+    // 레포 prefix 첫 감지
+    if (!prefix) prefix = _repoPrefix(name);
+
+    const norm = _normalise(name, prefix);
+    if (norm && (type === '0' || type === '\0') && wantSet.has(norm)) {
+      found.add(norm);
+      if (found.size >= wantSet.size) break; // 모두 찾으면 조기 종료
     }
 
-    offset = dataOffset + paddedSize;
-
-    // 필요한 파일을 모두 찾으면 조기 종료
-    if (found.size >= REQUIRED.size) break;
+    offset = dataOff + paddedSize;
   }
   return found;
+}
+
+function _repoPrefix(name) {
+  const i = name.indexOf('/');
+  return i > 0 ? name.slice(0, i) : '';
+}
+
+function _normalise(name, prefix) {
+  let p = name;
+  if (prefix && p.startsWith(prefix + '/')) p = p.slice(prefix.length + 1);
+  return (!p || p.endsWith('/')) ? null : p;
 }
 const _j  = (d, s = 200) => new Response(JSON.stringify(d), {
   status: s, headers: { 'Content-Type': 'application/json', ...CORS },
@@ -276,10 +298,13 @@ export async function onRequest({ request, env }) {
     }
 
     // PUT { action: 'verify_github', repo, branch?, token? }
-    // GitHub 레포 접근 + CMS 파일 존재 여부 사전 검증
-    // provision.js의 fetchCMSSource()와 동일하게 tarball을 실제 다운로드하여
-    // index.js 등 필수 CMS 파일이 존재하는지 확인한다.
-    // (redirect:'manual' 방식은 레포 존재만 확인하고 파일 여부를 모름 → 제거)
+    // GitHub 레포 접근 + CMS 필수 파일 존재 여부 사전 검증.
+    // provision.js fetchCMSSource()와 동일하게 tarball을 실제 다운로드·파싱한다.
+    //
+    // [주의] GitHub tarball은 Content-Encoding 이 아닌 실제 gzip 파일(Content-Type:
+    // application/x-gzip)로 내려온다. CF Workers의 fetch()는 Content-Encoding: gzip만
+    // 자동 해제하고 실제 gzip 바이너리는 그대로 반환한다.
+    // → ArrayBuffer를 DecompressionStream('gzip')으로 명시적으로 해제한 후 tar 파싱.
     if (action === 'verify_github') {
       const { repo, branch, token } = body;
       if (!repo?.trim()) return err('repo가 필요합니다.');
@@ -293,40 +318,74 @@ export async function onRequest({ request, env }) {
         };
         if (token) headers['Authorization'] = `Bearer ${token}`;
 
-        // 실제 tarball 다운로드 (provision.js와 동일한 방식)
         const res = await fetch(tarUrl, { headers });
 
         if (!res.ok) {
           const hint = res.status === 404
-            ? '레포가 존재하지 않거나 private 레포에 토큰이 필요합니다.'
+            ? '레포가 존재하지 않거나 private 레포에 접근 토큰이 필요합니다.'
             : res.status === 401
             ? '토큰이 없거나 유효하지 않습니다.'
             : `HTTP ${res.status} ${res.statusText}`;
           return ok({ message: `레포 접근 실패 — ${hint}`, accessible: false, status: res.status });
         }
 
-        // tarball 파싱하여 필수 CMS 파일 존재 여부 확인
-        const buffer = await res.arrayBuffer();
-        const foundFiles = verifyTarHasCmsFiles(buffer);
+        // GitHub tarball은 실제 gzip 바이너리이므로 명시적으로 해제
+        let buffer;
+        try {
+          const compressed = await res.arrayBuffer();
 
-        const hasIndex  = foundFiles.has('index.js');
-        const fileCount = foundFiles.size;
+          // DecompressionStream으로 gzip 해제 (CF Workers 지원)
+          const ds     = new DecompressionStream('gzip');
+          const writer = ds.writable.getWriter();
+          const reader = ds.readable.getReader();
 
-        if (!hasIndex) {
+          writer.write(compressed);
+          writer.close();
+
+          const chunks = [];
+          let totalLen = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            totalLen += value.length;
+          }
+
+          const merged = new Uint8Array(totalLen);
+          let off = 0;
+          for (const c of chunks) { merged.set(c, off); off += c.length; }
+          buffer = merged.buffer;
+        } catch (decompErr) {
+          // gzip 해제 실패 → 이미 raw tar일 수 있으므로 원본으로 재시도
+          console.warn('[verify_github] DecompressionStream 실패, raw buffer 사용:', decompErr.message);
+          buffer = await res.clone().arrayBuffer().catch(() => null);
+          if (!buffer) {
+            return ok({ message: 'tarball 압축 해제 실패: ' + decompErr.message, accessible: false });
+          }
+        }
+
+        // tar 파싱하여 핵심 CMS 파일 존재 확인
+        const REQUIRED_FILES = new Set([
+          'index.js', 'cp-router.js', 'cp-load.js',
+          'cp-admin/index.js', 'cp-includes/functions.js',
+        ]);
+        const found = _verifyTarFiles(buffer, REQUIRED_FILES);
+
+        if (!found.has('index.js')) {
           return ok({
             message: `레포에 접근했지만 CMS 파일(index.js)이 없습니다. ` +
-                     `레포(${repoStr})에 CloudPress CMS 소스가 올바르게 있는지 확인해주세요. ` +
-                     `(발견된 파일 수: ${fileCount})`,
+                     `레포(${repoStr}@${br})에 CloudPress CMS 소스가 올바르게 있는지 확인해주세요. ` +
+                     `(확인된 필수 파일: ${found.size}개)`,
             accessible: false,
-            cms_files_found: fileCount,
+            cms_files_found: found.size,
             missing_index: true,
           });
         }
 
         return ok({
-          message: `레포 접근 및 CMS 파일 확인 성공 (${repoStr}@${br}, ${fileCount}개 파일)`,
-          accessible: true,
-          cms_files_found: fileCount,
+          message:         `레포 접근 및 CMS 파일 확인 성공 (${repoStr}@${br}, ${found.size}개 핵심 파일 확인)`,
+          accessible:      true,
+          cms_files_found: found.size,
         });
 
       } catch (e) {
