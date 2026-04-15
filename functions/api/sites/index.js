@@ -1,13 +1,16 @@
-// functions/api/sites/index.js — CloudPress v12.0
+// functions/api/sites/index.js — CloudPress v12.1
 //
-// 사이트 생성 방식:
-//   WP origin에 아무것도 요청하지 않음 (오리진 부하 제로)
-//   1. site_prefix(고유 ID) 생성
-//   2. DB 레코드 생성
-//   3. provision.js 에서 사이트 전용 D1 + KV 생성 → DNS + Worker Route 등록
+// [v12.1 subrequest 최적화]
+// ────────────────────────────────────────────────────────────────────────────
+//  문제: getSetting() 개별 호출 2회(plan_${plan}_sites, 내부 로직) → 각각 D1 쿼리 1회씩
+//        사이트 생성 흐름에서 도메인 중복확인 + 플랜 한도확인이 별도 쿼리로 분리
 //
-// 각 사이트는 완전히 독립된 D1 + KV를 가지므로 데이터 격리 보장
-// WP origin은 오직 프록시 타겟으로만 사용 (이 파일에서 origin 호출 없음)
+//  해결:
+//    1. loadAllSettings(): SELECT * FROM settings 1회로 모든 설정 메모리 로드
+//    2. getMaxSites()에서 DB 쿼리 제거 → 메모리 settings 객체 사용
+//    3. 도메인 중복 + 사이트 카운트를 DB.batch()로 1회 왕복 처리
+//
+//  결과: 사이트 생성 경로 D1 subrequest ~4회 → ~2회로 감소
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -39,11 +42,20 @@ async function getUser(env, req) {
   } catch { return null; }
 }
 
-async function getSetting(env, key, fallback = '') {
+// ── 설정 일괄 로드 (D1 1회 쿼리) ────────────────────────────────────────────
+// 반환: { key → value } 순수 JS 객체
+async function loadAllSettings(DB) {
   try {
-    const r = await env.DB.prepare('SELECT value FROM settings WHERE key=?').bind(key).first();
-    return r?.value ?? fallback;
-  } catch { return fallback; }
+    const { results } = await DB.prepare('SELECT key, value FROM settings').all();
+    const map = {};
+    for (const r of results || []) map[r.key] = r.value ?? '';
+    return map;
+  } catch { return {}; }
+}
+
+function settingVal(settings, key, fallback = '') {
+  const v = settings[key];
+  return (v != null && v !== '') ? v : fallback;
 }
 
 function genId() {
@@ -69,13 +81,11 @@ function genPw(len = 20) {
   return pw;
 }
 
-async function getMaxSites(env, plan) {
+// settings 객체에서 플랜별 최대 사이트 수 반환 (D1 쿼리 없음)
+function getMaxSitesFromSettings(settings, plan) {
   const FALLBACK = { free: 1, starter: 3, pro: 10, enterprise: -1 };
-  try {
-    const r = await env.DB.prepare('SELECT value FROM settings WHERE key=?').bind(`plan_${plan}_sites`).first();
-    const v = parseInt(r?.value ?? '', 10);
-    return isNaN(v) ? (FALLBACK[plan] ?? 1) : v;
-  } catch { return FALLBACK[plan] ?? 1; }
+  const v = parseInt(settingVal(settings, `plan_${plan}_sites`, ''), 10);
+  return isNaN(v) ? (FALLBACK[plan] ?? 1) : v;
 }
 
 export const onRequestOptions = () => new Response(null, { status: 204, headers: CORS });
@@ -135,39 +145,43 @@ export async function onRequestPost({ request, env }) {
   // 도메인 정규화 [FIX] www 제거 후 검증
   const domain = personalDomain.trim().toLowerCase()
     .replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
-  // 유효한 도메인: 영문/숫자/하이픈 + 점 + TLD (한국 .co.kr 등 다중 TLD 허용)
   if (!/^[a-z0-9]([a-z0-9\-.]{0,61}[a-z0-9])?(\.[a-z]{2,})+$/.test(domain) || domain.includes('..')) {
     return err('올바른 도메인 형식이 아닙니다. (예: myblog.com 또는 myblog.co.kr)');
   }
 
-  // CF API 키 사전 확인은 provision.js에서 수행 — 여기서는 차단하지 않음
+  // ── [D1 #1] settings + 도메인 중복 + 사이트 카운트 한번에 조회 (batch 1회) ──
+  let settings, existingDomain, siteCount;
+  try {
+    const [settingsRows, dupRow, countRow] = await env.DB.batch([
+      env.DB.prepare('SELECT key, value FROM settings'),
+      env.DB.prepare('SELECT id FROM sites WHERE primary_domain=? AND deleted_at IS NULL').bind(domain),
+      env.DB.prepare('SELECT COUNT(*) as c FROM sites WHERE user_id=? AND deleted_at IS NULL').bind(user.id),
+    ]);
 
-  // 도메인 중복 확인
-  const existing = await env.DB.prepare(
-    `SELECT id FROM sites WHERE primary_domain=? AND deleted_at IS NULL`
-  ).bind(domain).first();
-  if (existing) return err('이미 사용 중인 도메인입니다.');
+    settings = {};
+    for (const r of settingsRows.results || []) settings[r.key] = r.value ?? '';
 
-  // 플랜 한도 확인
+    existingDomain = dupRow.results?.[0] ?? null;
+    siteCount = countRow.results?.[0]?.c ?? 0;
+  } catch (e) {
+    return err('초기 데이터 조회 오류: ' + e.message, 500);
+  }
+
+  if (existingDomain) return err('이미 사용 중인 도메인입니다.');
+
+  // 플랜 한도 확인 (메모리 settings에서, D1 쿼리 없음)
   const effectivePlan = sitePlan || user.plan || 'free';
-  const maxSites = await getMaxSites(env, user.plan);
-  if (maxSites !== -1) {
-    const { c } = await env.DB.prepare(
-      'SELECT COUNT(*) as c FROM sites WHERE user_id=? AND deleted_at IS NULL'
-    ).bind(user.id).first() ?? { c: 0 };
-    if (c >= maxSites) {
-      return err(`플랜(${user.plan})의 최대 사이트 수(${maxSites}개)를 초과했습니다.`, 403);
-    }
+  const maxSites = getMaxSitesFromSettings(settings, user.plan);
+  if (maxSites !== -1 && siteCount >= maxSites) {
+    return err(`플랜(${user.plan})의 최대 사이트 수(${maxSites}개)를 초과했습니다.`, 403);
   }
 
   const siteId     = genId();
   const sitePrefix = genPrefix();
   const wpAdminPw  = genPw(20);
-
-  // 개인 도메인 기준 wp-admin URL (provision 완료 후에도 동일)
   const wpAdminUrl = `https://${domain}/wp-admin/`;
 
-  // DB 레코드 생성
+  // ── [D1 #2] DB 레코드 생성 (1회) ──────────────────────────────
   try {
     await env.DB.prepare(
       `INSERT INTO sites (
