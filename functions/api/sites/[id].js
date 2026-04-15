@@ -1,4 +1,18 @@
-// functions/api/sites/[id].js — CloudPress v11.0
+// functions/api/sites/[id].js — CloudPress v11.1
+//
+// [v11.1 subrequest 최적화]
+// ────────────────────────────────────────────────────────────────────────────
+//  문제: getSetting()이 요청 핸들러 내에서 최대 3회 개별 호출
+//        - GET: getSetting('wp_origin_url') + getSetting('worker_cname_target') = 2회
+//        - DELETE: getSetting('cf_api_token') + getSetting('cf_account_id') = 2회
+//        - PUT/check-domain: getSetting('cf_api_token') + getSetting('cf_worker_name') = 2회
+//        각 getSetting = D1 쿼리 1회 → 불필요한 subrequest 낭비
+//
+//  해결:
+//    1. 요청 시작 시 site 조회와 settings 전체를 DB.batch()로 1회 왕복 처리
+//    2. 이후 모든 getSetting() → 메모리 objects에서 O(1) 조회
+//
+//  결과: GET/DELETE/PUT 모든 경로에서 D1 subrequest 최소 1회 절감
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -29,11 +43,9 @@ async function getUser(env, req) {
   } catch { return null; }
 }
 
-async function getSetting(env, key, fallback = '') {
-  try {
-    const r = await env.DB.prepare('SELECT value FROM settings WHERE key=?').bind(key).first();
-    return r?.value ?? fallback;
-  } catch { return fallback; }
+function settingVal(settings, key, fallback = '') {
+  const v = settings[key];
+  return (v != null && v !== '') ? v : fallback;
 }
 
 export const onRequestOptions = () => new Response(null, { status: 204, headers: CORS });
@@ -45,26 +57,40 @@ export async function onRequest({ request, env, params }) {
   if (!user) return err('로그인이 필요합니다.', 401);
 
   const siteId = params.id;
-  const site = await env.DB.prepare(
-    `SELECT id, user_id, name, primary_domain, domain_status,
-            site_prefix, worker_name, worker_route, worker_route_www,
-            worker_route_id, worker_route_www_id, cf_zone_id,
-            wp_username, wp_password, wp_admin_email, wp_admin_url,
-            status, provision_step, error_message,
-            suspended, suspension_reason, disk_used, bandwidth_used,
-            plan, created_at, updated_at
-     FROM sites WHERE id=? AND (user_id=? OR ?='admin') AND deleted_at IS NULL`
-  ).bind(siteId, user.id, user.role).first();
+
+  // ── [D1 #1] site + settings 동시 조회 (batch 1회) ──────────────────────────
+  let site, settings;
+  try {
+    const [siteRows, settingsRows] = await env.DB.batch([
+      env.DB.prepare(
+        `SELECT id, user_id, name, primary_domain, domain_status,
+                site_prefix, worker_name, worker_route, worker_route_www,
+                worker_route_id, worker_route_www_id, cf_zone_id,
+                wp_username, wp_password, wp_admin_email, wp_admin_url,
+                status, provision_step, error_message,
+                suspended, suspension_reason, disk_used, bandwidth_used,
+                plan, created_at, updated_at
+         FROM sites WHERE id=? AND (user_id=? OR ?='admin') AND deleted_at IS NULL`
+      ).bind(siteId, user.id, user.role),
+      env.DB.prepare('SELECT key, value FROM settings'),
+    ]);
+
+    site = siteRows.results?.[0] ?? null;
+
+    settings = {};
+    for (const r of settingsRows.results || []) settings[r.key] = r.value ?? '';
+  } catch (e) {
+    return err('데이터 조회 오류: ' + e.message, 500);
+  }
 
   if (!site) return err('사이트를 찾을 수 없습니다.', 404);
 
   // GET
   if (request.method === 'GET') {
-    const wpOrigin = await getSetting(env, 'wp_origin_url');
-    const workerCname = await getSetting(env, 'worker_cname_target');
+    // settings는 이미 메모리에 있음 — 추가 D1 쿼리 없음
+    const workerCname = settingVal(settings, 'worker_cname_target');
     return ok({
       site,
-      // 프론트에 필요한 추가 정보
       wp_admin_direct_url: site.wp_admin_url,
       cname_instruction: site.domain_status === 'manual_required'
         ? `도메인 DNS에 CNAME ${site.primary_domain} → ${workerCname} 추가 후 CF 프록시(주황불) 활성화`
@@ -74,20 +100,23 @@ export async function onRequest({ request, env, params }) {
 
   // DELETE
   if (request.method === 'DELETE') {
-    const cfToken   = await getSetting(env, 'cf_api_token');
-    const cfAccount = await getSetting(env, 'cf_account_id');
+    // settings는 이미 메모리에 있음 — 추가 D1 쿼리 없음
+    const cfToken   = settingVal(settings, 'cf_api_token');
+    const cfAccount = settingVal(settings, 'cf_account_id');
 
-    // 1. CF Worker Route 삭제
+    // 1. CF Worker Route 삭제 (병렬)
     if (cfToken && site.cf_zone_id) {
-      const deleteRoute = async (routeId) => {
-        if (!routeId) return;
-        await fetch(`https://api.cloudflare.com/client/v4/zones/${site.cf_zone_id}/workers/routes/${routeId}`, {
+      const deleteRoute = (routeId) => {
+        if (!routeId) return Promise.resolve();
+        return fetch(`https://api.cloudflare.com/client/v4/zones/${site.cf_zone_id}/workers/routes/${routeId}`, {
           method: 'DELETE',
           headers: { 'Authorization': 'Bearer ' + cfToken },
         }).catch(() => {});
       };
-      await deleteRoute(site.worker_route_id);
-      await deleteRoute(site.worker_route_www_id);
+      await Promise.all([
+        deleteRoute(site.worker_route_id),
+        deleteRoute(site.worker_route_www_id),
+      ]);
     }
 
     // 2. 전역 CACHE KV 도메인 매핑 삭제
@@ -97,7 +126,7 @@ export async function onRequest({ request, env, params }) {
       await env.CACHE.delete(`site_prefix:${site.site_prefix}`);
     } catch (_) {}
 
-    // 3. 사이트 전용 D1 / KV 리소스 삭제 (CF API, 비동기)
+    // 3. 사이트 전용 D1 / KV 리소스 삭제 (CF API, 비동기 fire-and-forget)
     if (cfToken && cfAccount) {
       if (site.site_d1_id) {
         fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/d1/database/${site.site_d1_id}`, {
@@ -136,7 +165,7 @@ export async function onRequest({ request, env, params }) {
       // KV 캐시 무효화
       try {
         await env.CACHE.delete(`site_domain:${site.primary_domain}`);
-        await env.CACHE.delete(`site_domain:${`www.${site.primary_domain}`}`);
+        await env.CACHE.delete(`site_domain:www.${site.primary_domain}`);
       } catch (_) {}
 
       return ok({ message: suspended ? '사이트가 일시정지되었습니다.' : '일시정지가 해제되었습니다.' });
@@ -168,20 +197,21 @@ export async function onRequest({ request, env, params }) {
 
     // 도메인 상태 수동 확인 요청
     if (body.action === 'check-domain') {
-      const domain = site.primary_domain;
-      const cfToken = await getSetting(env, 'cf_api_token');
+      const domain    = site.primary_domain;
+      // settings는 이미 메모리에 있음 — 추가 D1 쿼리 없음
+      const cfToken   = settingVal(settings, 'cf_api_token');
       if (!cfToken) return err('CF API 토큰 미설정');
 
       const cfZoneId = site.cf_zone_id;
       if (!cfZoneId) return err('CF Zone ID 없음. 도메인이 Cloudflare에 연결되지 않은 경우 수동 CNAME 설정이 필요합니다.');
 
-      // Worker Route 확인
+      // Worker Route 확인 (외부 fetch 1회)
       const routes = await fetch(
         `https://api.cloudflare.com/client/v4/zones/${cfZoneId}/workers/routes`,
         { headers: { 'Authorization': 'Bearer ' + cfToken } }
       ).then(r => r.json()).catch(() => ({ result: [] }));
 
-      const workerName = await getSetting(env, 'cf_worker_name', 'cloudpress-proxy');
+      const workerName = settingVal(settings, 'cf_worker_name', 'cloudpress-proxy');
       const hasRoute = routes.result?.some(r => r.script === workerName && r.pattern.includes(domain));
 
       if (hasRoute) {
@@ -191,8 +221,10 @@ export async function onRequest({ request, env, params }) {
         // KV 갱신
         try {
           const siteData = JSON.stringify({ id: siteId, name: site.name, site_prefix: site.site_prefix, status: 'active', suspended: 0 });
-          await env.CACHE.put(`site_domain:${domain}`, siteData, { expirationTtl: 86400 });
-          await env.CACHE.put(`site_domain:${`www.${site.primary_domain}`}`, siteData, { expirationTtl: 86400 });
+          await Promise.all([
+            env.CACHE.put(`site_domain:${domain}`, siteData, { expirationTtl: 86400 }),
+            env.CACHE.put(`site_domain:www.${site.primary_domain}`, siteData, { expirationTtl: 86400 }),
+          ]);
         } catch (_) {}
         return ok({ message: '도메인 연결 확인 완료', domain_status: 'active' });
       }
