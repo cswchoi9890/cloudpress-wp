@@ -1,4 +1,6 @@
-// functions/api/admin/sites.js — 관리자 WordPress 사이트 제어 API
+// functions/api/admin/sites.js — CloudPress v17.1
+// [수정사항]
+// - 매니저(manager)도 사이트 목록 조회/정지/해제/삭제 허용
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -11,15 +13,19 @@ const _j = (d, s = 200) => new Response(JSON.stringify(d), {
 const ok = (d = {}) => _j({ ok: true, ...d });
 const err = (msg, s = 400) => _j({ ok: false, error: msg }, s);
 
-async function requireAdmin(env, req) {
+async function requireAdminOrMgr(env, req) {
   try {
     const a = req.headers.get('Authorization') || '';
-    const token = a.startsWith('Bearer ') ? a.slice(7) : null;
+    const token = a.startsWith('Bearer ') ? a.slice(7) : (()=>{
+      const c = req.headers.get('Cookie') || '';
+      const m = c.match(/cp_session=([^;]+)/);
+      return m ? m[1] : null;
+    })();
     if (!token) return null;
     const uid = await env.SESSIONS.get(`session:${token}`);
     if (!uid) return null;
     const user = await env.DB.prepare('SELECT id,role FROM users WHERE id=?').bind(uid).first();
-    return user?.role === 'admin' ? user : null;
+    return (user?.role === 'admin' || user?.role === 'manager') ? user : null;
   } catch { return null; }
 }
 
@@ -28,20 +34,19 @@ export const onRequestOptions = () => new Response(null, { status: 204, headers:
 export async function onRequest({ request, env }) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
 
-  const admin = await requireAdmin(env, request);
-  if (!admin) return err('관리자 권한이 필요합니다.', 403);
+  const user = await requireAdminOrMgr(env, request);
+  if (!user) return err('관리자/매니저 권한이 필요합니다.', 403);
 
   const url = new URL(request.url);
 
   // GET — 전체 사이트 목록
   if (request.method === 'GET') {
     try {
-      const page = parseInt(url.searchParams.get('page') || '1');
+      const page    = parseInt(url.searchParams.get('page') || '1');
       const perPage = 30;
-      const offset = (page - 1) * perPage;
-      const search = url.searchParams.get('search') || url.searchParams.get('q') || '';
-      const status = url.searchParams.get('status') || '';
-      const provider = url.searchParams.get('provider') || '';
+      const offset  = (page - 1) * perPage;
+      const search  = url.searchParams.get('search') || url.searchParams.get('q') || '';
+      const status  = url.searchParams.get('status') || '';
 
       let where = "s.status != 'deleted'";
       const binds = [];
@@ -51,7 +56,6 @@ export async function onRequest({ request, env }) {
         binds.push(`%${search}%`, `%${search}%`, `%${search}%`);
       }
       if (status) { where += ' AND s.status=?'; binds.push(status); }
-      if (provider) { /* hosting_provider 컬럼 없음 — 무시 */ }
 
       const [totalRow, { results }] = await Promise.all([
         env.DB.prepare(`SELECT COUNT(*) as c FROM sites s JOIN users u ON s.user_id=u.id WHERE ${where}`).bind(...binds).first(),
@@ -63,8 +67,8 @@ export async function onRequest({ request, env }) {
       ]);
 
       return ok({
-        sites: results || [],
-        total: totalRow?.c || 0,
+        sites:      results || [],
+        total:      totalRow?.c || 0,
         page,
         totalPages: Math.ceil((totalRow?.c || 0) / perPage),
       });
@@ -73,7 +77,7 @@ export async function onRequest({ request, env }) {
     }
   }
 
-  // POST — 사이트 일시정지 / 정지 해제
+  // POST — 사이트 일시정지 / 정지 해제 / 삭제
   if (request.method === 'POST') {
     let body;
     try { body = await request.json(); } catch { return err('요청 형식 오류'); }
@@ -86,40 +90,35 @@ export async function onRequest({ request, env }) {
 
     if (action === 'suspend') {
       await env.DB.prepare(
-        'UPDATE sites SET suspended=1,suspension_reason=?,updated_at=unixepoch() WHERE id=?'
+        "UPDATE sites SET suspended=1,suspension_reason=?,updated_at=datetime('now') WHERE id=?"
       ).bind(reason || '관리자에 의해 일시 정지됨', siteId).run();
       return ok({ message: '사이트가 일시 정지되었습니다.' });
     }
-
     if (action === 'unsuspend') {
       await env.DB.prepare(
-        'UPDATE sites SET suspended=0,suspension_reason=NULL,updated_at=unixepoch() WHERE id=?'
+        "UPDATE sites SET suspended=0,suspension_reason=NULL,updated_at=datetime('now') WHERE id=?"
       ).bind(siteId).run();
       return ok({ message: '사이트 정지가 해제되었습니다.' });
     }
-
     if (action === 'delete') {
       await env.DB.prepare(
-        "UPDATE sites SET status='deleted',deleted_at=unixepoch() WHERE id=?"
+        "UPDATE sites SET status='deleted',deleted_at=datetime('now') WHERE id=?"
       ).bind(siteId).run();
       return ok({ message: '사이트가 삭제되었습니다.' });
     }
-
     return err('알 수 없는 action');
   }
 
-  // DELETE — 사이트 삭제 (CP.del('/admin/sites', {id}) 호출)
+  // DELETE
   if (request.method === 'DELETE') {
     let body;
     try { body = await request.json(); } catch { return err('요청 형식 오류'); }
     const { id: siteId } = body || {};
     if (!siteId) return err('사이트 ID가 필요합니다.');
-
-    const site = await env.DB.prepare('SELECT id,status FROM sites WHERE id=?').bind(siteId).first();
+    const site = await env.DB.prepare('SELECT id FROM sites WHERE id=?').bind(siteId).first();
     if (!site) return err('사이트를 찾을 수 없습니다.', 404);
-
     await env.DB.prepare(
-      "UPDATE sites SET status='deleted',deleted_at=unixepoch() WHERE id=?"
+      "UPDATE sites SET status='deleted',deleted_at=datetime('now') WHERE id=?"
     ).bind(siteId).run();
     return ok({ message: '사이트가 삭제되었습니다.' });
   }
