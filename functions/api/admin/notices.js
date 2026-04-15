@@ -1,4 +1,7 @@
-// functions/api/admin/notices.js
+// functions/api/admin/notices.js — CloudPress v17.1
+// [수정사항]
+// - schema.sql 기준으로 컬럼명 일치: is_active→active, created_by/updated_at 컬럼 제거
+// - requireAdminOrMgr 유지 (매니저도 공지 관리 가능)
 /* ── utils ── */
 const CORS={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization'};
 const _j=(d,s=200)=>new Response(JSON.stringify(d),{status:s,headers:{'Content-Type':'application/json',...CORS}});
@@ -15,10 +18,11 @@ export const onRequestOptions = () => handleOptions();
 
 export async function onRequestGet({ request, env }) {
   try {
+    // 공개 GET (active=1)은 인증 없이 허용 — 사용자 대시보드에서 공지 조회에 사용
     const url    = new URL(request.url);
     const active = url.searchParams.get('active');
-    let query = 'SELECT * FROM notices';
-    if (active === '1') query += ' WHERE is_active=1';
+    let query = 'SELECT id,title,content,type,target_role,active,created_at FROM notices';
+    if (active === '1') query += ' WHERE active=1';
     query += ' ORDER BY created_at DESC';
     const { results } = await env.DB.prepare(query).all();
     return ok({ notices: results ?? [] });
@@ -36,13 +40,18 @@ export async function onRequestPost({ request, env }) {
     let body;
     try { body = await request.json(); } catch { return err('잘못된 요청'); }
 
-    const { title, content, type = 'info' } = body || {};
-    if (!title || !content) return err('제목과 내용을 입력해주세요.');
+    const { title, content, type = 'info', target_role = 'all' } = body || {};
+    if (!title?.trim()) return err('제목을 입력해주세요.');
+    if (!content?.trim()) return err('내용을 입력해주세요.');
+
+    const validTypes = ['info', 'warning', 'success', 'error'];
+    if (!validTypes.includes(type)) return err('올바르지 않은 type');
 
     const id = genId();
+    // schema: id, title, content, type, target_role, active, created_at
     await env.DB.prepare(
-      'INSERT INTO notices (id,title,content,type,is_active,created_by) VALUES (?,?,?,?,1,?)'
-    ).bind(id, title.trim(), content.trim(), type, user.id).run();
+      'INSERT INTO notices (id,title,content,type,target_role,active,created_at) VALUES (?,?,?,?,?,1,datetime(\'now\'))'
+    ).bind(id, title.trim(), content.trim(), type, target_role).run();
     return ok({ id });
   } catch (e) {
     console.error('notices POST error:', e);
@@ -58,16 +67,22 @@ export async function onRequestPut({ request, env }) {
     let body;
     try { body = await request.json(); } catch { return err('잘못된 요청'); }
 
-    const { id, title, content, type, is_active } = body || {};
+    const { id, title, content, type, active, target_role } = body || {};
     if (!id) return err('id 필요');
 
-    const now = Math.floor(Date.now() / 1000);
-    const fields = ['updated_at=?'];
-    const binds  = [now];
-    if (title     !== undefined) { fields.push('title=?');     binds.push(title.trim()); }
-    if (content   !== undefined) { fields.push('content=?');   binds.push(content.trim()); }
-    if (type      !== undefined) { fields.push('type=?');      binds.push(type); }
-    if (is_active !== undefined) { fields.push('is_active=?'); binds.push(is_active ? 1 : 0); }
+    // 존재 확인
+    const existing = await env.DB.prepare('SELECT id FROM notices WHERE id=?').bind(id).first();
+    if (!existing) return err('존재하지 않는 공지입니다.', 404);
+
+    const fields = [];
+    const binds  = [];
+    if (title       !== undefined) { fields.push('title=?');       binds.push(title.trim()); }
+    if (content     !== undefined) { fields.push('content=?');     binds.push(content.trim()); }
+    if (type        !== undefined) { fields.push('type=?');        binds.push(type); }
+    if (target_role !== undefined) { fields.push('target_role=?'); binds.push(target_role); }
+    if (active      !== undefined) { fields.push('active=?');      binds.push(active ? 1 : 0); }
+
+    if (!fields.length) return err('변경할 필드 없음');
 
     binds.push(id);
     await env.DB.prepare(`UPDATE notices SET ${fields.join(',')} WHERE id=?`).bind(...binds).run();
@@ -88,6 +103,10 @@ export async function onRequestDelete({ request, env }) {
 
     const { id } = body || {};
     if (!id) return err('id 필요');
+
+    const existing = await env.DB.prepare('SELECT id FROM notices WHERE id=?').bind(id).first();
+    if (!existing) return err('존재하지 않는 공지입니다.', 404);
+
     await env.DB.prepare('DELETE FROM notices WHERE id=?').bind(id).run();
     return ok({ message: '삭제 완료' });
   } catch (e) {
