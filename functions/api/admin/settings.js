@@ -1,16 +1,19 @@
-// functions/api/admin/settings.js — CloudPress v12.7 (완전 수정판)
+// functions/api/admin/settings.js — CloudPress v16.0
 //
-// [수정]
-// 1. ALLOWED_KEYS 확장: clone_*, hosting_*, puppeteer_*, auto_ssl, auto_breeze, main_db_id, cache_kv_id, sessions_kv_id 추가
-// 2. GET/POST/PUT/OPTIONS 모두 처리
-// 3. 마스킹 키 처리 정확히
+// [v16.0 변경사항]
+// - wp_origin_url / wp_origin_secret / wp_admin_base_url 제거 (VP 방식 폐지)
+// - clone_vp_*, hosting_*, puppeteer_* 제거 (레거시 호환 삭제)
+// - cms_github_repo / cms_github_branch / cms_github_token 추가 (GitHub HTTP fetch)
+// - cms_versions 관리 (add / delete / set_latest)
 
 const CORS = {
   'Access-Control-Allow-Origin':  '*',
   'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type,Authorization',
 };
-const _j  = (d, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { 'Content-Type': 'application/json', ...CORS } });
+const _j  = (d, s = 200) => new Response(JSON.stringify(d), {
+  status: s, headers: { 'Content-Type': 'application/json', ...CORS },
+});
 const ok  = (d = {}) => _j({ ok: true,  ...d });
 const err = (msg, s = 400) => _j({ ok: false, error: msg }, s);
 
@@ -28,11 +31,6 @@ async function requireAdmin(env, req) {
 
 // 저장 가능한 모든 키 목록
 const ALLOWED_KEYS = [
-  // WP Origin
-  'wp_origin_url',
-  'wp_origin_secret',
-  'wp_admin_base_url',
-
   // Cloudflare
   'cf_api_token',
   'cf_account_id',
@@ -42,6 +40,12 @@ const ALLOWED_KEYS = [
   'cache_kv_id',
   'sessions_kv_id',
   'cloudflare_cdn_enabled',
+
+  // GitHub CMS 소스 (v16.0 — VP 방식 대체)
+  'cms_github_repo',
+  'cms_github_branch',
+  'cms_github_token',
+  'cms_versions',
 
   // 플랜별 사이트 수
   'plan_free_sites',
@@ -64,43 +68,15 @@ const ALLOWED_KEYS = [
 
   // 자동화 기본값
   'auto_ssl',
-  'auto_breeze',
-
-  // Puppeteer Worker (레거시 호환)
-  'puppeteer_worker_url',
-  'puppeteer_worker_secret',
-
-  // 호스팅 서버 (레거시 호환)
-  'hosting_cpanel_url',
-  'hosting_server_domain',
-  'hosting_server_username',
-  'hosting_server_password',
-
-  // 복제 설정 (레거시 호환)
-  'clone_source_url',
-  'clone_vp_username',
-  'clone_vp_password',
-  'clone_vp_panel_url',
-  'clone_server_domain',
-
-  // 호스팅 공급자
-  'active_providers',
-
-  // CMS 버전 (JSON)
-  'cms_versions',
 ];
 
 // 마스킹 처리 키 (GET 응답에서 가려줌)
 const MASK_KEYS = new Set([
-  'wp_origin_secret',
   'cf_api_token',
+  'cms_github_token',
   'toss_secret_key',
-  'puppeteer_worker_secret',
-  'hosting_server_password',
-  'clone_vp_password',
 ]);
 
-/* settings 객체를 DB에 저장하는 공통 함수 */
 async function saveSettingsObject(env, settings) {
   const entries = Object.entries(settings);
   for (const [key, value] of entries) {
@@ -143,18 +119,11 @@ export async function onRequest({ request, env }) {
       if (!settings || typeof settings !== 'object') return err('settings 객체가 필요합니다.');
 
       await saveSettingsObject(env, settings);
-
-      const updatedKeys = Object.keys(settings).filter(k => ALLOWED_KEYS.includes(k));
-      const needsWorkerUpdate = updatedKeys.some(k => ['wp_origin_url','wp_origin_secret','cf_worker_name'].includes(k));
-
-      return ok({
-        message: '설정이 저장되었습니다.',
-        notice: needsWorkerUpdate ? 'Worker 환경변수(WP_ORIGIN_URL, WP_ORIGIN_SECRET)를 wrangler.toml에도 업데이트하고 Worker를 재배포해주세요.' : null,
-      });
+      return ok({ message: '설정이 저장되었습니다.' });
     } catch (e) { return err('설정 저장 실패: ' + e.message); }
   }
 
-  // ── PUT: app.js CP.put('/admin/settings', ...) 방식 ─────────────
+  // ── PUT: 다양한 액션 처리 ────────────────────────────────────────
   if (request.method === 'PUT') {
     let body;
     try { body = await request.json(); } catch { return err('요청 형식 오류'); }
@@ -165,15 +134,9 @@ export async function onRequest({ request, env }) {
     if (!action) {
       const { settings } = body;
       if (!settings || typeof settings !== 'object') return err('settings 객체가 필요합니다.');
-
       try {
         await saveSettingsObject(env, settings);
-        const updatedKeys = Object.keys(settings).filter(k => ALLOWED_KEYS.includes(k));
-        const needsWorkerUpdate = updatedKeys.some(k => ['wp_origin_url','wp_origin_secret','cf_worker_name'].includes(k));
-        return ok({
-          message: '설정이 저장되었습니다.',
-          notice: needsWorkerUpdate ? 'Worker 환경변수를 wrangler.toml에도 업데이트하고 재배포해주세요.' : null,
-        });
+        return ok({ message: '설정이 저장되었습니다.' });
       } catch (e) { return err('설정 저장 실패: ' + e.message); }
     }
 
@@ -183,14 +146,14 @@ export async function onRequest({ request, env }) {
       if (!version?.trim()) return err('버전 정보가 필요합니다.');
       try {
         const versionId = 'ver_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-        const existing = await env.DB.prepare("SELECT value FROM settings WHERE key='cms_versions'").first();
+        const existing  = await env.DB.prepare("SELECT value FROM settings WHERE key='cms_versions'").first();
         let versions = [];
         if (existing?.value) { try { versions = JSON.parse(existing.value); } catch { versions = []; } }
         const entry = {
-          id: versionId,
-          version: version.trim(),
-          label: label?.trim() || version.trim(),
-          is_latest: !!is_latest,
+          id:         versionId,
+          version:    version.trim(),
+          label:      label?.trim() || version.trim(),
+          is_latest:  !!is_latest,
           created_at: new Date().toISOString(),
         };
         if (entry.is_latest) versions = versions.map(v => ({ ...v, is_latest: false }));
@@ -235,6 +198,30 @@ export async function onRequest({ request, env }) {
         ).bind(JSON.stringify(versions)).run();
         return ok({ message: '최신 버전이 설정되었습니다.', versions });
       } catch (e) { return err('최신 버전 설정 실패: ' + e.message, 500); }
+    }
+
+    // PUT { action: 'verify_github', repo, branch?, token? }
+    // GitHub 레포 접근 가능 여부 사전 검증
+    if (action === 'verify_github') {
+      const { repo, branch, token } = body;
+      if (!repo?.trim()) return err('repo가 필요합니다.');
+      try {
+        const br  = (branch || 'main').trim();
+        const url = `https://raw.githubusercontent.com/${repo.trim()}/${br}/index.js`;
+        const headers = { 'User-Agent': 'CloudPress/16.0' };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const res = await fetch(url, { headers });
+        if (res.ok) {
+          return ok({ message: `레포 접근 성공 (${repo}@${br})`, accessible: true });
+        }
+        return ok({
+          message: `레포 접근 실패 (HTTP ${res.status}) — repo 주소 또는 토큰을 확인해주세요.`,
+          accessible: false,
+          status: res.status,
+        });
+      } catch (e) {
+        return ok({ message: 'GitHub 접근 오류: ' + e.message, accessible: false });
+      }
     }
 
     return err('알 수 없는 action');
