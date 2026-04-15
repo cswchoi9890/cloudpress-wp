@@ -11,6 +11,81 @@ const CORS = {
   'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type,Authorization',
 };
+
+// ── tar 파싱 (verify_github용 경량 버전) ─────────────────────────────────────
+// provision.js의 parseTar()와 동일한 로직. CMS 필수 파일 존재 여부만 확인.
+const _DEC = new TextDecoder();
+function _parseOctal(buf, offset, len) {
+  const s = _DEC.decode(buf.slice(offset, offset + len)).replace(/\0/g, '').trim();
+  return s ? parseInt(s, 8) : 0;
+}
+function _parsePaxHeader(buf) {
+  const text = _DEC.decode(buf);
+  const attrs = {};
+  for (const line of text.split('\n')) {
+    const m = line.match(/^\d+ ([^=]+)=(.*)$/);
+    if (m) attrs[m[1]] = m[2];
+  }
+  return attrs;
+}
+
+/**
+ * tarball ArrayBuffer를 파싱해서 발견된 CMS 필수 파일 경로 Set을 반환.
+ * provision.js의 CMS_FILES 중 핵심 파일만 확인.
+ */
+function verifyTarHasCmsFiles(buffer) {
+  const REQUIRED = new Set([
+    'index.js', 'cp-router.js', 'cp-load.js',
+    'cp-admin/index.js', 'cp-includes/functions.js',
+  ]);
+  const buf    = new Uint8Array(buffer);
+  const total  = buf.length;
+  const found  = new Set();
+  let offset   = 0;
+  let paxAttrs = {};
+  let repoPrefix = '';
+
+  while (offset + 512 <= total) {
+    const header = buf.slice(offset, offset + 512);
+    if (header.every(b => b === 0)) break;
+
+    let rawName = _DEC.decode(header.slice(0, 100)).replace(/\0/g, '');
+    const ustarPrefix = _DEC.decode(header.slice(345, 500)).replace(/\0/g, '');
+    if (ustarPrefix) rawName = ustarPrefix + '/' + rawName;
+    if (paxAttrs.path) rawName = paxAttrs.path;
+
+    const typeflag = String.fromCharCode(header[156]) || '0';
+    let fileSize   = _parseOctal(header, 124, 12);
+    if (paxAttrs.size) fileSize = parseInt(paxAttrs.size, 10);
+
+    const dataOffset = offset + 512;
+    const paddedSize = Math.ceil(fileSize / 512) * 512;
+    paxAttrs = {};
+
+    if (typeflag === 'x' || typeflag === 'X') {
+      if (dataOffset + fileSize <= total) paxAttrs = _parsePaxHeader(buf.slice(dataOffset, dataOffset + fileSize));
+      offset = dataOffset + paddedSize;
+      continue;
+    }
+
+    if (!repoPrefix) {
+      const slash = rawName.indexOf('/');
+      repoPrefix = slash > 0 ? rawName.slice(0, slash) : '';
+    }
+
+    let norm = rawName;
+    if (repoPrefix && norm.startsWith(repoPrefix + '/')) norm = norm.slice(repoPrefix.length + 1);
+    if (norm && !norm.endsWith('/') && (typeflag === '0' || typeflag === '\0')) {
+      if (REQUIRED.has(norm)) found.add(norm);
+    }
+
+    offset = dataOffset + paddedSize;
+
+    // 필요한 파일을 모두 찾으면 조기 종료
+    if (found.size >= REQUIRED.size) break;
+  }
+  return found;
+}
 const _j  = (d, s = 200) => new Response(JSON.stringify(d), {
   status: s, headers: { 'Content-Type': 'application/json', ...CORS },
 });
@@ -201,16 +276,16 @@ export async function onRequest({ request, env }) {
     }
 
     // PUT { action: 'verify_github', repo, branch?, token? }
-    // GitHub 레포 접근 가능 여부 사전 검증
-    // provision.js의 fetchCMSSource()와 동일한 tarball API를 사용해야
-    // "접근 가능"이지만 실제 사이트 생성 시 실패하는 문제를 방지할 수 있음
+    // GitHub 레포 접근 + CMS 파일 존재 여부 사전 검증
+    // provision.js의 fetchCMSSource()와 동일하게 tarball을 실제 다운로드하여
+    // index.js 등 필수 CMS 파일이 존재하는지 확인한다.
+    // (redirect:'manual' 방식은 레포 존재만 확인하고 파일 여부를 모름 → 제거)
     if (action === 'verify_github') {
       const { repo, branch, token } = body;
       if (!repo?.trim()) return err('repo가 필요합니다.');
       try {
         const br      = (branch || 'main').trim();
         const repoStr = repo.trim();
-        // tarball API: provision.js의 fetchCMSSource()와 동일한 엔드포인트 사용
         const tarUrl  = `https://api.github.com/repos/${repoStr}/tarball/${br}`;
         const headers = {
           'User-Agent': 'CloudPress/17.0',
@@ -218,25 +293,42 @@ export async function onRequest({ request, env }) {
         };
         if (token) headers['Authorization'] = `Bearer ${token}`;
 
-        // redirect: 'manual' 로 tarball URL만 확인 (실제 다운로드 불필요)
-        const res = await fetch(tarUrl, { headers, redirect: 'manual' });
+        // 실제 tarball 다운로드 (provision.js와 동일한 방식)
+        const res = await fetch(tarUrl, { headers });
 
-        // tarball 엔드포인트는 성공 시 302 redirect를 반환
-        if (res.ok || res.status === 302) {
-          return ok({ message: `레포 접근 성공 (${repoStr}@${br})`, accessible: true });
+        if (!res.ok) {
+          const hint = res.status === 404
+            ? '레포가 존재하지 않거나 private 레포에 토큰이 필요합니다.'
+            : res.status === 401
+            ? '토큰이 없거나 유효하지 않습니다.'
+            : `HTTP ${res.status} ${res.statusText}`;
+          return ok({ message: `레포 접근 실패 — ${hint}`, accessible: false, status: res.status });
         }
 
-        // 401: 토큰 없음 / 잘못된 토큰, 404: 레포 없음 / private 접근 불가
-        const hint = res.status === 404
-          ? '레포가 존재하지 않거나 private 레포에 토큰이 필요합니다.'
-          : res.status === 401
-          ? '토큰이 없거나 유효하지 않습니다.'
-          : `HTTP ${res.status}`;
+        // tarball 파싱하여 필수 CMS 파일 존재 여부 확인
+        const buffer = await res.arrayBuffer();
+        const foundFiles = verifyTarHasCmsFiles(buffer);
+
+        const hasIndex  = foundFiles.has('index.js');
+        const fileCount = foundFiles.size;
+
+        if (!hasIndex) {
+          return ok({
+            message: `레포에 접근했지만 CMS 파일(index.js)이 없습니다. ` +
+                     `레포(${repoStr})에 CloudPress CMS 소스가 올바르게 있는지 확인해주세요. ` +
+                     `(발견된 파일 수: ${fileCount})`,
+            accessible: false,
+            cms_files_found: fileCount,
+            missing_index: true,
+          });
+        }
+
         return ok({
-          message: `레포 접근 실패 — ${hint}`,
-          accessible: false,
-          status: res.status,
+          message: `레포 접근 및 CMS 파일 확인 성공 (${repoStr}@${br}, ${fileCount}개 파일)`,
+          accessible: true,
+          cms_files_found: fileCount,
         });
+
       } catch (e) {
         return ok({ message: 'GitHub 접근 오류: ' + e.message, accessible: false });
       }
