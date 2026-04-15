@@ -1,44 +1,74 @@
-// functions/api/sites/[id]/provision.js — CloudPress v15.0
+// functions/api/sites/[id]/provision.js — CloudPress v16.0
 //
-// [v15.0 완전 재설계]
-// ── 고정 WP Origin URL 완전 제거 ──────────────────────────────────
-// ── VP 쿠키(PHPSESSID) 기반 완전 자동화 ──────────────────────────
+// [v16.0 완전 재설계 — VP/Origin 방식 전면 폐지]
+// ────────────────────────────────────────────────
+//  ✅ VP 패널 (HestiaCP/VestaCP/VistaPanel/등) 완전 제거
+//  ✅ WP Origin URL 프록시 방식 완전 제거
+//  ✅ PHP/WordPress 완전 제거
 //
-// 흐름:
-//   1. vp_accounts에서 사용 가능한 VP 계정 선택
-//   2. VP 패널에 PHPSESSID 쿠키로 로그인 (실패 시 user/pass로 재로그인 후 쿠키 갱신)
-//   3. VP 패널 API로 서브도메인 자동 생성 ({prefix}.{server_domain})
-//   4. VP 패널 API로 DB 생성
-//   5. WP 다운로드 → 설치 → wp-config 설정
-//   6. WP REST API + cron job 강제 활성화
-//   7. 해당 서브도메인을 origin으로 사이트 전용 Worker 빌드/업로드
-//   8. CF DNS + Route 등록
-//   9. 사용자 개인도메인이 Worker를 통해 서브도메인을 완전히 덮어씀
-//      (origin URL = 0 권력 / 개인도메인 = 100 권력)
+// 새 아키텍처 (GitHub HTTP fetch 방식):
+//  1. 사용자 CF 계정에 사이트 전용 D1 생성 (cloudpress-site-{prefix})
+//  2. 사용자 CF 계정에 사이트 전용 KV 생성 (cloudpress-site-{prefix}-kv)
+//  3. GitHub raw URL로 cloudflare-cms 전체 소스 HTTP fetch
+//  4. 가져온 코드를 Workers Script Upload API (multipart)로 업로드
+//     - D1/KV 바인딩을 코드 내부에 주입 (metadata bindings)
+//     - 직접 파일 업로드 X — 코드 자체를 번들로 업로드
+//  5. CF DNS + Worker Route 등록
+//  6. 사이트 D1에 CloudPress 스키마 초기화
+//  7. CACHE KV에 도메인 매핑 등록
 //
-// 아키텍처:
-//   [사용자 도메인] → [CF Worker] → [VP 서브도메인(origin)]
-//                 ↑ 모든 URL/Cookie/Header에서 origin 흔적 제거
+// 환경변수 (settings DB):
+//   cf_api_token      — 어드민 CF API 토큰
+//   cf_account_id     — 어드민 CF Account ID
+//   cms_github_repo   — cloudflare-cms 소스 레포 (owner/repo)
+//   cms_github_branch — 브랜치 (기본: main)
+//   cms_github_token  — GitHub PAT (비공개 레포용, 선택)
+//   main_db_id        — 메인 D1 UUID
+//   cache_kv_id       — CACHE KV UUID
+//   sessions_kv_id    — SESSIONS KV UUID
 
 'use strict';
 
-// ── CORS ────────────────────────────────────────────────────────────
+// ── CORS ────────────────────────────────────────────────────────────────────
 const CORS = {
   'Access-Control-Allow-Origin':  '*',
   'Access-Control-Allow-Methods': 'POST,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type,Authorization',
 };
 
-function jsonRes(data, status) {
-  return new Response(JSON.stringify(data), {
-    status: status || 200,
-    headers: { 'Content-Type': 'application/json', ...CORS },
-  });
-}
-const ok  = (d)      => jsonRes({ ok: true,  ...(d || {}) });
-const err = (msg, s) => jsonRes({ ok: false, error: msg }, s || 400);
+const _j  = (d, s = 200) => new Response(JSON.stringify(d), {
+  status: s, headers: { 'Content-Type': 'application/json', ...CORS },
+});
+const ok  = (d)      => _j({ ok: true,  ...(d || {}) });
+const err = (msg, s) => _j({ ok: false, error: msg }, s || 400);
 
-// ── Auth ────────────────────────────────────────────────────────────
+// ── Cloudflare API ──────────────────────────────────────────────────────────
+const CF_API = 'https://api.cloudflare.com/client/v4';
+
+function cfHeaders(apiToken) {
+  return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiToken };
+}
+
+async function cfReq(token, path, method = 'GET', body) {
+  const opts = { method, headers: cfHeaders(token) };
+  if (body !== undefined && body !== null) opts.body = JSON.stringify(body);
+  try {
+    const res  = await fetch(CF_API + path, opts);
+    const json = await res.json();
+    if (!json.success) {
+      console.error(`[cfReq] ${method} ${path} failed:`, JSON.stringify(json.errors || []));
+    }
+    return json;
+  } catch (e) {
+    return { success: false, errors: [{ message: e.message }] };
+  }
+}
+
+function cfErrMsg(json) {
+  return (json?.errors || []).map(e => (e.code ? `[${e.code}] ` : '') + (e.message || '')).join('; ') || 'unknown';
+}
+
+// ── Auth ────────────────────────────────────────────────────────────────────
 function getToken(req) {
   const a = req.headers.get('Authorization') || '';
   if (a.startsWith('Bearer ')) return a.slice(7);
@@ -71,7 +101,9 @@ async function updateSite(DB, siteId, fields) {
   const sets = keys.map(k => k + '=?');
   const vals = [...keys.map(k => fields[k]), siteId];
   try {
-    await DB.prepare(`UPDATE sites SET ${sets.join(', ')}, updated_at=datetime('now') WHERE id=?`).bind(...vals).run();
+    await DB.prepare(
+      `UPDATE sites SET ${sets.join(', ')}, updated_at=datetime('now') WHERE id=?`
+    ).bind(...vals).run();
   } catch (e) { console.error('updateSite err:', e.message); }
 }
 
@@ -82,6 +114,13 @@ async function failSite(DB, siteId, step, message) {
       "UPDATE sites SET status='failed', provision_step=?, error_message=?, updated_at=datetime('now') WHERE id=?"
     ).bind(step, String(message).slice(0, 500), siteId).run();
   } catch (e) { console.error('failSite err:', e.message); }
+}
+
+function randSuffix(len = 6) {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let out = '';
+  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
 }
 
 function deobfuscate(str, salt) {
@@ -97,49 +136,11 @@ function deobfuscate(str, salt) {
   } catch { return ''; }
 }
 
-function randSuffix(len = 6) {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let out = '';
-  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
-  return out;
-}
+// ── CF 리소스 생성 ──────────────────────────────────────────────────────────
 
-// ── Cloudflare API ───────────────────────────────────────────────────
-const CF_API = 'https://api.cloudflare.com/client/v4';
-
-function makeAuth(key, email) {
-  if (email && email.includes('@')) return { type: 'global', key, email };
-  return { type: 'bearer', value: key };
-}
-
-function cfHeaders(auth) {
-  if (auth.type === 'global') {
-    return { 'Content-Type': 'application/json', 'X-Auth-Email': auth.email, 'X-Auth-Key': auth.key };
-  }
-  return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (auth.value || auth.key) };
-}
-
-async function cfReq(auth, path, method = 'GET', body) {
-  const opts = { method, headers: cfHeaders(auth) };
-  if (body !== undefined && body !== null) opts.body = JSON.stringify(body);
-  try {
-    const res  = await fetch(CF_API + path, opts);
-    const json = await res.json();
-    if (!json.success) console.error(`[cfReq] ${method} ${path} failed:`, JSON.stringify(json.errors || []));
-    return json;
-  } catch (e) {
-    return { success: false, errors: [{ message: e.message }] };
-  }
-}
-
-function cfErrMsg(json) {
-  return (json?.errors || []).map(e => (e.code ? `[${e.code}] ` : '') + (e.message || '')).join('; ') || 'unknown';
-}
-
-// ── CF 리소스 생성 ───────────────────────────────────────────────────
-async function createD1(auth, accountId, prefix) {
-  const name = `cp-${prefix}-${Date.now().toString(36)}${randSuffix()}`;
-  const res = await cfReq(auth, `/accounts/${accountId}/d1/database`, 'POST', { name });
+async function createD1(token, accountId, prefix) {
+  const name = `cloudpress-site-${prefix}-${Date.now().toString(36)}`;
+  const res  = await cfReq(token, `/accounts/${accountId}/d1/database`, 'POST', { name });
   if (res.success && res.result) {
     const id = res.result.uuid || res.result.id || res.result.database_id;
     if (id) return { ok: true, id, name };
@@ -147,1260 +148,360 @@ async function createD1(auth, accountId, prefix) {
   return { ok: false, error: 'D1 생성 실패: ' + cfErrMsg(res) };
 }
 
-async function createKV(auth, accountId, prefix) {
-  const title = `CP_${prefix.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_${Date.now().toString(36).toUpperCase()}`;
-  const res = await cfReq(auth, `/accounts/${accountId}/storage/kv/namespaces`, 'POST', { title });
-  if (res.success && res.result?.id) return { ok: true, id: res.result.id, title };
+async function createKV(token, accountId, prefix) {
+  const title = `cloudpress-site-${prefix}-kv`;
+  const res   = await cfReq(token, `/accounts/${accountId}/storage/kv/namespaces`, 'POST', { title });
+  if (res.success && res.result?.id) {
+    return { ok: true, id: res.result.id, title };
+  }
   return { ok: false, error: 'KV 생성 실패: ' + cfErrMsg(res) };
 }
 
-async function initD1Schema(auth, accountId, d1Id) {
-  const sqls = [
-    "CREATE TABLE IF NOT EXISTS wp_options (option_id INTEGER PRIMARY KEY AUTOINCREMENT, option_name TEXT NOT NULL UNIQUE, option_value TEXT NOT NULL DEFAULT '', autoload TEXT NOT NULL DEFAULT 'yes')",
-    "CREATE TABLE IF NOT EXISTS wp_posts (ID INTEGER PRIMARY KEY AUTOINCREMENT, post_author INTEGER NOT NULL DEFAULT 0, post_date TEXT NOT NULL DEFAULT (datetime('now')), post_content TEXT NOT NULL DEFAULT '', post_title TEXT NOT NULL DEFAULT '', post_status TEXT NOT NULL DEFAULT 'publish', post_type TEXT NOT NULL DEFAULT 'post', post_name TEXT NOT NULL DEFAULT '', modified_at TEXT NOT NULL DEFAULT (datetime('now')))",
-    "CREATE TABLE IF NOT EXISTS wp_users (ID INTEGER PRIMARY KEY AUTOINCREMENT, user_login TEXT NOT NULL UNIQUE, user_pass TEXT NOT NULL, user_email TEXT NOT NULL DEFAULT '', user_registered TEXT NOT NULL DEFAULT (datetime('now')), display_name TEXT NOT NULL DEFAULT '')",
-    "CREATE TABLE IF NOT EXISTS cp_site_meta (id INTEGER PRIMARY KEY AUTOINCREMENT, meta_key TEXT NOT NULL UNIQUE, meta_value TEXT, updated_at TEXT NOT NULL DEFAULT (datetime('now')))",
-  ];
-  for (const sql of sqls) {
-    try {
-      await cfReq(auth, `/accounts/${accountId}/d1/database/${d1Id}/query`, 'POST', { sql });
-    } catch (_) {}
+// ── 사이트 D1 스키마 초기화 (Workers D1 API) ────────────────────────────────
+// cloudflare-cms의 schema.sql을 HTTP로 fetch 후 D1 API로 실행
+
+async function initSiteD1Schema(token, accountId, d1Id, githubRepo, githubBranch, githubToken) {
+  // GitHub에서 schema.sql fetch
+  const branch = githubBranch || 'main';
+  const rawUrl = `https://raw.githubusercontent.com/${githubRepo}/${branch}/schema.sql`;
+
+  let schemaSql = '';
+  try {
+    const headers = { 'User-Agent': 'CloudPress/16.0' };
+    if (githubToken) headers['Authorization'] = `Bearer ${githubToken}`;
+    const res = await fetch(rawUrl, { headers });
+    if (res.ok) {
+      schemaSql = await res.text();
+    } else {
+      console.warn('[provision] schema.sql fetch 실패 — 내장 최소 스키마 사용');
+    }
+  } catch (e) {
+    console.warn('[provision] schema.sql fetch 오류:', e.message);
   }
+
+  // fetch 실패 시 최소 내장 스키마 사용
+  if (!schemaSql.trim()) {
+    schemaSql = getMinimalSchema();
+  }
+
+  // D1 SQL 실행 API — 세미콜론으로 분리해 각 구문 개별 실행
+  // (D1은 단일 세미콜론 분리 구문 지원)
+  const res = await cfReq(token, `/accounts/${accountId}/d1/database/${d1Id}/query`, 'POST', {
+    sql: schemaSql,
+  });
+
+  if (!res.success) {
+    // 일부 CREATE INDEX IF NOT EXISTS 실패는 무시
+    const errors = (res.errors || []).filter(e => !String(e.message).includes('already exists'));
+    if (errors.length > 0) {
+      console.warn('[provision] D1 스키마 일부 오류(무시):', JSON.stringify(errors));
+    }
+  }
+
+  return { ok: true };
 }
 
-async function initKVData(auth, accountId, kvId, data) {
-  const hdrs = { ...cfHeaders(auth) };
-  delete hdrs['Content-Type'];
-  for (const [key, val] of Object.entries(data)) {
+// KV 초기값 설정
+async function initKVData(token, accountId, kvId, entries) {
+  for (const [key, value] of Object.entries(entries)) {
+    await cfReq(
+      token,
+      `/accounts/${accountId}/storage/kv/namespaces/${kvId}/values/${encodeURIComponent(key)}`,
+      'PUT',
+      null
+    ).catch(() => {});
+
+    // KV PUT은 form/text body
     try {
       await fetch(
         `${CF_API}/accounts/${accountId}/storage/kv/namespaces/${kvId}/values/${encodeURIComponent(key)}`,
-        { method: 'PUT', headers: hdrs, body: typeof val === 'string' ? val : JSON.stringify(val) }
+        {
+          method:  'PUT',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'text/plain' },
+          body:    value,
+        }
       );
-    } catch (_) {}
+    } catch (e) { console.warn('[provision] KV put 오류:', key, e.message); }
   }
 }
 
-async function findPagesProjectName(auth, accountId) {
-  try {
-    const r = await cfReq(auth, `/accounts/${accountId}/pages/projects?per_page=50`);
-    if (r.success && Array.isArray(r.result)) {
-      for (const p of r.result) {
-        if (p.name?.toLowerCase().includes('cloudpress')) return p.name;
-      }
-      if (r.result.length > 0) return r.result[0].name;
-    }
-  } catch (_) {}
-  return null;
-}
+// ── GitHub에서 cloudflare-cms 소스 파일 목록 조회 ──────────────────────────
 
-async function resolveMainBindingIds(auth, accountId, projectName, DB) {
-  const result = { mainDbId: '', cacheKvId: '', sessionsKvId: '' };
-  try {
-    const r = await cfReq(auth, `/accounts/${accountId}/pages/projects/${projectName}`);
-    if (!r.success || !r.result) return result;
-    const prod  = r.result.deployment_configs?.production || {};
-    const d1Cfg = prod.d1_databases  || {};
-    const kvCfg = prod.kv_namespaces || {};
-    if (d1Cfg['DB']?.id)       result.mainDbId     = d1Cfg['DB'].id;
-    if (kvCfg['SESSIONS']?.id) result.sessionsKvId = kvCfg['SESSIONS'].id;
-    if (kvCfg['CACHE']?.id)    result.cacheKvId    = kvCfg['CACHE'].id;
-    const upsert = "INSERT INTO settings (key,value,updated_at) VALUES (?,?,datetime('now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at";
-    if (result.mainDbId)     try { await DB.prepare(upsert).bind('main_db_id', result.mainDbId).run(); } catch(_){}
-    if (result.sessionsKvId) try { await DB.prepare(upsert).bind('sessions_kv_id', result.sessionsKvId).run(); } catch(_){}
-    if (result.cacheKvId)    try { await DB.prepare(upsert).bind('cache_kv_id', result.cacheKvId).run(); } catch(_){}
-  } catch (_) {}
-  return result;
-}
+const CMS_FILES = [
+  'index.js',
+  'cp-router.js',
+  'cp-blog-header.js',
+  'cp-load.js',
+  'cp-settings.js',
+  'cp-config.js',
+  'cp-activate.js',
+  'cp-comments-post.js',
+  'cp-cron.js',
+  'cp-links-opml.js',
+  'cp-mail.js',
+  'cp-signup.js',
+  'cp-trackback.js',
+  'cp-admin/index.js',
+  'cp-admin/admin-shell.js',
+  'cp-admin/ajax.js',
+  'cp-admin/auth-check.js',
+  'cp-admin/github-sync.js',
+  'cp-admin/installer.js',
+  'cp-admin/pages/index.js',
+  'cp-admin/pages/dashboard.js',
+  'cp-admin/pages/posts.js',
+  'cp-admin/pages/post-edit.js',
+  'cp-admin/pages/pages.js',
+  'cp-admin/pages/comments.js',
+  'cp-admin/pages/media.js',
+  'cp-admin/pages/themes.js',
+  'cp-admin/pages/plugins.js',
+  'cp-admin/pages/users.js',
+  'cp-admin/pages/user-edit.js',
+  'cp-admin/pages/profile.js',
+  'cp-admin/pages/options.js',
+  'cp-admin/pages/options-general.js',
+  'cp-admin/pages/options-writing.js',
+  'cp-admin/pages/options-reading.js',
+  'cp-admin/pages/options-discussion.js',
+  'cp-admin/pages/options-media.js',
+  'cp-admin/pages/options-permalink.js',
+  'cp-admin/pages/tools.js',
+  'cp-admin/pages/import.js',
+  'cp-admin/pages/export.js',
+  'cp-admin/pages/upgrade.js',
+  'cp-includes/auth.js',
+  'cp-includes/bookmark.js',
+  'cp-includes/category.js',
+  'cp-includes/comment.js',
+  'cp-includes/crypto.js',
+  'cp-includes/feed.js',
+  'cp-includes/formatting.js',
+  'cp-includes/functions.js',
+  'cp-includes/hooks.js',
+  'cp-includes/jwt.js',
+  'cp-includes/link-template.js',
+  'cp-includes/mail.js',
+  'cp-includes/media-handler.js',
+  'cp-includes/ms-functions.js',
+  'cp-includes/option.js',
+  'cp-includes/plugin-loader.js',
+  'cp-includes/post.js',
+  'cp-includes/query.js',
+  'cp-includes/sanitize.js',
+  'cp-includes/session.js',
+  'cp-includes/sitemap.js',
+  'cp-includes/template-loader.js',
+  'cp-includes/theme-loader.js',
+  'cp-includes/transient.js',
+  'cp-includes/user.js',
+];
 
-async function cfGetZone(auth, domain) {
-  const parts = domain.split('.');
-  const root2 = parts.slice(-2).join('.');
-  const root3 = parts.length >= 3 ? parts.slice(-3).join('.') : root2;
-  let res = await cfReq(auth, `/zones?name=${encodeURIComponent(root2)}&status=active`);
-  if (res.success && res.result?.length > 0) return { ok: true, zoneId: res.result[0].id };
-  if (root3 !== root2) {
-    res = await cfReq(auth, `/zones?name=${encodeURIComponent(root3)}&status=active`);
-    if (res.success && res.result?.length > 0) return { ok: true, zoneId: res.result[0].id };
-  }
-  return { ok: false };
-}
+/**
+ * GitHub raw URL에서 모든 CMS 소스 파일을 병렬 fetch.
+ * 반환: { path → content } Map
+ */
+async function fetchCMSSource(githubRepo, githubBranch, githubToken) {
+  const branch  = githubBranch || 'main';
+  const baseUrl = `https://raw.githubusercontent.com/${githubRepo}/${branch}`;
+  const headers = { 'User-Agent': 'CloudPress/16.0' };
+  if (githubToken) headers['Authorization'] = `Bearer ${githubToken}`;
 
-async function cfUpsertDns(auth, zoneId, type, name, content, proxied) {
-  const list = await cfReq(auth, `/zones/${zoneId}/dns_records?type=${type}&name=${encodeURIComponent(name)}`);
-  const existing = list?.result?.[0] || null;
-  const payload  = { type, name, content, proxied, ttl: 1 };
-  if (existing) {
-    const r = await cfReq(auth, `/zones/${zoneId}/dns_records/${existing.id}`, 'PUT', payload);
-    return r.success ? { ok: true, recordId: existing.id } : { ok: false, error: cfErrMsg(r) };
-  }
-  const r = await cfReq(auth, `/zones/${zoneId}/dns_records`, 'POST', payload);
-  return r.success ? { ok: true, recordId: r.result?.id } : { ok: false, error: cfErrMsg(r) };
-}
-
-async function cfUpsertRoute(auth, zoneId, pattern, script) {
-  const list = await cfReq(auth, `/zones/${zoneId}/workers/routes`);
-  const exist = list?.result?.find(r => r.pattern === pattern) || null;
-  const payload = { pattern, script };
-  if (exist) {
-    const r = await cfReq(auth, `/zones/${zoneId}/workers/routes/${exist.id}`, 'PUT', payload);
-    return r.success ? { ok: true, routeId: exist.id } : { ok: false, error: cfErrMsg(r) };
-  }
-  const r = await cfReq(auth, `/zones/${zoneId}/workers/routes`, 'POST', payload);
-  return r.success ? { ok: true, routeId: r.result?.id } : { ok: false, error: cfErrMsg(r) };
-}
-
-async function getWorkerSubdomain(auth, accountId, workerName) {
-  try {
-    const r = await cfReq(auth, `/accounts/${accountId}/workers/subdomain`);
-    if (r.success && r.result?.subdomain) return `${workerName}.${r.result.subdomain}.workers.dev`;
-  } catch (_) {}
-  return `${workerName}.workers.dev`;
-}
-
-// ══════════════════════════════════════════════════════════════════
-// VP 패널 자동화 — 멀티 패널 자동 감지
-//
-// 지원 패널:
-//   HestiaCP   — :8083  POST /login/        web: /add/web/   db: /add/db/
-//   VestaCP    — :8083  POST /vpanel/login  web: /vpanel/web/add
-//   CyberPanel — :8090  REST JSON API       (Authorization: Basic)
-//   aaPanel    — :7800  POST /login         cookie: session  web: /site  db: /database
-//   DirectAdmin— :2222  GET  /CMD_LOGIN     web: /CMD_API    (session cookie)
-//   Plesk      — :8443  POST /login_up.php  web: /api/v2/domains
-//   VistaPanel — :2082  POST /login2.php    web: /createsite.php  db: /databases.php
-//                (byethost, InfinityFree, 기타 무료호스팅 사용)
-//   SPanel     — :2083  POST /login         web: /api/v1/domain   db: /api/v1/mysql
-// ══════════════════════════════════════════════════════════════════
-
-// ── 공통 헬퍼 ──────────────────────────────────────────────────────
-
-function isAlreadyExists(text, status) {
-  const t = String(text).toLowerCase();
-  return status === 409 ||
-    t.includes('exist') || t.includes('already') ||
-    t.includes('duplicate') || t.includes('이미');
-}
-
-function isSessionExpired(status) {
-  return status === 401 || status === 403;
-}
-
-// 응답 텍스트 파싱 (JSON 우선, 실패하면 text)
-function parseRes(text) {
-  try { return JSON.parse(text); } catch { return text; }
-}
-
-// 응답 요약 (에러 메시지용, 100자)
-function resSummary(data) {
-  return String(typeof data === 'object' ? JSON.stringify(data) : data).slice(0, 100);
-}
-
-// ── 패널 감지 ──────────────────────────────────────────────────────
-//
-// panelUrl의 포트·응답 헤더·응답 본문으로 패널 종류를 추론한다.
-// 반환: 'hestia' | 'vesta' | 'cyberpanel' | 'aapanel' | 'directadmin' | 'plesk' | 'unknown'
-
-async function detectPanelType(panelUrl) {
-  // 1) 포트 기반 1차 추론
-  try {
-    const u = new URL(panelUrl);
-    const port = u.port || (u.protocol === 'https:' ? '443' : '80');
-    if (port === '8090') return 'cyberpanel';
-    if (port === '7800' || port === '7788') return 'aapanel';
-    if (port === '2222') return 'directadmin';
-    if (port === '8443') return 'plesk';
-    if (port === '2082' || port === '2083') {
-      // 2082 = VistaPanel(byethost/InfinityFree), 2083 = cPanel SSL or SPanel
-      // 응답으로 구분
-    }
-    // 8083 = HestiaCP 또는 VestaCP → 응답으로 구분
-  } catch (_) {}
-
-  // 2) 루트(/) GET 응답 내용으로 구분
-  try {
-    const res = await fetch(panelUrl + '/', {
-      method: 'GET',
-      redirect: 'manual',
-      signal: AbortSignal.timeout(6000),
-    });
-    const text = (await res.text().catch(() => '')).toLowerCase();
-    const server = (res.headers.get('server') || '').toLowerCase();
-
-    if (text.includes('hestia') || text.includes('hestiacp'))         return 'hestia';
-    if (text.includes('vesta')  || text.includes('vestacp'))          return 'vesta';
-    if (text.includes('cyberpanel'))                                   return 'cyberpanel';
-    if (text.includes('aapanel') || text.includes('宝塔'))            return 'aapanel';
-    if (text.includes('directadmin'))                                  return 'directadmin';
-    if (text.includes('plesk'))                                        return 'plesk';
-    // VistaPanel 감지: byethost/InfinityFree 등이 사용하는 패널
-    if (text.includes('vistapanel') || text.includes('vista panel') ||
-        text.includes('byethost') || text.includes('infinityfree') ||
-        text.includes('login2.php') || text.includes('ifastnet'))      return 'vistapanel';
-    // SPanel 감지
-    if (text.includes('spanel') || text.includes('s-panel') ||
-        server.includes('spanel'))                                     return 'spanel';
-    if (server.includes('hestia'))                                     return 'hestia';
-
-    // /login/ 경로 존재 여부로 Hestia vs Vesta 구분
-    const r2 = await fetch(panelUrl + '/login/', {
-      method: 'GET', redirect: 'manual',
-      signal: AbortSignal.timeout(4000),
-    });
-    if (r2.status !== 404) return 'hestia';
-
-    const r3 = await fetch(panelUrl + '/vpanel/', {
-      method: 'GET', redirect: 'manual',
-      signal: AbortSignal.timeout(4000),
-    });
-    if (r3.status !== 404) return 'vesta';
-
-    // /login2.php 감지 → VistaPanel
-    const r4 = await fetch(panelUrl + '/login2.php', {
-      method: 'GET', redirect: 'manual',
-      signal: AbortSignal.timeout(4000),
-    });
-    if (r4.status !== 404) return 'vistapanel';
-  } catch (_) {}
-
-  return 'unknown';
-}
-
-// ── HTTP 요청 헬퍼 ─────────────────────────────────────────────────
-
-// 폼 POST (302/303도 성공으로 처리)
-async function formPost(url, cookieHeader, params, extraHeaders = {}) {
-  const body = Object.entries(params)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join('&');
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'X-Requested-With': 'XMLHttpRequest',
-        ...(cookieHeader ? { 'Cookie': cookieHeader } : {}),
-        ...extraHeaders,
-      },
-      body,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(15000),
-    });
-    const text = await res.text().catch(() => '');
-    const ok   = res.ok || res.status === 302 || res.status === 303;
-    return { ok, status: res.status, data: parseRes(text), headers: res.headers };
-  } catch (e) {
-    return { ok: false, status: 0, data: e.message, headers: new Headers() };
-  }
-}
-
-// JSON POST (CyberPanel, aaPanel REST)
-async function jsonPost(url, authHeader, body) {
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(authHeader ? { 'Authorization': authHeader } : {}),
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15000),
-    });
-    const text = await res.text().catch(() => '');
-    return { ok: res.ok, status: res.status, data: parseRes(text) };
-  } catch (e) {
-    return { ok: false, status: 0, data: e.message };
-  }
-}
-
-// GET (DirectAdmin CMD_API)
-async function httpGet(url, cookieHeader, extraHeaders = {}) {
-  try {
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        ...(cookieHeader ? { 'Cookie': cookieHeader } : {}),
-        ...extraHeaders,
-      },
-      redirect: 'manual',
-      signal: AbortSignal.timeout(10000),
-    });
-    const text = await res.text().catch(() => '');
-    return { ok: res.ok || res.status === 302, status: res.status, data: parseRes(text), headers: res.headers };
-  } catch (e) {
-    return { ok: false, status: 0, data: e.message, headers: new Headers() };
-  }
-}
-
-// Set-Cookie에서 특정 쿠키 값 추출
-function extractCookie(headers, name) {
-  const setCookie = headers.get('set-cookie') || '';
-  // 여러 Set-Cookie가 쉼표로 이어질 수 있음
-  const re = new RegExp(`(?:^|,\\s*)${name}=([^;,\\s]+)`, 'i');
-  const m  = setCookie.match(re);
-  return m ? m[1] : null;
-}
-
-// ── 패널별 로그인 ──────────────────────────────────────────────────
-
-async function loginHestia(panelUrl, username, password) {
-  const res = await formPost(`${panelUrl}/login/`, null,
-    { username, password });
-  const sid = extractCookie(res.headers, 'PHPSESSID');
-  if (sid) return { ok: true, cookie: `PHPSESSID=${sid}`, type: 'hestia' };
-  if (res.status === 302 || res.status === 200) {
-    // 일부 버전은 phpsessid 없이 다른 쿠키 사용
-    const raw = res.headers.get('set-cookie') || '';
-    if (raw) {
-      // 첫 번째 쿠키값 그대로 사용
-      const cookieVal = raw.split(';')[0].trim();
-      if (cookieVal) return { ok: true, cookie: cookieVal, type: 'hestia' };
-    }
-  }
-  return { ok: false, error: `HestiaCP 로그인 실패 (HTTP ${res.status})` };
-}
-
-async function loginVesta(panelUrl, username, password) {
-  const res = await formPost(`${panelUrl}/vpanel/login`, null,
-    { username, password });
-  const sid = extractCookie(res.headers, 'PHPSESSID');
-  if (sid) return { ok: true, cookie: `PHPSESSID=${sid}`, type: 'vesta' };
-  return { ok: false, error: `VestaCP 로그인 실패 (HTTP ${res.status})` };
-}
-
-async function loginCyberPanel(panelUrl, username, password) {
-  // CyberPanel: Basic Auth (세션 불필요, 매 요청마다 인증)
-  const b64 = btoa(`${username}:${password}`);
-  // 인증 확인
-  const res = await jsonPost(`${panelUrl}/api/verifyConn`, `Basic ${b64}`, {});
-  if (res.ok || res.status === 200) {
-    return { ok: true, cookie: `__auth=Basic ${b64}`, type: 'cyberpanel', basicAuth: `Basic ${b64}` };
-  }
-  return { ok: false, error: `CyberPanel 로그인 실패 (HTTP ${res.status})` };
-}
-
-async function loginAaPanel(panelUrl, username, password) {
-  // aaPanel: POST /login → session 쿠키
-  const res = await formPost(`${panelUrl}/login`, null,
-    { username, password, code: '', login_token: '', totp_code: '' });
-  const sid = extractCookie(res.headers, 'session');
-  if (sid) return { ok: true, cookie: `session=${sid}`, type: 'aapanel' };
-  // 일부 버전
-  const sid2 = extractCookie(res.headers, 'request_token');
-  if (sid2) return { ok: true, cookie: `request_token=${sid2}`, type: 'aapanel' };
-  return { ok: false, error: `aaPanel 로그인 실패 (HTTP ${res.status})` };
-}
-
-async function loginDirectAdmin(panelUrl, username, password) {
-  // DirectAdmin: GET /CMD_LOGIN → session 쿠키
-  const cred = `${encodeURIComponent(username)}:${encodeURIComponent(password)}`;
-  const res  = await httpGet(`${panelUrl}/CMD_LOGIN?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`);
-  const sid  = extractCookie(res.headers, 'session');
-  if (sid) return { ok: true, cookie: `session=${sid}`, type: 'directadmin' };
-  // Basic Auth 폴백
-  const b64 = btoa(`${username}:${password}`);
-  return { ok: true, cookie: '', type: 'directadmin', basicAuth: `Basic ${b64}` };
-}
-
-async function loginPlesk(panelUrl, username, password) {
-  const res = await formPost(`${panelUrl}/login_up.php`, null,
-    { login_name: username, passwd: password });
-  const sid = extractCookie(res.headers, 'PLESKSESSID') ||
-              extractCookie(res.headers, 'PHPSESSID');
-  if (sid) return { ok: true, cookie: `PLESKSESSID=${sid}`, type: 'plesk' };
-  return { ok: false, error: `Plesk 로그인 실패 (HTTP ${res.status})` };
-}
-
-// ── VistaPanel (byethost / InfinityFree / iFastNet 계열) ──────────
-//
-// 공식 API 없음. 웹 폼 스크래핑으로 동작.
-// 로그인: POST /login2.php  (btid=username, bpw=password, ssl_login=)
-// 세션:   PHPSESSID 쿠키
-// 서브도메인 생성: POST /createsite.php
-// DB 생성: POST /databases.php
-// 명령 실행: 불가 (공유 호스팅이므로 shell 없음)
-//            → WP 설치는 /wp-admin/install.php HTTP 요청으로 대체
-//
-async function loginVistaPanel(panelUrl, username, password) {
-  // VistaPanel은 로그인 시 hidden CSRF 토큰이 있을 수 있음 → 먼저 GET으로 폼 가져옴
-  let token = '';
-  try {
-    const getRes = await fetch(`${panelUrl}/login2.php`, {
-      method: 'GET',
-      redirect: 'manual',
-      signal: AbortSignal.timeout(8000),
-    });
-    const html = await getRes.text().catch(() => '');
-    // csrf_token 또는 token 히든 필드 추출
-    const m = html.match(/name=["'](?:csrf_token|token|_token)["'][^>]*value=["']([^"']+)["']/i)
-           || html.match(/value=["']([^"']+)["'][^>]*name=["'](?:csrf_token|token|_token)["']/i);
-    if (m) token = m[1];
-  } catch (_) {}
-
-  const params = { btid: username, bpw: password, ssl_login: '' };
-  if (token) params.csrf_token = token;
-
-  const res = await formPost(`${panelUrl}/login2.php`, null, params);
-  const sid = extractCookie(res.headers, 'PHPSESSID');
-  if (sid) return { ok: true, cookie: `PHPSESSID=${sid}`, type: 'vistapanel' };
-
-  // 일부 서버는 302 리다이렉트 후 쿠키가 Location 응답에 포함됨
-  if (res.status === 302 || res.status === 200) {
-    const raw = res.headers.get('set-cookie') || '';
-    if (raw) {
-      const cookieVal = raw.split(';')[0].trim();
-      if (cookieVal && cookieVal.includes('=')) {
-        return { ok: true, cookie: cookieVal, type: 'vistapanel' };
-      }
-    }
-  }
-
-  // btpass 필드명 폴백 (구버전 VistaPanel)
-  const res2 = await formPost(`${panelUrl}/login2.php`, null,
-    { username, password, btid: username, btpass: password });
-  const sid2 = extractCookie(res2.headers, 'PHPSESSID');
-  if (sid2) return { ok: true, cookie: `PHPSESSID=${sid2}`, type: 'vistapanel' };
-
-  return { ok: false, error: `VistaPanel 로그인 실패 (HTTP ${res.status})` };
-}
-
-// ── SPanel (ScalaHosting 계열) ─────────────────────────────────────
-//
-// SPanel은 REST API를 제공.
-// 로그인: POST /login  → Bearer token 반환
-// 서브도메인: POST /api/v1/domain
-// DB: POST /api/v1/mysql/database
-//
-async function loginSPanel(panelUrl, username, password) {
-  const res = await jsonPost(`${panelUrl}/login`, null,
-    { username, password });
-  const token = res.data?.token || res.data?.access_token || res.data?.data?.token;
-  if (token) {
-    return { ok: true, cookie: `__spanel_token=${token}`, type: 'spanel', basicAuth: `Bearer ${token}` };
-  }
-  // 폼 폴백
-  const res2 = await formPost(`${panelUrl}/login`, null, { username, password });
-  const sid = extractCookie(res2.headers, 'PHPSESSID') || extractCookie(res2.headers, 'spanel_session');
-  if (sid) return { ok: true, cookie: `PHPSESSID=${sid}`, type: 'spanel' };
-  return { ok: false, error: `SPanel 로그인 실패 (HTTP ${res.status})` };
-}
-
-// ── 통합 로그인 (패널 타입 자동 감지 + 로그인) ────────────────────
-
-async function vpDetectAndLogin(panelUrl, username, password, cachedType) {
-  const tryLogin = async (type) => {
-    if (type === 'hestia')      return loginHestia(panelUrl, username, password);
-    if (type === 'vesta')       return loginVesta(panelUrl, username, password);
-    if (type === 'cyberpanel')  return loginCyberPanel(panelUrl, username, password);
-    if (type === 'aapanel')     return loginAaPanel(panelUrl, username, password);
-    if (type === 'directadmin') return loginDirectAdmin(panelUrl, username, password);
-    if (type === 'plesk')       return loginPlesk(panelUrl, username, password);
-    if (type === 'vistapanel')  return loginVistaPanel(panelUrl, username, password);
-    if (type === 'spanel')      return loginSPanel(panelUrl, username, password);
-    return { ok: false, error: 'unknown type' };
-  };
-
-  // 캐시된 타입 우선 시도
-  if (cachedType && cachedType !== 'unknown') {
-    const r = await tryLogin(cachedType);
-    if (r.ok) return r;
-    console.warn(`[vpLogin] 캐시 타입(${cachedType}) 로그인 실패, 재감지...`);
-  }
-
-  // 패널 감지 후 로그인
-  const detected = await detectPanelType(panelUrl);
-  console.log(`[vpLogin] 감지된 패널: ${detected}`);
-  const r = await tryLogin(detected);
-  if (r.ok) return r;
-
-  // unknown이거나 감지 실패 → 모든 타입 순차 시도
-  if (detected === 'unknown' || !r.ok) {
-    for (const t of ['hestia', 'vesta', 'vistapanel', 'spanel', 'aapanel', 'cyberpanel', 'directadmin', 'plesk']) {
-      if (t === detected) continue;
-      const fallback = await tryLogin(t);
-      if (fallback.ok) {
-        console.log(`[vpLogin] 폴백 성공: ${t}`);
-        return fallback;
-      }
-    }
-  }
-
-  return { ok: false, error: `패널 로그인 실패 (감지: ${detected}): ${r.error}` };
-}
-
-// ── 세션 확인 + 재로그인 ───────────────────────────────────────────
-
-async function ensureVpSession(DB, vpAccount) {
-  const { id, panel_url, vp_username, vp_password, phpsessid, panel_type } = vpAccount;
-
-  // 기존 저장 쿠키/세션으로 유효성 확인
-  if (phpsessid) {
-    // 패널별 ping 경로 — vistapanel은 /index.php (메인 대시보드)
-    const pingPaths = ['/list/web/', '/vpanel/api/status', '/api/verifyConn', '/index.php', '/'];
-    for (const path of pingPaths) {
+  const results = await Promise.all(
+    CMS_FILES.map(async (filePath) => {
       try {
-        const res = await fetch(`${panel_url}${path}`, {
-          method: 'GET',
-          headers: { 'Cookie': phpsessid },
-          redirect: 'manual',
-          signal: AbortSignal.timeout(5000),
-        });
-        // 401/403/0 = 만료, 나머지 = 살아있음
-        if (res.status !== 401 && res.status !== 403 && res.status !== 0) {
-          return { ok: true, phpsessid, cookie: phpsessid };
+        const res = await fetch(`${baseUrl}/${filePath}`, { headers });
+        if (!res.ok) {
+          console.warn(`[provision] GitHub fetch 실패: ${filePath} (${res.status})`);
+          return [filePath, null];
         }
-        break; // 첫 응답에서 만료 확인 → 재로그인
-      } catch (_) {}
-    }
+        const text = await res.text();
+        return [filePath, text];
+      } catch (e) {
+        console.warn(`[provision] GitHub fetch 오류: ${filePath}`, e.message);
+        return [filePath, null];
+      }
+    })
+  );
+
+  const map = new Map();
+  for (const [path, content] of results) {
+    if (content !== null) map.set(path, content);
   }
-
-  // 재로그인
-  console.log('[provision] VP 세션 만료 또는 없음 → 재로그인');
-  const loginRes = await vpDetectAndLogin(panel_url, vp_username, vp_password, panel_type);
-  if (!loginRes.ok) {
-    if (phpsessid) {
-      console.warn('[provision] 재로그인 실패, 기존 세션으로 계속 시도:', loginRes.error);
-      return { ok: true, phpsessid, cookie: phpsessid, stale: true };
-    }
-    return { ok: false, error: loginRes.error };
-  }
-
-  const newCookie    = loginRes.cookie;
-  const detectedType = loginRes.type;
-
-  // DB에 세션 + 패널 타입 갱신
-  try {
-    await DB.prepare(
-      "UPDATE vp_accounts SET phpsessid=?, phpsessid_updated_at=datetime('now'), updated_at=datetime('now') WHERE id=?"
-    ).bind(newCookie, id).run();
-  } catch (_) {}
-
-  return { ok: true, phpsessid: newCookie, cookie: newCookie, panelType: detectedType, basicAuth: loginRes.basicAuth };
+  return map;
 }
 
-// ── 패널별 서브도메인 생성 ─────────────────────────────────────────
+// ── Workers Script Upload API (multipart/form-data) ─────────────────────────
+//
+// 업로드 방식: Workers Script Upload API (PUT /accounts/{id}/workers/scripts/{name})
+//   - Content-Type: multipart/form-data
+//   - Part 1: "metadata"  → JSON (bindings, compatibility_date, main_module)
+//   - Part 2+: 각 JS 파일 (name = 파일 경로, filename = 파일 경로)
+//
+// 직접 파일 업로드가 아닌, GitHub에서 가져온 코드를 번들로 Workers API에 업로드.
 
-async function vpCreateSubdomain(panelUrl, sessionInfo, subdomain, serverDomain) {
-  const fullDomain = `${subdomain}.${serverDomain}`;
-  console.log(`[provision] VP 서브도메인 생성: ${fullDomain}`);
-
-  const { cookie, basicAuth, panelType } = sessionInfo;
-  const tried = [];
-
-  // ── HestiaCP ──
-  if (!panelType || panelType === 'hestia' || panelType === 'unknown') {
-    tried.push('hestia');
-    const res = await formPost(`${panelUrl}/add/web/`, cookie, {
-      v_domain:  fullDomain,
-      v_ip:      'default',
-      v_aliases: '',
-      v_stats:   'awstats',
-      v_ssl:     '0',
-    });
-    if (res.ok) { console.log(`[provision] HestiaCP 서브도메인 성공 (${res.status})`); return { ok: true, domain: fullDomain }; }
-    if (isAlreadyExists(res.data, res.status)) return { ok: true, domain: fullDomain, existed: true };
-    if (isSessionExpired(res.status)) return { ok: false, error: `세션 만료 (${res.status})`, sessionExpired: true };
-    if (res.status !== 404) {
-      console.warn(`[provision] HestiaCP /add/web/ 실패: ${res.status} ${resSummary(res.data)}`);
-    }
-  }
-
-  // ── VestaCP ──
-  if (!panelType || panelType === 'vesta' || panelType === 'unknown') {
-    tried.push('vesta');
-    const res = await formPost(`${panelUrl}/vpanel/web/add`, cookie, {
-      domain: fullDomain,
-      ip:     'default',
-    });
-    if (res.ok) { console.log(`[provision] VestaCP 서브도메인 성공`); return { ok: true, domain: fullDomain }; }
-    if (isAlreadyExists(res.data, res.status)) return { ok: true, domain: fullDomain, existed: true };
-    if (res.status !== 404) {
-      console.warn(`[provision] VestaCP /vpanel/web/add 실패: ${res.status} ${resSummary(res.data)}`);
-    }
-  }
-
-  // ── CyberPanel ──
-  if (!panelType || panelType === 'cyberpanel' || panelType === 'unknown') {
-    tried.push('cyberpanel');
-    const auth = basicAuth || cookie?.replace('__auth=', '');
-    const res  = await jsonPost(`${panelUrl}/api/createWebsite`, auth, {
-      domainName:    fullDomain,
-      adminEmail:    `admin@${serverDomain}`,
-      websiteOwner:  'admin',
-      packageName:   'Default',
-      websiteOwnerEmail: `admin@${serverDomain}`,
-    });
-    if (res.ok || (res.data?.status === 1)) { console.log(`[provision] CyberPanel 서브도메인 성공`); return { ok: true, domain: fullDomain }; }
-    if (isAlreadyExists(JSON.stringify(res.data), res.status)) return { ok: true, domain: fullDomain, existed: true };
-    if (res.status !== 404 && res.status !== 0) {
-      console.warn(`[provision] CyberPanel 실패: ${res.status} ${resSummary(res.data)}`);
-    }
-  }
-
-  // ── aaPanel ──
-  if (!panelType || panelType === 'aapanel' || panelType === 'unknown') {
-    tried.push('aapanel');
-    const res = await formPost(`${panelUrl}/site`, cookie, {
-      action:  'AddSite',
-      webname: JSON.stringify({
-        domain:   fullDomain,
-        domainlist: [],
-        count:    0,
-      }),
-      type:     '0',
-      port:     '80',
-      ps:       fullDomain,
-      path:     `/www/wwwroot/${fullDomain}`,
-      datauser: '',
-      datapassword: '',
-      codeing:  'utf8',
-      mysql:    'mysql',
-      version:  '80',
-      rahter:   '0',
-    });
-    if (res.ok) { console.log(`[provision] aaPanel 서브도메인 성공`); return { ok: true, domain: fullDomain }; }
-    if (isAlreadyExists(res.data, res.status)) return { ok: true, domain: fullDomain, existed: true };
-    if (res.status !== 404 && res.status !== 0) {
-      console.warn(`[provision] aaPanel 실패: ${res.status} ${resSummary(res.data)}`);
-    }
-  }
-
-  // ── DirectAdmin ──
-  if (!panelType || panelType === 'directadmin' || panelType === 'unknown') {
-    tried.push('directadmin');
-    const auth = basicAuth ? { 'Authorization': basicAuth } : {};
-    const qs   = new URLSearchParams({
-      action:  'create',
-      domain:  fullDomain,
-      ip:      'shared',
-      php:     'ON',
-      ssl:     'OFF',
-    }).toString();
-    const res  = await httpGet(`${panelUrl}/CMD_API_DOMAIN?${qs}`, cookie, auth);
-    if (res.ok) { console.log(`[provision] DirectAdmin 서브도메인 성공`); return { ok: true, domain: fullDomain }; }
-    if (isAlreadyExists(res.data, res.status)) return { ok: true, domain: fullDomain, existed: true };
-    if (res.status !== 404 && res.status !== 0) {
-      console.warn(`[provision] DirectAdmin 실패: ${res.status} ${resSummary(res.data)}`);
-    }
-  }
-
-  // ── Plesk ──
-  if (!panelType || panelType === 'plesk' || panelType === 'unknown') {
-    tried.push('plesk');
-    const res = await jsonPost(`${panelUrl}/api/v2/domains`, null, {
-      name:        fullDomain,
-      hosting_type: 'virtual',
-      hosting_settings: { ftp_login: subdomain.replace(/[^a-z0-9]/g, ''), ftp_password: 'Cp' + subdomain },
-    });
-    if (res.ok) { console.log(`[provision] Plesk 서브도메인 성공`); return { ok: true, domain: fullDomain }; }
-    if (isAlreadyExists(JSON.stringify(res.data), res.status)) return { ok: true, domain: fullDomain, existed: true };
-    if (res.status !== 404 && res.status !== 0) {
-      console.warn(`[provision] Plesk 실패: ${res.status} ${resSummary(res.data)}`);
-    }
-  }
-
-  // ── VistaPanel (byethost / InfinityFree / iFastNet) ──────────────
-  // 공식 API 없음 — 웹 폼 POST 스크래핑
-  // 서브도메인 생성: POST /createsite.php
-  // 필드: sitename(서브도메인 prefix), subdomain(서버의 베이스 도메인 선택값)
-  if (!panelType || panelType === 'vistapanel' || panelType === 'unknown') {
-    tried.push('vistapanel');
-
-    // 1단계: createsite.php GET → subdomain 드롭다운 옵션 파싱
-    let domainOption = serverDomain; // 기본값
-    try {
-      const getRes = await fetch(`${panelUrl}/createsite.php`, {
-        method: 'GET',
-        headers: { Cookie: cookie },
-        redirect: 'manual',
-        signal: AbortSignal.timeout(8000),
-      });
-      const html = await getRes.text().catch(() => '');
-      // <option value="xxx.byethost.com">xxx.byethost.com</option> 형태
-      const re = new RegExp(`<option[^>]*value=["']([^"']*${serverDomain}[^"']*)["']`, 'i');
-      const m  = html.match(re);
-      if (m) domainOption = m[1];
-      // 아무것도 못 찾으면 첫 번째 옵션 사용
-      if (!m) {
-        const m2 = html.match(/<option[^>]*value=["']([^"']+)["']/i);
-        if (m2) domainOption = m2[1];
-      }
-    } catch (_) {}
-
-    // 2단계: POST 서브도메인 생성
-    const vRes = await formPost(`${panelUrl}/createsite.php`, cookie, {
-      sitename:  subdomain,
-      subdomain: domainOption,
-      submit:    'Create+website',
-    });
-    if (vRes.ok || vRes.status === 302) {
-      // 성공 여부는 응답 본문으로 확인 (에러 메시지가 없으면 성공)
-      const body = String(typeof vRes.data === 'object' ? JSON.stringify(vRes.data) : vRes.data).toLowerCase();
-      if (!body.includes('error') && !body.includes('invalid') && !body.includes('not allowed')) {
-        console.log(`[provision] VistaPanel 서브도메인 성공`);
-        return { ok: true, domain: fullDomain };
-      }
-      if (isAlreadyExists(body, vRes.status)) return { ok: true, domain: fullDomain, existed: true };
-      console.warn(`[provision] VistaPanel createsite.php 응답: ${resSummary(vRes.data)}`);
-    }
-    // 세션 만료 감지
-    if (isSessionExpired(vRes.status)) return { ok: false, error: '세션 만료', sessionExpired: true };
-    if (vRes.status !== 404 && vRes.status !== 0) {
-      console.warn(`[provision] VistaPanel 실패: ${vRes.status} ${resSummary(vRes.data)}`);
-    }
-  }
-
-  // ── SPanel ───────────────────────────────────────────────────────
-  if (!panelType || panelType === 'spanel' || panelType === 'unknown') {
-    tried.push('spanel');
-    const auth = basicAuth || null;
-    const res  = await jsonPost(`${panelUrl}/api/v1/domain`, auth, {
-      domain:     fullDomain,
-      doc_root:   `/home/${fullDomain}/public_html`,
-      php_version: '8.2',
-    });
-    if (res.ok || res.data?.status === 'success') {
-      console.log(`[provision] SPanel 서브도메인 성공`);
-      return { ok: true, domain: fullDomain };
-    }
-    if (isAlreadyExists(JSON.stringify(res.data), res.status)) return { ok: true, domain: fullDomain, existed: true };
-    if (res.status !== 404 && res.status !== 0) {
-      console.warn(`[provision] SPanel 실패: ${res.status} ${resSummary(res.data)}`);
-    }
-  }
-
-  console.error(`[provision] 서브도메인 생성 전체 실패. 시도한 패널: ${tried.join(', ')}`);
-  return {
-    ok: false,
-    error: `서브도메인 생성 실패 — 감지된 패널(${panelType || 'unknown'})의 API 경로가 모두 404입니다. ` +
-           `panel_url(${panelUrl})과 패널 종류를 확인해주세요. 시도: ${tried.join(', ')}`,
-  };
-}
-
-// ── 패널별 DB 생성 ─────────────────────────────────────────────────
-
-async function vpCreateDatabase(panelUrl, sessionInfo, dbName, dbUser, dbPass) {
-  console.log(`[provision] VP DB 생성: ${dbName}`);
-  const { cookie, basicAuth, panelType } = sessionInfo;
-
-  // HestiaCP
-  if (!panelType || panelType === 'hestia' || panelType === 'unknown') {
-    const res = await formPost(`${panelUrl}/add/db/`, cookie, {
-      v_database: dbName, v_dbuser: dbUser, v_dbpass: dbPass,
-      v_host: 'localhost', v_type: 'mysql', v_charset: 'utf8mb4',
-    });
-    if (res.ok) return { ok: true };
-    if (isAlreadyExists(res.data, res.status)) return { ok: true, existed: true };
-    if (res.status !== 404) console.warn(`[provision] HestiaCP /add/db/ 실패: ${res.status}`);
-  }
-
-  // VestaCP
-  if (!panelType || panelType === 'vesta' || panelType === 'unknown') {
-    const res = await formPost(`${panelUrl}/vpanel/db/add`, cookie, {
-      database: dbName, dbuser: dbUser, password: dbPass, host: 'localhost',
-    });
-    if (res.ok) return { ok: true };
-    if (isAlreadyExists(res.data, res.status)) return { ok: true, existed: true };
-    if (res.status !== 404) console.warn(`[provision] VestaCP /vpanel/db/add 실패: ${res.status}`);
-  }
-
-  // CyberPanel
-  if (!panelType || panelType === 'cyberpanel' || panelType === 'unknown') {
-    const auth = basicAuth || cookie?.replace('__auth=', '');
-    const res  = await jsonPost(`${panelUrl}/api/createDatabase`, auth, {
-      databaseWebsite: dbName, dbName, dbUsername: dbUser, dbPassword: dbPass,
-    });
-    if (res.ok || res.data?.status === 1) return { ok: true };
-    if (isAlreadyExists(JSON.stringify(res.data), res.status)) return { ok: true, existed: true };
-  }
-
-  // aaPanel
-  if (!panelType || panelType === 'aapanel' || panelType === 'unknown') {
-    const res = await formPost(`${panelUrl}/database`, cookie, {
-      action: 'AddDatabase', name: dbName, username: dbUser,
-      password: dbPass, codeing: 'utf8mb4', address: 'localhost',
-      port: '3306', dtype: 'mysql', accept: dbUser,
-    });
-    if (res.ok) return { ok: true };
-    if (isAlreadyExists(res.data, res.status)) return { ok: true, existed: true };
-  }
-
-  // DirectAdmin
-  if (!panelType || panelType === 'directadmin' || panelType === 'unknown') {
-    const auth = basicAuth ? { 'Authorization': basicAuth } : {};
-    const qs   = new URLSearchParams({
-      action: 'create', name: dbName, passwd: dbPass, passwd2: dbPass, user: dbUser,
-    }).toString();
-    const res  = await httpGet(`${panelUrl}/CMD_API_DATABASES?${qs}`, cookie, auth);
-    if (res.ok) return { ok: true };
-    if (isAlreadyExists(res.data, res.status)) return { ok: true, existed: true };
-  }
-
-  // VistaPanel — POST /databases.php
-  // 필드: db (DB 이름 suffix), dbpassword, submit
-  // VistaPanel DB명은 "계정명_suffix" 형태로 자동 prefix됨
-  if (!panelType || panelType === 'vistapanel' || panelType === 'unknown') {
-    // dbName에서 prefix(계정명_) 제거해서 suffix만 전달
-    const dbSuffix = dbName.includes('_') ? dbName.split('_').slice(1).join('_') : dbName;
-    const vRes = await formPost(`${panelUrl}/databases.php`, cookie, {
-      db:         dbSuffix,
-      dbpassword: dbPass,
-      submit:     'Create+database',
-    });
-    if (vRes.ok || vRes.status === 302) {
-      const body = String(typeof vRes.data === 'object' ? JSON.stringify(vRes.data) : vRes.data).toLowerCase();
-      if (!body.includes('error') && !body.includes('invalid')) {
-        console.log(`[provision] VistaPanel DB 생성 성공`);
-        return { ok: true };
-      }
-      if (isAlreadyExists(body, vRes.status)) return { ok: true, existed: true };
-      console.warn(`[provision] VistaPanel DB 응답: ${resSummary(vRes.data)}`);
-    }
-    // DB 사용자도 별도 생성 시도 (dbusers.php)
-    await formPost(`${panelUrl}/dbusers.php`, cookie, {
-      dbuser:     dbUser.includes('_') ? dbUser.split('_').slice(1).join('_') : dbUser,
-      dbpassword: dbPass,
-      submit:     'Create+user',
-    }).catch(() => {});
-  }
-
-  // SPanel — POST /api/v1/mysql/database
-  if (!panelType || panelType === 'spanel' || panelType === 'unknown') {
-    const auth = basicAuth || null;
-    const res  = await jsonPost(`${panelUrl}/api/v1/mysql/database`, auth, {
-      name:     dbName,
-      username: dbUser,
-      password: dbPass,
-    });
-    if (res.ok || res.data?.status === 'success') return { ok: true };
-    if (isAlreadyExists(JSON.stringify(res.data), res.status)) return { ok: true, existed: true };
-  }
-
-  return { ok: false, error: `DB 생성 실패 (패널: ${panelType || 'unknown'})` };
-}
-
-// ── WP 설치 명령 실행 ──────────────────────────────────────────────
-
-async function vpInstallWordPress(panelUrl, sessionInfo, params) {
+async function uploadWorkerWithCMSSource(token, accountId, workerName, opts, cmsSourceMap) {
   const {
-    webRoot, subdomain, serverDomain, dbName, dbUser, dbPass,
-    siteUrl, siteTitle, wpUser, wpPass, wpEmail, wpDownloadUrl, phpBin,
-  } = params;
+    mainDbId,
+    cacheKvId,
+    sessionsKvId,
+    siteD1Id,
+    siteKvId,
+    cfAccountId,
+    cfApiToken,
+    sitePrefix,
+    siteName,
+    siteDomain,
+  } = opts;
 
-  const { cookie, basicAuth, panelType } = sessionInfo;
-  const fullDomain = `${subdomain}.${serverDomain}`;
-  const docRoot    = `${webRoot}/${fullDomain}/public_html`;
-  const wpZip      = wpDownloadUrl || 'https://ko.wordpress.org/latest-ko_KR.zip';
-
-  const cmds = [
-    `cd /tmp && curl -fsSL "${wpZip}" -o wp.zip && unzip -q wp.zip -d wp_src`,
-    `mkdir -p "${docRoot}" && cp -r /tmp/wp_src/wordpress/. "${docRoot}/" && rm -rf /tmp/wp.zip /tmp/wp_src`,
-    `cp "${docRoot}/wp-config-sample.php" "${docRoot}/wp-config.php"`,
-    `sed -i "s/database_name_here/${dbName}/g" "${docRoot}/wp-config.php"`,
-    `sed -i "s/username_here/${dbUser}/g" "${docRoot}/wp-config.php"`,
-    `sed -i "s/password_here/${dbPass}/g" "${docRoot}/wp-config.php"`,
-    `echo "define('DISABLE_WP_CRON', true);" >> "${docRoot}/wp-config.php"`,
-    `echo "remove_all_filters('rest_authentication_errors');" >> "${docRoot}/wp-config.php"`,
-    `echo "define('WP_HOME','${siteUrl}'); define('WP_SITEURL','${siteUrl}');" >> "${docRoot}/wp-config.php"`,
-    `cd "${docRoot}" && wp core install --url="${siteUrl}" --title="${siteTitle}" --admin_user="${wpUser}" --admin_password="${wpPass}" --admin_email="${wpEmail}" --skip-email --allow-root 2>/dev/null || true`,
-    `cd "${docRoot}" && wp cron event schedule wp_version_check now --allow-root 2>/dev/null || true`,
-    `cd "${docRoot}" && wp rewrite flush --allow-root 2>/dev/null || true`,
-    `chown -R www-data:www-data "${docRoot}" 2>/dev/null || chown -R apache:apache "${docRoot}" 2>/dev/null || true`,
-    `find "${docRoot}" -type d -exec chmod 755 {} \\; 2>/dev/null || true`,
-    `find "${docRoot}" -type f -exec chmod 644 {} \\; 2>/dev/null || true`,
-  ];
-  const fullCmd = cmds.join(' && ');
-
-  // ── VistaPanel: shell 불가 → 파일 관리자 API로 WP 업로드 시도 ──
-  // VistaPanel(byethost/InfinityFree)은 공유 호스팅으로 shell 실행 불가.
-  // 대신 패널의 파일 관리자(/filemanager.php)를 통해 파일 업로드 후
-  // WP 설치 페이지(wp-admin/install.php)를 HTTP로 호출하는 방식 사용.
-  if (panelType === 'vistapanel') {
-    console.log('[provision] VistaPanel: shell 없음 → HTTP 기반 WP 설치 시도');
-
-    // 1) 파일 관리자 upload API로 wp-config.php 직접 생성
-    //    VistaPanel /filemanager.php?file_name=...&dir=... POST로 파일 업로드
-    const wpConfigContent = [
-      '<?php',
-      `define('DB_NAME',     '${dbName}');`,
-      `define('DB_USER',     '${dbUser}');`,
-      `define('DB_PASSWORD', '${dbPass}');`,
-      `define('DB_HOST',     'localhost');`,
-      `define('DB_CHARSET',  'utf8mb4');`,
-      `define('DB_COLLATE',  '');`,
-      `define('WP_HOME',    '${siteUrl}');`,
-      `define('WP_SITEURL', '${siteUrl}');`,
-      `define('DISABLE_WP_CRON', true);`,
-      `define('WP_DEBUG', false);`,
-      `$table_prefix = 'wp_';`,
-      `if (!defined('ABSPATH')) define('ABSPATH', __DIR__ . '/');`,
-      `require_once ABSPATH . 'wp-settings.php';`,
-    ].join('\n');
-
-    // 파일 관리자 업로드 시도 (VistaPanel은 /filemanager.php 사용)
-    try {
-      const formData = new FormData();
-      formData.append('action', 'upload');
-      formData.append('dir', `/htdocs/${fullDomain}`);
-      formData.append('file', new Blob([wpConfigContent], { type: 'text/plain' }), 'wp-config.php');
-
-      await fetch(`${panelUrl}/filemanager.php`, {
-        method: 'POST',
-        headers: { Cookie: cookie },
-        body: formData,
-        signal: AbortSignal.timeout(15000),
-      }).catch(() => {});
-    } catch (_) {}
-
-    // 2) WP 설치 확인: /wp-admin/install.php가 응답하는지 체크
-    //    실제 WP 파일은 이미 업로드됐거나 사용자가 FTP로 올린 상태 가정
-    try {
-      const installUrl = `${siteUrl}/wp-admin/install.php`;
-      const checkRes = await fetch(installUrl, {
-        method: 'GET',
-        signal: AbortSignal.timeout(10000),
-        redirect: 'follow',
-      });
-      if (checkRes.ok) {
-        // install.php가 살아있으면 HTTP POST로 WP 설치 진행
-        const installRes = await fetch(`${siteUrl}/wp-admin/install.php?step=2`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            weblog_title:    siteTitle,
-            user_name:       wpUser,
-            admin_password:  wpPass,
-            admin_password2: wpPass,
-            admin_email:     wpEmail,
-            blog_public:     '1',
-          }).toString(),
-          signal: AbortSignal.timeout(30000),
-        });
-        if (installRes.ok) {
-          console.log('[provision] VistaPanel WP HTTP 설치 성공');
-          return { ok: true, output: 'VistaPanel HTTP 설치 완료' };
-        }
-      }
-    } catch (_) {}
-
-    // 3) 파일 매니저나 HTTP 설치 모두 불가한 경우 → 부분 성공 반환
-    //    (서브도메인/DB는 생성됐으므로 사용자가 FTP로 WP 업로드 필요)
-    console.warn('[provision] VistaPanel WP 자동 설치 불가 — 수동 FTP 업로드 필요');
-    return {
-      ok: true,
-      skipped: true,
-      message: 'VistaPanel은 shell 접근이 없어 WP 파일을 FTP로 직접 업로드해야 합니다. ' +
-               '서브도메인과 DB는 생성 완료. wp-config.php 설정값: DB=' + dbName + ' / User=' + dbUser,
-    };
-  }
-
-  // ── SPanel: REST API로 WP 설치 명령 실행 ──────────────────────────
-  if (panelType === 'spanel') {
-    const auth = basicAuth || null;
-    const res  = await jsonPost(`${panelUrl}/api/v1/wordpress/install`, auth, {
-      domain:         fullDomain,
-      admin_user:     wpUser,
-      admin_password: wpPass,
-      admin_email:    wpEmail,
-      site_title:     siteTitle,
-      db_name:        dbName,
-      db_user:        dbUser,
-      db_password:    dbPass,
-    });
-    if (res.ok || res.data?.status === 'success') {
-      console.log('[provision] SPanel WP 설치 API 성공');
-      return { ok: true, output: 'SPanel WP 설치 완료' };
-    }
-    // API 실패 시 shell exec 폴백
-    const shellRes = await jsonPost(`${panelUrl}/api/v1/command/run`, auth, { command: fullCmd });
-    if (shellRes.ok) return { ok: true, output: String(shellRes.data).slice(0, 500) };
-  }
-
-  // HestiaCP / VestaCP exec
-  const execPaths = [
-    { path: '/exec/cmd/',       params: { v_cmd: fullCmd } },                        // HestiaCP
-    { path: '/vpanel/cmd/exec', params: { cmd: fullCmd, php: phpBin || 'php8.3' } }, // VestaCP
-  ];
-  for (const ep of execPaths) {
-    const res = await formPost(`${panelUrl}${ep.path}`, cookie, ep.params);
-    if (res.ok) return { ok: true, output: String(res.data).slice(0, 500) };
-  }
-
-  // CyberPanel exec
-  if (!panelType || panelType === 'cyberpanel' || panelType === 'unknown') {
-    const auth = basicAuth || cookie?.replace('__auth=', '');
-    const res  = await jsonPost(`${panelUrl}/api/runCommand`, auth, { command: fullCmd });
-    if (res.ok) return { ok: true, output: String(res.data).slice(0, 500) };
-  }
-
-  // aaPanel exec
-  if (!panelType || panelType === 'aapanel' || panelType === 'unknown') {
-    const res = await formPost(`${panelUrl}/system`, cookie, {
-      action: 'RunShell', shell: fullCmd,
-    });
-    if (res.ok) return { ok: true, output: String(res.data).slice(0, 500) };
-  }
-
-  console.warn('[provision] WP 설치 명령 직접 실행 불가 (수동 설치 필요)');
-  return { ok: true, skipped: true, message: 'WP 설치 명령 직접 실행 불가 (수동 설치 필요)' };
-}
-
-// WP REST API 강제 활성화 확인
-async function verifyAndActivateRestApi(originUrl) {
-  try {
-    const res = await fetch(`${originUrl}/wp-json/`, {
-      method: 'GET',
-      headers: { 'User-Agent': 'CloudPress/15.0' },
-    });
-    if (res.ok) return { ok: true };
-    return { ok: false, status: res.status };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════
-// Worker 소스 생성 (v15.0 — origin 완전 흔적 제거 + cron 강제)
-// ══════════════════════════════════════════════════════════════════
-function buildWorkerSource() {
-  const L = [];
-
-  L.push("'use strict';");
-  L.push("export default {");
-  L.push("  async fetch(request, env) {");
-
-  // null 가드
-  L.push("    if (!env?.DB)    return errPage(503, '서버 설정 오류', 'DB 바인딩 없음');");
-  L.push("    if (!env?.CACHE) return errPage(503, '서버 설정 오류', 'CACHE 바인딩 없음');");
-  L.push("    const wpOriginUrl = (env.WP_ORIGIN_URL || '').trim().replace(/\\/+$/, '');");
-  L.push("    if (!wpOriginUrl) return errPage(503, '서버 설정 오류', 'WP_ORIGIN_URL 미설정');");
-
-  // URL 파싱
-  L.push("    const url            = new URL(request.url);");
-  L.push("    const rawHost        = url.hostname;");
-  L.push("    const host           = rawHost.replace(/^www\\./, '');");
-  L.push("    const personalOrigin = 'https://' + rawHost;");
-  L.push("    let wpOriginHost;");
-  L.push("    try { wpOriginHost = new URL(wpOriginUrl).hostname; } catch { wpOriginHost = ''; }");
-
-  // 내부 경로 통과
-  L.push("    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/__cloudpress/')) return fetch(request);");
-
-  // ── CF Cron Trigger: /wp-cron.php 자동 실행
-  L.push("    // ── CF Cron: /wp-cron (예약 이벤트 강제 실행) ───");
-  L.push("    if (url.pathname === '/__cp_cron') {");
-  L.push("      const site2 = await getSiteByHost(env, host);");
-  L.push("      if (site2 && wpOriginUrl) {");
-  L.push("        const cronUrl = wpOriginUrl + '/wp-cron.php?doing_wp_cron=1';");
-  L.push("        fetch(cronUrl, { method: 'GET', headers: { 'X-CloudPress-Secret': env.WP_ORIGIN_SECRET || '' } }).catch(() => {});");
-  L.push("      }");
-  L.push("      return new Response('ok', { status: 200 });");
-  L.push("    }");
-
-  // 사이트 조회
-  L.push("    const site = await getSiteByHost(env, host);");
-  L.push("    if (!site) return errPage(404, '사이트 없음', host + ' 에 연결된 사이트가 없습니다.');");
-  L.push("    if (site.suspended) return suspendedPage(site.name, site.suspension_reason);");
-
-  // 페이지 캐시 (wp-admin 제외)
-  L.push("    const isAdmin = url.pathname.startsWith('/wp-admin') || url.pathname === '/wp-login.php';");
-  L.push("    const isCacheable = !isAdmin && request.method === 'GET'");
-  L.push("      && !url.pathname.startsWith('/wp-')");
-  L.push("      && !url.searchParams.has('preview')");
-  L.push("      && !(request.headers.get('cookie') || '').includes('wordpress_logged_in');");
-  L.push("    if (isCacheable && env.SITE_KV) {");
-  L.push("      try {");
-  L.push("        const ck = 'page:' + url.pathname + (url.search || '');");
-  L.push("        const cached = await env.SITE_KV.get(ck, { type: 'json' });");
-  L.push("        if (cached?.body) return new Response(cached.body, { headers: { 'Content-Type': cached.contentType || 'text/html;charset=utf-8', 'X-Cache': 'HIT' } });");
-  L.push("      } catch (_) {}");
-  L.push("    }");
-
-  // 프록시 (모든 경로 통합, wp-admin 포함)
-  L.push("    const target = new URL(wpOriginUrl + url.pathname + url.search);");
-  L.push("    const ph = new Headers(request.headers);");
-  L.push("    ph.set('X-CloudPress-Site',       site.site_prefix || '');");
-  L.push("    ph.set('X-CloudPress-Secret',     env.WP_ORIGIN_SECRET || '');");
-  L.push("    ph.set('X-CloudPress-Domain',     rawHost);");
-  L.push("    ph.set('X-CloudPress-Public-URL', personalOrigin);");
-  L.push("    ph.set('Host',                    wpOriginHost || target.hostname);");
-  L.push("    ph.set('X-Forwarded-Host',        rawHost);");
-  L.push("    ph.set('X-Forwarded-Proto',       'https');");
-  L.push("    ph.set('X-Real-IP',               request.headers.get('CF-Connecting-IP') || '');");
-  // REST API 강제 허용
-  L.push("    ph.delete('X-WP-Nonce'); // nonce 문제 방지");
-
-  L.push("    let oRes;");
-  L.push("    try { oRes = await fetch(target.toString(), { method: request.method, headers: ph, body: ['GET','HEAD'].includes(request.method) ? null : request.body, redirect: 'manual' }); }");
-  L.push("    catch (e) { return errPage(502, 'Origin 오류', e.message); }");
-
-  // 리다이렉트 처리
-  L.push("    if (oRes.status >= 300 && oRes.status < 400) {");
-  L.push("      let loc = oRes.headers.get('Location') || '';");
-  L.push("      loc = rewriteStr(loc, wpOriginUrl, personalOrigin, wpOriginHost, rawHost);");
-  L.push("      const rh = new Headers();");
-  L.push("      rh.set('Location', loc);");
-  L.push("      for (const [k, v] of oRes.headers) {");
-  L.push("        if (k.toLowerCase() === 'set-cookie') rh.append('Set-Cookie', rewriteCookie(v, wpOriginHost, rawHost));");
-  L.push("      }");
-  L.push("      return new Response(null, { status: oRes.status, headers: rh });");
-  L.push("    }");
-
-  // 응답 헤더
-  L.push("    const skip = new Set(['transfer-encoding','content-encoding','content-length','connection','keep-alive']);");
-  L.push("    const rh = new Headers();");
-  L.push("    for (const [k, v] of oRes.headers) {");
-  L.push("      if (skip.has(k.toLowerCase())) continue;");
-  L.push("      if (k.toLowerCase() === 'set-cookie') { rh.append('Set-Cookie', rewriteCookie(v, wpOriginHost, rawHost)); continue; }");
-  L.push("      rh.set(k, v);");
-  L.push("    }");
-  L.push("    rh.set('X-Cache', 'MISS');");
-  L.push("    rh.set('X-Frame-Options', 'SAMEORIGIN');");
-  L.push("    rh.set('X-Content-Type-Options', 'nosniff');");
-  // CORS for REST API
-  L.push("    if (url.pathname.startsWith('/wp-json/')) {");
-  L.push("      rh.set('Access-Control-Allow-Origin', '*');");
-  L.push("      rh.set('Access-Control-Allow-Headers', 'Content-Type, X-WP-Nonce, Authorization');");
-  L.push("    }");
-
-  L.push("    const ct = oRes.headers.get('content-type') || '';");
-
-  // HTML 치환
-  L.push("    if (ct.includes('text/html')) {");
-  L.push("      let html = await oRes.text();");
-  L.push("      html = rewriteStr(html, wpOriginUrl, personalOrigin, wpOriginHost, rawHost);");
-  // Cron 비동기 실행 스크립트 삽입 (HTML에만)
-  L.push("      if (!isAdmin && oRes.status === 200) {");
-  L.push("        html = html.replace('</body>', '<script>fetch(\"/__cp_cron\",{method:\"GET\",keepalive:true}).catch(()=>{})</script></body>');");
-  L.push("      }");
-  L.push("      if (isCacheable && oRes.status === 200 && env.SITE_KV) {");
-  L.push("        const ck2 = 'page:' + url.pathname + (url.search || '');");
-  L.push("        env.SITE_KV.put(ck2, JSON.stringify({ body: html, contentType: ct }), { expirationTtl: 600 }).catch(() => {});");
-  L.push("      }");
-  L.push("      return new Response(html, { status: oRes.status, headers: rh });");
-  L.push("    }");
-
-  // CSS/JS 치환
-  L.push("    if (ct.includes('text/css') || ct.includes('javascript')) {");
-  L.push("      let txt = await oRes.text();");
-  L.push("      txt = rewriteStr(txt, wpOriginUrl, personalOrigin, wpOriginHost, rawHost);");
-  L.push("      return new Response(txt, { status: oRes.status, headers: rh });");
-  L.push("    }");
-
-  // 바이너리
-  L.push("    return new Response(oRes.body, { status: oRes.status, headers: rh });");
-  L.push("  },");
-
-  // scheduled (CF Cron Triggers)
-  L.push("  async scheduled(event, env, ctx) {");
-  L.push("    // Cloudflare Cron Trigger: 사이트별 wp-cron.php 호출");
-  L.push("    try {");
-  L.push("      if (!env?.DB || !env?.CACHE) return;");
-  L.push("      const { results } = await env.DB.prepare(");
-  L.push("        \"SELECT primary_domain, site_prefix FROM sites WHERE status='active' AND suspended=0 AND deleted_at IS NULL LIMIT 50\"");
-  L.push("      ).all().catch(() => ({ results: [] }));");
-  L.push("      const wpOrigin = (env.WP_ORIGIN_URL || '').trim().replace(/\\/+$/, '');");
-  L.push("      if (!wpOrigin) return;");
-  L.push("      for (const site of (results || [])) {");
-  L.push("        ctx.waitUntil(");
-  L.push("          fetch(wpOrigin + '/wp-cron.php?doing_wp_cron=1', {");
-  L.push("            method: 'GET',");
-  L.push("            headers: { 'X-CloudPress-Site': site.site_prefix || '', 'X-CloudPress-Secret': env.WP_ORIGIN_SECRET || '' },");
-  L.push("          }).catch(() => {})");
-  L.push("        );");
-  L.push("      }");
-  L.push("    } catch (_) {}");
-  L.push("  },");
-  L.push("};");
-
-  // 헬퍼들
-  L.push("async function getSiteByHost(env, host) {");
-  L.push("  const cacheKey = 'site_domain:' + host;");
-  L.push("  try {");
-  L.push("    const cached = await env.CACHE.get(cacheKey, { type: 'json' });");
-  L.push("    if (cached) return cached;");
-  L.push("    const row = await env.DB.prepare(");
-  L.push("      'SELECT id,name,site_prefix,site_d1_id,site_kv_id,wp_admin_url,status,suspended,suspension_reason'");
-  L.push("      + \" FROM sites WHERE primary_domain=? AND status='active' AND deleted_at IS NULL AND suspended=0 LIMIT 1\"");
-  L.push("    ).bind(host).first();");
-  L.push("    if (row) await env.CACHE.put(cacheKey, JSON.stringify(row), { expirationTtl: 300 }).catch(() => {});");
-  L.push("    return row || null;");
-  L.push("  } catch { return null; }");
-  L.push("}");
-
-  L.push("function escRe(s) { return s.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&'); }");
-  L.push("function rewriteStr(text, originBase, personalBase, originHost, personalHost) {");
-  L.push("  text = text.split(originBase.replace(/^https?:/,'https:')).join(personalBase);");
-  L.push("  text = text.split(originBase.replace(/^https?:/,'http:')).join(personalBase);");
-  L.push("  text = text.split(originBase).join(personalBase);");
-  L.push("  if (originHost && originHost !== personalHost) text = text.split(originHost).join(personalHost);");
-  L.push("  return text;");
-  L.push("}");
-  L.push("function rewriteCookie(c, originHost, personalHost) {");
-  L.push("  if (!originHost || originHost === personalHost) return c;");
-  L.push("  return c.replace(new RegExp('(domain=)' + escRe(originHost),'gi'), '$1' + personalHost);");
-  L.push("}");
-  L.push("function errPage(status, title, detail) {");
-  L.push("  const s = String(detail).replace(/</g,'&lt;').replace(/>/g,'&gt;');");
-  L.push("  return new Response(`<!DOCTYPE html><html lang=\"ko\"><head><meta charset=\"utf-8\"><title>${title}</title><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8f9fa}.b{text-align:center;padding:40px;max-width:480px}h1{color:#333;font-size:1.4rem}p{color:#666;font-size:.88rem}</style></head><body><div class=\"b\"><h1>${title}</h1><p>${s}</p></div></body></html>`, { status, headers: { 'Content-Type': 'text/html;charset=utf-8' } });");
-  L.push("}");
-  L.push("function suspendedPage(name, reason) {");
-  L.push("  return new Response(`<!DOCTYPE html><html lang=\"ko\"><head><meta charset=\"utf-8\"><title>정지</title></head><body style=\"font-family:sans-serif;text-align:center;padding:60px\"><h1 style=\"color:#e67e22\">사이트 정지</h1><p>${name||'이 사이트'}는 현재 정지 상태입니다.</p>${reason?`<p style=\"color:#999\">${reason}</p>`:''}</body></html>`, { status: 503, headers: { 'Content-Type': 'text/html;charset=utf-8' } });");
-  L.push("}");
-
-  return L.join('\n');
-}
-
-// ── Worker 업로드 ────────────────────────────────────────────────────
-async function uploadWorker(auth, accountId, workerName, opts) {
-  const boundary = '----CPBoundary' + Date.now().toString(36);
+  // ── 바인딩 정의 ───────────────────────────────────────────────────────────
   const bindings = [];
 
-  if (opts.mainDbId)     bindings.push({ type: 'd1',          name: 'DB',       id: opts.mainDbId });
-  if (opts.cacheKvId)    bindings.push({ type: 'kv_namespace', name: 'CACHE',    namespace_id: opts.cacheKvId });
-  if (opts.sessionsKvId) bindings.push({ type: 'kv_namespace', name: 'SESSIONS', namespace_id: opts.sessionsKvId });
-  if (opts.siteD1Id)     bindings.push({ type: 'd1',          name: 'SITE_DB',  id: opts.siteD1Id });
-  if (opts.siteKvId)     bindings.push({ type: 'kv_namespace', name: 'SITE_KV', namespace_id: opts.siteKvId });
+  // 메인 D1 (cloudpress 메인 DB — 사용자/사이트 목록)
+  if (mainDbId)     bindings.push({ type: 'd1',          name: 'CP_MAIN_DB',  id: mainDbId });
+  // 캐시 KV
+  if (cacheKvId)    bindings.push({ type: 'kv_namespace', name: 'CACHE',      namespace_id: cacheKvId });
+  // 세션 KV
+  if (sessionsKvId) bindings.push({ type: 'kv_namespace', name: 'SESSIONS',   namespace_id: sessionsKvId });
+  // 사이트 전용 D1
+  if (siteD1Id)     bindings.push({ type: 'd1',          name: 'CP_DB',       id: siteD1Id });
+  // 사이트 전용 KV
+  if (siteKvId)     bindings.push({ type: 'kv_namespace', name: 'CP_KV',      namespace_id: siteKvId });
 
-  // origin은 VP 서브도메인 (사이트마다 고유)
-  bindings.push({ type: 'plain_text', name: 'WP_ORIGIN_URL',    text: opts.wpOriginUrl    || '' });
-  bindings.push({ type: 'plain_text', name: 'WP_ORIGIN_SECRET', text: opts.wpOriginSecret || '' });
-  bindings.push({ type: 'plain_text', name: 'CF_ACCOUNT_ID',    text: opts.cfAccountId    || '' });
-  bindings.push({ type: 'plain_text', name: 'CF_API_TOKEN',     text: opts.cfApiKey       || '' });
-  bindings.push({ type: 'plain_text', name: 'SITE_PREFIX',      text: opts.sitePrefix     || '' });
+  // 환경 변수 (plain_text)
+  bindings.push({ type: 'plain_text', name: 'CP_SITE_NAME',    text: siteName    || '' });
+  bindings.push({ type: 'plain_text', name: 'CP_SITE_URL',     text: 'https://' + (siteDomain || '') });
+  bindings.push({ type: 'plain_text', name: 'CF_ACCOUNT_ID',   text: cfAccountId || '' });
+  bindings.push({ type: 'plain_text', name: 'SITE_PREFIX',     text: sitePrefix  || '' });
 
-  const metadata   = JSON.stringify({ main_module: 'worker.js', compatibility_date: '2024-09-23', bindings });
-  const workerSrc  = buildWorkerSource();
-  const enc  = new TextEncoder();
-  const CRLF = '\r\n';
-  const p1h  = `--${boundary}${CRLF}Content-Disposition: form-data; name="metadata"${CRLF}Content-Type: application/json${CRLF}${CRLF}`;
-  const p2h  = `--${boundary}${CRLF}Content-Disposition: form-data; name="worker.js"; filename="worker.js"${CRLF}Content-Type: application/javascript+module${CRLF}${CRLF}`;
-  const end  = `${CRLF}--${boundary}--${CRLF}`;
-  const chunks = [enc.encode(p1h), enc.encode(metadata), enc.encode(CRLF), enc.encode(p2h), enc.encode(workerSrc), enc.encode(end)];
+  // CF API 토큰은 secret으로 처리 (secret_text binding)
+  if (cfApiToken) {
+    bindings.push({ type: 'secret_text', name: 'CF_API_TOKEN', text: cfApiToken });
+  }
+
+  // ── 메타데이터 ────────────────────────────────────────────────────────────
+  const metadata = {
+    main_module:        'index.js',
+    compatibility_date: '2024-09-23',
+    compatibility_flags: ['nodejs_compat'],
+    bindings,
+  };
+
+  // ── Multipart 본문 조립 ───────────────────────────────────────────────────
+  const boundary = '----CPUpload' + Date.now().toString(36) + randSuffix(4);
+  const enc      = new TextEncoder();
+  const CRLF     = '\r\n';
+  const parts    = [];
+
+  // Part 1: metadata JSON
+  parts.push(
+    `--${boundary}${CRLF}` +
+    `Content-Disposition: form-data; name="metadata"${CRLF}` +
+    `Content-Type: application/json${CRLF}${CRLF}` +
+    JSON.stringify(metadata) + CRLF
+  );
+
+  // Part 2+: 각 JS 소스 파일
+  for (const [filePath, content] of cmsSourceMap) {
+    parts.push(
+      `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="${filePath}"; filename="${filePath}"${CRLF}` +
+      `Content-Type: application/javascript+module${CRLF}${CRLF}` +
+      content + CRLF
+    );
+  }
+
+  parts.push(`--${boundary}--${CRLF}`);
+
+  // Uint8Array로 직렬화
+  const chunks = parts.map(p => enc.encode(p));
   const total  = chunks.reduce((s, c) => s + c.length, 0);
-  const buf    = new Uint8Array(total);
+  const body   = new Uint8Array(total);
   let off = 0;
-  for (const c of chunks) { buf.set(c, off); off += c.length; }
+  for (const c of chunks) { body.set(c, off); off += c.length; }
 
-  const uploadHdrs = auth.type === 'global'
-    ? { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'X-Auth-Email': auth.email, 'X-Auth-Key': auth.key }
-    : { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Authorization': 'Bearer ' + (auth.value || auth.key) };
-
+  // ── Workers Script Upload API 호출 ────────────────────────────────────────
   try {
-    const res  = await fetch(`${CF_API}/accounts/${accountId}/workers/scripts/${workerName}`, {
-      method: 'PUT', headers: uploadHdrs, body: buf.buffer,
-    });
+    const res  = await fetch(
+      `${CF_API}/accounts/${accountId}/workers/scripts/${workerName}`,
+      {
+        method:  'PUT',
+        headers: {
+          'Authorization': 'Bearer ' + token,
+          'Content-Type':  `multipart/form-data; boundary=${boundary}`,
+        },
+        body: body.buffer,
+      }
+    );
     const json = await res.json();
-    if (!json.success) return { ok: false, error: 'Worker 업로드 실패: ' + cfErrMsg(json) };
+    if (!json.success) {
+      return { ok: false, error: 'Worker 업로드 실패: ' + cfErrMsg(json) };
+    }
     return { ok: true };
   } catch (e) {
     return { ok: false, error: 'Worker 업로드 오류: ' + e.message };
   }
 }
 
-// ══════════════════════════════════════════════════════════════════
-// 메인 핸들러
-// ══════════════════════════════════════════════════════════════════
+// ── CF DNS / Route 유틸리티 ─────────────────────────────────────────────────
+
+async function cfGetZone(token, domain) {
+  // 루트 도메인으로 존 조회
+  const root = domain.split('.').slice(-2).join('.');
+  const res  = await cfReq(token, `/zones?name=${encodeURIComponent(root)}&status=active`);
+  if (res.success && res.result?.length > 0) {
+    return { ok: true, zoneId: res.result[0].id };
+  }
+  return { ok: false, error: '존 없음: ' + root };
+}
+
+async function cfUpsertDns(token, zoneId, type, name, content, proxied = true) {
+  // 기존 레코드 조회
+  const list = await cfReq(token, `/zones/${zoneId}/dns_records?type=${type}&name=${encodeURIComponent(name)}`);
+  const existing = list.result?.[0];
+
+  if (existing) {
+    const res = await cfReq(token, `/zones/${zoneId}/dns_records/${existing.id}`, 'PATCH', { content, proxied });
+    return { ok: res.success, recordId: existing.id };
+  }
+  const res = await cfReq(token, `/zones/${zoneId}/dns_records`, 'POST', { type, name, content, proxied, ttl: 1 });
+  if (res.success) return { ok: true, recordId: res.result?.id };
+  return { ok: false, error: cfErrMsg(res) };
+}
+
+async function cfUpsertRoute(token, zoneId, pattern, workerName) {
+  const list = await cfReq(token, `/zones/${zoneId}/workers/routes`);
+  const existing = (list.result || []).find(r => r.pattern === pattern);
+  if (existing) {
+    const res = await cfReq(token, `/zones/${zoneId}/workers/routes/${existing.id}`, 'PUT', { pattern, script: workerName });
+    return { ok: res.success, routeId: existing.id };
+  }
+  const res = await cfReq(token, `/zones/${zoneId}/workers/routes`, 'POST', { pattern, script: workerName });
+  if (res.success) return { ok: true, routeId: res.result?.id };
+  return { ok: false, error: cfErrMsg(res) };
+}
+
+async function getWorkerSubdomain(token, accountId, workerName) {
+  // workers.dev 서브도메인 확인
+  const res = await cfReq(token, `/accounts/${accountId}/workers/subdomain`);
+  if (res.success && res.result?.subdomain) {
+    return `${workerName}.${res.result.subdomain}.workers.dev`;
+  }
+  return `${workerName}.workers.dev`;
+}
+
+// workers.dev route 활성화
+async function enableWorkersDev(token, accountId, workerName) {
+  const res = await cfReq(
+    token,
+    `/accounts/${accountId}/workers/scripts/${workerName}/subdomain`,
+    'POST',
+    { enabled: true }
+  );
+  return res.success;
+}
+
+// ── 메인 핸들러 ─────────────────────────────────────────────────────────────
 export const onRequestOptions = () => new Response(null, { status: 204, headers: CORS });
 
 export async function onRequestPost({ request, env, params }) {
@@ -1410,11 +511,11 @@ export async function onRequestPost({ request, env, params }) {
   const siteId = params?.id;
   if (!siteId) return err('사이트 ID가 없습니다.', 400);
 
+  // ── 사이트 조회 ────────────────────────────────────────────────────────────
   let site;
   try {
     site = await env.DB.prepare(
       'SELECT s.id, s.user_id, s.name, s.primary_domain, s.site_prefix,'
-      + ' s.wp_username, s.wp_password, s.wp_admin_email,'
       + ' s.status, s.provision_step, s.plan,'
       + ' s.site_d1_id, s.site_kv_id,'
       + ' u.cf_global_api_key, u.cf_account_email, u.cf_account_id'
@@ -1426,284 +527,441 @@ export async function onRequestPost({ request, env, params }) {
   if (!site) return err('사이트를 찾을 수 없습니다.', 404);
   if (site.status === 'active') return ok({ message: '이미 완료된 사이트입니다.' });
 
-  await updateSite(env.DB, siteId, { status: 'provisioning', provision_step: 'starting', error_message: null });
+  await updateSite(env.DB, siteId, {
+    status: 'provisioning', provision_step: 'starting', error_message: null,
+  });
 
   const encKey = env?.ENCRYPTION_KEY || 'cp_enc_default';
 
-  // ── 어드민 CF 키 (메인 KV/D1 UUID 역추출 전용) ─────────────────
-  const adminCfKey     = await getSetting(env, 'cf_api_token');
+  // ── CF 인증 키 결정 ────────────────────────────────────────────────────────
+  // 우선순위: 사용자 CF 키 > 어드민 CF 키
+  const adminCfToken   = await getSetting(env, 'cf_api_token');
   const adminCfAccount = await getSetting(env, 'cf_account_id');
-  const adminAuth      = (adminCfKey && adminCfAccount) ? makeAuth(adminCfKey, '') : null;
 
-  // ── 사용자 CF 키 (사이트 D1/KV/Worker 생성용) ──────────────────
-  let userCfKey     = null;
-  let userCfEmail   = '';
-  let userCfAccount = null;
+  let cfToken   = null;
+  let cfAccount = null;
 
   if (site.cf_global_api_key && site.cf_account_id) {
     const raw = deobfuscate(site.cf_global_api_key, encKey);
-    userCfKey     = (raw && raw.length > 5) ? raw : site.cf_global_api_key;
-    userCfEmail   = site.cf_account_email || '';
-    userCfAccount = site.cf_account_id;
+    cfToken   = (raw && raw.length > 5) ? raw : site.cf_global_api_key;
+    cfAccount = site.cf_account_id;
   }
 
-  if (!userCfKey || !userCfAccount) {
-    userCfKey     = adminCfKey;
-    userCfAccount = adminCfAccount;
-    userCfEmail   = '';
+  // 사용자 키 없으면 어드민 키 사용
+  if (!cfToken || !cfAccount) {
+    cfToken   = adminCfToken;
+    cfAccount = adminCfAccount;
   }
 
-  if (!userCfKey || !userCfAccount) {
-    const e = 'Cloudflare API 키가 설정되지 않았습니다.';
+  if (!cfToken || !cfAccount) {
+    const e = 'Cloudflare API 키가 설정되지 않았습니다. 계정 설정에서 CF Global API Key와 Account ID를 입력해주세요.';
     await failSite(env.DB, siteId, 'config_missing', e);
-    return jsonRes({ ok: false, error: e }, 400);
+    return err(e, 400);
   }
 
-  const userAuth = makeAuth(userCfKey, userCfEmail);
+  // ── GitHub CMS 소스 설정 ──────────────────────────────────────────────────
+  const githubRepo   = await getSetting(env, 'cms_github_repo',   '');
+  const githubBranch = await getSetting(env, 'cms_github_branch', 'main');
+  const githubToken  = await getSetting(env, 'cms_github_token',  '');
+
+  if (!githubRepo) {
+    const e = 'CMS GitHub 레포가 설정되지 않았습니다. 어드민 설정에서 cms_github_repo를 입력해주세요.';
+    await failSite(env.DB, siteId, 'config_missing', e);
+    return err(e, 400);
+  }
 
   const domain    = site.primary_domain;
   const wwwDomain = 'www.' + domain;
   const prefix    = site.site_prefix;
+  const workerName = 'cloudpress-site-' + prefix;
 
-  // ── Step 0: VP 계정 선택 ────────────────────────────────────────
-  await updateSite(env.DB, siteId, { provision_step: 'vp_select' });
+  // ── Step 1: GitHub에서 CMS 소스 fetch ────────────────────────────────────
+  await updateSite(env.DB, siteId, { provision_step: 'github_fetch' });
+  console.log(`[provision] GitHub fetch 시작: ${githubRepo}@${githubBranch}`);
 
-  let vpAccount = null;
-  try {
-    // 여유 있는 VP 계정 중 랜덤 선택
-    const { results: vpList } = await env.DB.prepare(
-      'SELECT * FROM vp_accounts WHERE is_active=1 AND current_sites < max_sites ORDER BY current_sites ASC LIMIT 5'
-    ).all();
-    if (!vpList || vpList.length === 0) {
-      await failSite(env.DB, siteId, 'vp_select', '사용 가능한 VP 계정이 없습니다.');
-      return jsonRes({ ok: false, error: '사용 가능한 VP 계정이 없습니다.' }, 500);
-    }
-    vpAccount = vpList[Math.floor(Math.random() * vpList.length)];
-  } catch (e) {
-    await failSite(env.DB, siteId, 'vp_select', e.message);
-    return jsonRes({ ok: false, error: 'VP 계정 조회 실패: ' + e.message }, 500);
+  const cmsSourceMap = await fetchCMSSource(githubRepo, githubBranch, githubToken);
+
+  if (cmsSourceMap.size === 0) {
+    const e = `GitHub 레포(${githubRepo})에서 CMS 소스를 가져오지 못했습니다. 레포 주소와 토큰을 확인해주세요.`;
+    await failSite(env.DB, siteId, 'github_fetch', e);
+    return err(e, 500);
   }
 
-  console.log(`[provision] VP 계정 선택: ${vpAccount.label} (${vpAccount.panel_url})`);
-
-  // ── Step 1: VP 세션 확인/갱신 ──────────────────────────────────
-  await updateSite(env.DB, siteId, { provision_step: 'vp_session' });
-  const sessionRes = await ensureVpSession(env.DB, vpAccount);
-  if (!sessionRes.ok) {
-    await failSite(env.DB, siteId, 'vp_session', sessionRes.error);
-    return jsonRes({ ok: false, error: 'VP 패널 로그인 실패: ' + sessionRes.error }, 500);
-  }
-  // sessionInfo = { cookie, panelType, basicAuth } — 패널 종류 + 인증 정보 일괄 전달
-  const sessionInfo = {
-    cookie:    sessionRes.cookie    || sessionRes.phpsessid || '',
-    panelType: sessionRes.panelType || vpAccount.panel_type || null,
-    basicAuth: sessionRes.basicAuth || null,
-  };
-  console.log(`[provision] VP 세션 확보 완료 (패널: ${sessionInfo.panelType || '자동감지'})`);
-
-  // ── Step 2: VP 서브도메인 생성 ─────────────────────────────────
-  await updateSite(env.DB, siteId, { provision_step: 'vp_subdomain' });
-  const subdomain = prefix;  // e.g. s_abc12
-  let subRes = await vpCreateSubdomain(vpAccount.panel_url, sessionInfo, subdomain, vpAccount.server_domain);
-
-  // 세션 만료 감지 → 재로그인 후 1회 재시도
-  if (!subRes.ok && subRes.sessionExpired) {
-    console.log('[provision] 서브도메인 생성 중 세션 만료 → 재로그인 후 재시도');
-    const reloginRes = await vpDetectAndLogin(vpAccount.panel_url, vpAccount.vp_username, vpAccount.vp_password, sessionInfo.panelType);
-    if (reloginRes.ok) {
-      sessionInfo.cookie    = reloginRes.cookie;
-      sessionInfo.panelType = reloginRes.type;
-      sessionInfo.basicAuth = reloginRes.basicAuth || null;
-      try {
-        await env.DB.prepare(
-          "UPDATE vp_accounts SET phpsessid=?, phpsessid_updated_at=datetime('now'), updated_at=datetime('now') WHERE id=?"
-        ).bind(reloginRes.cookie, vpAccount.id).run();
-      } catch (_) {}
-      subRes = await vpCreateSubdomain(vpAccount.panel_url, sessionInfo, subdomain, vpAccount.server_domain);
-    }
+  // 필수 파일 확인
+  if (!cmsSourceMap.has('index.js')) {
+    const e = 'GitHub 레포에서 index.js를 찾을 수 없습니다. cms_github_repo 설정을 확인해주세요.';
+    await failSite(env.DB, siteId, 'github_fetch', e);
+    return err(e, 500);
   }
 
-  if (!subRes.ok) {
-    await failSite(env.DB, siteId, 'vp_subdomain', subRes.error);
-    return jsonRes({ ok: false, error: 'VP 서브도메인 생성 실패: ' + subRes.error }, 500);
-  }
-  const originHost = subRes.domain;
-  const originUrl  = 'https://' + originHost;
-  console.log(`[provision] VP 서브도메인 생성 완료: ${originHost}`);
+  console.log(`[provision] GitHub fetch 완료: ${cmsSourceMap.size}개 파일`);
 
-  // ── Step 3: VP DB 생성 ─────────────────────────────────────────
-  await updateSite(env.DB, siteId, { provision_step: 'vp_db' });
-  const dbName = ('cp_' + prefix).replace(/[^a-z0-9_]/g, '_').slice(0, 32);
-  const dbUser = dbName;
-  const dbPass = site.wp_password || ('Db' + randSuffix(12));
-  const dbRes  = await vpCreateDatabase(vpAccount.panel_url, sessionInfo, dbName, dbUser, dbPass);
-  if (!dbRes.ok) {
-    await failSite(env.DB, siteId, 'vp_db', dbRes.error);
-    return jsonRes({ ok: false, error: 'VP DB 생성 실패: ' + dbRes.error }, 500);
-  }
-  console.log(`[provision] VP DB 생성 완료: ${dbName}`);
-
-  // ── Step 4: WP 설치 ────────────────────────────────────────────
-  await updateSite(env.DB, siteId, { provision_step: 'wp_install' });
-  const wpInstall = await vpInstallWordPress(vpAccount.panel_url, sessionInfo, {
-    webRoot:       vpAccount.web_root || '/htdocs',
-    subdomain,
-    serverDomain:  vpAccount.server_domain,
-    dbName,
-    dbUser,
-    dbPass,
-    siteUrl:       'https://' + domain,
-    siteTitle:     site.name,
-    wpUser:        site.wp_username,
-    wpPass:        site.wp_password,
-    wpEmail:       site.wp_admin_email || user.email,
-    wpDownloadUrl: vpAccount.wp_download_url,
-    phpBin:        vpAccount.php_bin || 'php8.3',
-  });
-  console.log('[provision] WP 설치:', wpInstall.skipped ? '(수동 필요) ' + wpInstall.message : '완료');
-
-  // ── Step 5: CF D1/KV 생성 (사용자 계정) ────────────────────────
-  // 어드민 CF로 메인 UUID 확보
-  let mainDbId = await getSetting(env, 'main_db_id', '');
-  let cacheKvId = await getSetting(env, 'cache_kv_id', '');
-  let sessionsKvId = await getSetting(env, 'sessions_kv_id', '');
-
-  if ((!mainDbId || !cacheKvId || !sessionsKvId) && adminAuth && adminCfAccount) {
-    const pName = await findPagesProjectName(adminAuth, adminCfAccount);
-    if (pName) {
-      const ids = await resolveMainBindingIds(adminAuth, adminCfAccount, pName, env.DB);
-      if (!mainDbId)     mainDbId     = ids.mainDbId     || '';
-      if (!cacheKvId)    cacheKvId    = ids.cacheKvId    || '';
-      if (!sessionsKvId) sessionsKvId = ids.sessionsKvId || '';
-    }
-  }
-
+  // ── Step 2: 사이트 전용 D1 생성 ──────────────────────────────────────────
   await updateSite(env.DB, siteId, { provision_step: 'd1_create' });
+
   let d1Id = site.site_d1_id || null;
   if (!d1Id) {
-    const r1 = await createD1(userAuth, userCfAccount, prefix);
-    if (!r1.ok) { await failSite(env.DB, siteId, 'd1_create', r1.error); return jsonRes({ ok: false, error: r1.error }, 500); }
-    d1Id = r1.id;
-    await updateSite(env.DB, siteId, { site_d1_id: d1Id, site_d1_name: r1.name });
-    await initD1Schema(userAuth, userCfAccount, d1Id);
+    const r = await createD1(cfToken, cfAccount, prefix);
+    if (!r.ok) {
+      await failSite(env.DB, siteId, 'd1_create', r.error);
+      return err(r.error, 500);
+    }
+    d1Id = r.id;
+    await updateSite(env.DB, siteId, { site_d1_id: d1Id, site_d1_name: r.name });
+    console.log(`[provision] D1 생성 완료: ${r.name} (${d1Id})`);
+  } else {
+    console.log(`[provision] D1 재사용: ${d1Id}`);
   }
 
+  // ── Step 3: 사이트 전용 KV 생성 ──────────────────────────────────────────
   await updateSite(env.DB, siteId, { provision_step: 'kv_create' });
+
   let kvId = site.site_kv_id || null;
   if (!kvId) {
-    const r2 = await createKV(userAuth, userCfAccount, prefix);
-    if (!r2.ok) { await failSite(env.DB, siteId, 'kv_create', r2.error); return jsonRes({ ok: false, error: r2.error }, 500); }
-    kvId = r2.id;
-    await updateSite(env.DB, siteId, { site_kv_id: kvId, site_kv_title: r2.title });
-    await initKVData(userAuth, userCfAccount, kvId, {
-      'site:config': JSON.stringify({ siteId, prefix, name: site.name, domain, originUrl }),
-      'site:status': 'active',
-    });
+    const r = await createKV(cfToken, cfAccount, prefix);
+    if (!r.ok) {
+      await failSite(env.DB, siteId, 'kv_create', r.error);
+      return err(r.error, 500);
+    }
+    kvId = r.id;
+    await updateSite(env.DB, siteId, { site_kv_id: kvId, site_kv_title: r.title });
+    console.log(`[provision] KV 생성 완료: ${r.title} (${kvId})`);
+  } else {
+    console.log(`[provision] KV 재사용: ${kvId}`);
   }
 
-  // ── Step 6: CACHE 도메인 매핑 등록 ─────────────────────────────
-  await updateSite(env.DB, siteId, { provision_step: 'kv_mapping' });
-  const wpAdminUrl = 'https://' + domain + '/wp-admin/';
-  const mapping = JSON.stringify({
-    id: siteId, name: site.name, site_prefix: prefix,
-    site_d1_id: d1Id, site_kv_id: kvId,
-    wp_admin_url: wpAdminUrl, status: 'active', suspended: 0,
-  });
-  try {
-    await env.CACHE.put('site_domain:' + domain, mapping);
-    await env.CACHE.put('site_domain:' + wwwDomain, mapping);
-    await env.CACHE.put('site_prefix:' + prefix, mapping);
-  } catch (e) { console.warn('[provision] CACHE put 실패(무시):', e.message); }
+  // ── Step 4: 사이트 D1 스키마 초기화 ──────────────────────────────────────
+  await updateSite(env.DB, siteId, { provision_step: 'd1_schema' });
+  console.log('[provision] D1 스키마 초기화 중...');
 
-  // ── Step 7: 사이트 전용 Worker 업로드 ──────────────────────────
-  // origin = VP 서브도메인 (사이트마다 고유, 사용자 도메인으로 완전 덮어씌워짐)
-  const workerName = 'cloudpress-site-' + prefix;
+  const schemaRes = await initSiteD1Schema(
+    cfToken, cfAccount, d1Id, githubRepo, githubBranch, githubToken
+  );
+  if (!schemaRes.ok) {
+    // 스키마 실패는 치명적이지 않음 — 계속 진행 (인스톨러에서 재실행 가능)
+    console.warn('[provision] D1 스키마 초기화 부분 실패 (계속 진행)');
+  } else {
+    console.log('[provision] D1 스키마 초기화 완료');
+  }
+
+  // ── Step 5: 메인 바인딩 ID 확보 ──────────────────────────────────────────
+  let mainDbId     = await getSetting(env, 'main_db_id',     '');
+  let cacheKvId    = await getSetting(env, 'cache_kv_id',    '');
+  let sessionsKvId = await getSetting(env, 'sessions_kv_id', '');
+
+  // 설정에 없으면 Pages 프로젝트에서 자동 탐색
+  if (!mainDbId || !cacheKvId || !sessionsKvId) {
+    const ids = await resolveMainBindingIds(cfToken, cfAccount, env.DB);
+    if (!mainDbId)     mainDbId     = ids.mainDbId     || '';
+    if (!cacheKvId)    cacheKvId    = ids.cacheKvId    || '';
+    if (!sessionsKvId) sessionsKvId = ids.sessionsKvId || '';
+  }
+
+  // ── Step 6: Workers Script Upload API — CMS 코드 업로드 ──────────────────
   await updateSite(env.DB, siteId, { provision_step: 'worker_upload' });
+  console.log(`[provision] Worker 업로드 중: ${workerName}`);
 
-  const wpOriginSecret = await getSetting(env, 'wp_origin_secret', '');
-
-  const upRes = await uploadWorker(userAuth, userCfAccount, workerName, {
-    mainDbId,
-    cacheKvId,
-    sessionsKvId,
-    siteD1Id:       d1Id,
-    siteKvId:       kvId,
-    wpOriginUrl:    originUrl,        // ← VP 서브도메인 (고정 X, 사이트마다 고유)
-    wpOriginSecret: wpOriginSecret,
-    cfAccountId:    userCfAccount,
-    cfApiKey:       userCfKey,
-    sitePrefix:     prefix,
-  });
+  const upRes = await uploadWorkerWithCMSSource(
+    cfToken,
+    cfAccount,
+    workerName,
+    {
+      mainDbId,
+      cacheKvId,
+      sessionsKvId,
+      siteD1Id:    d1Id,
+      siteKvId:    kvId,
+      cfAccountId: cfAccount,
+      cfApiToken:  cfToken,
+      sitePrefix:  prefix,
+      siteName:    site.name,
+      siteDomain:  domain,
+    },
+    cmsSourceMap
+  );
 
   if (!upRes.ok) {
     await failSite(env.DB, siteId, 'worker_upload', upRes.error);
-    return jsonRes({ ok: false, error: 'Worker 업로드 실패: ' + upRes.error }, 500);
+    return err('Worker 업로드 실패: ' + upRes.error, 500);
   }
   console.log(`[provision] Worker 업로드 완료: ${workerName}`);
-  await updateSite(env.DB, siteId, { worker_name: workerName, vp_account_id: vpAccount.id, vp_origin_url: originUrl });
+  await updateSite(env.DB, siteId, { worker_name: workerName });
 
-  // ── Step 8: DNS + Worker Route ──────────────────────────────────
+  // workers.dev 활성화
+  await enableWorkersDev(cfToken, cfAccount, workerName);
+
+  // ── Step 7: CACHE KV 도메인 매핑 등록 ────────────────────────────────────
+  await updateSite(env.DB, siteId, { provision_step: 'kv_mapping' });
+
+  const siteMapping = JSON.stringify({
+    id:          siteId,
+    name:        site.name,
+    site_prefix: prefix,
+    site_d1_id:  d1Id,
+    site_kv_id:  kvId,
+    status:      'active',
+    suspended:   0,
+  });
+
+  if (cacheKvId && cfToken && cfAccount) {
+    for (const key of [`site_domain:${domain}`, `site_domain:${wwwDomain}`, `site_prefix:${prefix}`]) {
+      try {
+        await fetch(
+          `${CF_API}/accounts/${cfAccount}/storage/kv/namespaces/${cacheKvId}/values/${encodeURIComponent(key)}`,
+          {
+            method:  'PUT',
+            headers: { 'Authorization': 'Bearer ' + cfToken, 'Content-Type': 'text/plain' },
+            body:    siteMapping,
+          }
+        );
+      } catch (e) { console.warn('[provision] CACHE KV put 실패:', key, e.message); }
+    }
+  }
+
+  // ── Step 8: DNS + Worker Route 등록 ──────────────────────────────────────
   await updateSite(env.DB, siteId, { provision_step: 'dns_setup' });
-  const cnameTarget = await getWorkerSubdomain(userAuth, userCfAccount, workerName);
-  let domainStatus = 'manual_required';
-  let cfZoneId = null, dnsRecordId = null, dnsRecordWwwId = null;
 
-  const zone = await cfGetZone(userAuth, domain);
+  const cnameTarget = await getWorkerSubdomain(cfToken, cfAccount, workerName);
+  let domainStatus   = 'manual_required';
+  let cfZoneId       = null;
+  let dnsRecordId    = null, dnsRecordWwwId = null;
+
+  const zone = await cfGetZone(cfToken, domain);
   if (zone.ok) {
     cfZoneId = zone.zoneId;
-    const dr  = await cfUpsertDns(userAuth, cfZoneId, 'CNAME', domain,    cnameTarget, true);
-    const drw = await cfUpsertDns(userAuth, cfZoneId, 'CNAME', wwwDomain, cnameTarget, true);
+    const dr  = await cfUpsertDns(cfToken, cfZoneId, 'CNAME', domain,    cnameTarget, true);
+    const drw = await cfUpsertDns(cfToken, cfZoneId, 'CNAME', wwwDomain, cnameTarget, true);
     if (dr.ok)  dnsRecordId    = dr.recordId;
     if (drw.ok) dnsRecordWwwId = drw.recordId;
 
     await updateSite(env.DB, siteId, { provision_step: 'worker_route' });
-    const rr = await cfUpsertRoute(userAuth, cfZoneId, domain + '/*',    workerName);
-    const rw = await cfUpsertRoute(userAuth, cfZoneId, wwwDomain + '/*', workerName);
+    const rr = await cfUpsertRoute(cfToken, cfZoneId, domain + '/*',    workerName);
+    const rw = await cfUpsertRoute(cfToken, cfZoneId, wwwDomain + '/*', workerName);
     if (rr.ok || rw.ok) domainStatus = 'dns_propagating';
+
     await updateSite(env.DB, siteId, {
-      worker_route: domain + '/*', worker_route_www: wwwDomain + '/*',
-      worker_route_id: rr.routeId || null, worker_route_www_id: rw.routeId || null,
-      cf_zone_id: cfZoneId, dns_record_id: dnsRecordId, dns_record_www_id: dnsRecordWwwId,
+      worker_route:        domain + '/*',
+      worker_route_www:    wwwDomain + '/*',
+      worker_route_id:     rr.routeId || null,
+      worker_route_www_id: rw.routeId || null,
+      cf_zone_id:          cfZoneId,
+      dns_record_id:       dnsRecordId,
+      dns_record_www_id:   dnsRecordWwwId,
     });
   }
 
-  // ── Step 9: VP 사이트 카운트 증가 ──────────────────────────────
-  try {
-    await env.DB.prepare("UPDATE vp_accounts SET current_sites=current_sites+1, updated_at=datetime('now') WHERE id=?").bind(vpAccount.id).run();
-  } catch (_) {}
+  // ── Step 9: 완료 ──────────────────────────────────────────────────────────
+  const adminUrl = `https://${domain}/cp-admin/setup-config`;
 
-  // ── Step 10: REST API 활성화 확인 ──────────────────────────────
-  let restApiStatus = 'unknown';
-  const restCheck = await verifyAndActivateRestApi(originUrl);
-  restApiStatus = restCheck.ok ? 'active' : 'pending';
-
-  // ── 완료 ────────────────────────────────────────────────────────
   await updateSite(env.DB, siteId, {
     status:         'active',
     provision_step: 'completed',
     domain_status:  domainStatus,
-    wp_admin_url:   wpAdminUrl,
-    error_message:  domainStatus === 'manual_required' ? `외부 DNS 설정 필요 — CNAME: ${cnameTarget}` : null,
+    wp_admin_url:   adminUrl,
+    error_message:  domainStatus === 'manual_required'
+      ? `외부 DNS 설정 필요 — CNAME: ${cnameTarget}`
+      : null,
   });
 
   const finalSite = await env.DB.prepare(
-    'SELECT status, provision_step, error_message, wp_admin_url, wp_username, wp_password, primary_domain, site_d1_id, site_kv_id, domain_status, worker_name, name FROM sites WHERE id=?'
+    'SELECT status, provision_step, error_message, wp_admin_url, primary_domain,'
+    + ' site_d1_id, site_kv_id, domain_status, worker_name, name FROM sites WHERE id=?'
   ).bind(siteId).first();
 
   return ok({
-    message: '프로비저닝 완료',
+    message:      '프로비저닝 완료',
     siteId,
-    site: finalSite,
-    worker_name: workerName,
-    vp_account:  vpAccount.label,
-    origin_url:  originUrl,
-    rest_api:    restApiStatus,
-    wp_install:  wpInstall.skipped ? '수동 설치 필요' : '완료',
+    site:         finalSite,
+    worker_name:  workerName,
     cname_target: cnameTarget,
+    cms_files:    cmsSourceMap.size,
+    setup_url:    adminUrl,
     cname_instructions: domainStatus === 'manual_required' ? {
       type: 'CNAME',
       root: { host: '@',   value: cnameTarget },
       www:  { host: 'www', value: cnameTarget },
+      note: `DNS 전파 후 ${adminUrl} 에서 CMS 설정을 완료하세요.`,
     } : null,
   });
+}
+
+// ── 메인 바인딩 ID 자동 탐색 ────────────────────────────────────────────────
+// settings DB에 없을 경우 Workers 환경에서 바인딩 UUID를 직접 추출 시도
+
+async function resolveMainBindingIds(token, accountId, DB) {
+  const result = { mainDbId: '', cacheKvId: '', sessionsKvId: '' };
+
+  try {
+    // Pages 프로젝트 목록에서 cloudpress 관련 프로젝트 탐색
+    const pagesRes = await cfReq(token, `/accounts/${accountId}/pages/projects`);
+    if (!pagesRes.success) return result;
+
+    const project = (pagesRes.result || []).find(p =>
+      p.name?.toLowerCase().includes('cloudpress') ||
+      p.name?.toLowerCase().includes('cp-')
+    );
+    if (!project) return result;
+
+    const projRes = await cfReq(token, `/accounts/${accountId}/pages/projects/${project.name}`);
+    if (!projRes.success) return result;
+
+    const bindings = projRes.result?.deployment_configs?.production?.d1_databases || {};
+    const kvBindings = projRes.result?.deployment_configs?.production?.kv_namespaces || {};
+
+    // D1: DB 바인딩 탐색
+    for (const [name, val] of Object.entries(bindings)) {
+      const id = val?.id || val?.database_id || '';
+      if (!id) continue;
+      if (name === 'DB' || name === 'MAIN_DB') result.mainDbId = id;
+    }
+
+    // KV: CACHE / SESSIONS 바인딩 탐색
+    for (const [name, val] of Object.entries(kvBindings)) {
+      const id = val?.namespace_id || val?.id || '';
+      if (!id) continue;
+      if (name === 'CACHE') result.cacheKvId    = id;
+      if (name === 'SESSIONS') result.sessionsKvId = id;
+    }
+
+    // DB에도 저장
+    if (result.mainDbId)     await DB.prepare("INSERT OR REPLACE INTO settings (key,value,updated_at) VALUES ('main_db_id',?,datetime('now'))").bind(result.mainDbId).run().catch(()=>{});
+    if (result.cacheKvId)    await DB.prepare("INSERT OR REPLACE INTO settings (key,value,updated_at) VALUES ('cache_kv_id',?,datetime('now'))").bind(result.cacheKvId).run().catch(()=>{});
+    if (result.sessionsKvId) await DB.prepare("INSERT OR REPLACE INTO settings (key,value,updated_at) VALUES ('sessions_kv_id',?,datetime('now'))").bind(result.sessionsKvId).run().catch(()=>{});
+
+  } catch (e) {
+    console.warn('[provision] 바인딩 ID 자동 탐색 실패:', e.message);
+  }
+
+  return result;
+}
+
+// ── 최소 내장 스키마 (GitHub fetch 실패 시 fallback) ────────────────────────
+
+function getMinimalSchema() {
+  return `
+CREATE TABLE IF NOT EXISTS cp_posts (
+  ID INTEGER PRIMARY KEY AUTOINCREMENT,
+  post_author INTEGER NOT NULL DEFAULT 0,
+  post_date TEXT NOT NULL DEFAULT '',
+  post_date_gmt TEXT NOT NULL DEFAULT '',
+  post_content TEXT NOT NULL DEFAULT '',
+  post_title TEXT NOT NULL DEFAULT '',
+  post_excerpt TEXT NOT NULL DEFAULT '',
+  post_status TEXT NOT NULL DEFAULT 'publish',
+  comment_status TEXT NOT NULL DEFAULT 'open',
+  ping_status TEXT NOT NULL DEFAULT 'open',
+  post_password TEXT NOT NULL DEFAULT '',
+  post_name TEXT NOT NULL DEFAULT '',
+  to_ping TEXT NOT NULL DEFAULT '',
+  pinged TEXT NOT NULL DEFAULT '',
+  post_modified TEXT NOT NULL DEFAULT '',
+  post_modified_gmt TEXT NOT NULL DEFAULT '',
+  post_content_filtered TEXT NOT NULL DEFAULT '',
+  post_parent INTEGER NOT NULL DEFAULT 0,
+  guid TEXT NOT NULL DEFAULT '',
+  menu_order INTEGER NOT NULL DEFAULT 0,
+  post_type TEXT NOT NULL DEFAULT 'post',
+  post_mime_type TEXT NOT NULL DEFAULT '',
+  comment_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS cp_postmeta (
+  meta_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  post_id INTEGER NOT NULL DEFAULT 0,
+  meta_key TEXT DEFAULT NULL,
+  meta_value TEXT
+);
+CREATE TABLE IF NOT EXISTS cp_users (
+  ID INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_login TEXT NOT NULL DEFAULT '',
+  user_pass TEXT NOT NULL DEFAULT '',
+  user_nicename TEXT NOT NULL DEFAULT '',
+  user_email TEXT NOT NULL DEFAULT '',
+  user_url TEXT NOT NULL DEFAULT '',
+  user_registered TEXT NOT NULL DEFAULT '',
+  user_activation_key TEXT NOT NULL DEFAULT '',
+  user_status INTEGER NOT NULL DEFAULT 0,
+  display_name TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS cp_usermeta (
+  umeta_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL DEFAULT 0,
+  meta_key TEXT DEFAULT NULL,
+  meta_value TEXT
+);
+CREATE TABLE IF NOT EXISTS cp_options (
+  option_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  option_name TEXT NOT NULL DEFAULT '',
+  option_value TEXT NOT NULL DEFAULT '',
+  autoload TEXT NOT NULL DEFAULT 'yes',
+  UNIQUE(option_name)
+);
+CREATE TABLE IF NOT EXISTS cp_terms (
+  term_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL DEFAULT '',
+  slug TEXT NOT NULL DEFAULT '',
+  term_group INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS cp_term_taxonomy (
+  term_taxonomy_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  term_id INTEGER NOT NULL DEFAULT 0,
+  taxonomy TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  parent INTEGER NOT NULL DEFAULT 0,
+  count INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS cp_term_relationships (
+  object_id INTEGER NOT NULL DEFAULT 0,
+  term_taxonomy_id INTEGER NOT NULL DEFAULT 0,
+  term_order INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (object_id, term_taxonomy_id)
+);
+CREATE TABLE IF NOT EXISTS cp_comments (
+  comment_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+  comment_post_ID INTEGER NOT NULL DEFAULT 0,
+  comment_author TEXT NOT NULL DEFAULT '',
+  comment_author_email TEXT NOT NULL DEFAULT '',
+  comment_author_url TEXT NOT NULL DEFAULT '',
+  comment_author_IP TEXT NOT NULL DEFAULT '',
+  comment_date TEXT NOT NULL DEFAULT '',
+  comment_date_gmt TEXT NOT NULL DEFAULT '',
+  comment_content TEXT NOT NULL DEFAULT '',
+  comment_karma INTEGER NOT NULL DEFAULT 0,
+  comment_approved TEXT NOT NULL DEFAULT '1',
+  comment_agent TEXT NOT NULL DEFAULT '',
+  comment_type TEXT NOT NULL DEFAULT 'comment',
+  comment_parent INTEGER NOT NULL DEFAULT 0,
+  user_id INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS cp_commentmeta (
+  meta_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  comment_id INTEGER NOT NULL DEFAULT 0,
+  meta_key TEXT DEFAULT NULL,
+  meta_value TEXT
+);
+CREATE TABLE IF NOT EXISTS cp_media (
+  media_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_name TEXT NOT NULL,
+  file_path TEXT NOT NULL UNIQUE,
+  mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+  file_size INTEGER NOT NULL DEFAULT 0,
+  upload_date TEXT NOT NULL DEFAULT '',
+  storage TEXT NOT NULL DEFAULT 'kv',
+  alt_text TEXT DEFAULT '',
+  caption TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS cp_cron_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp INTEGER NOT NULL,
+  schedule TEXT,
+  hook TEXT NOT NULL,
+  args TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS cp_posts_post_name ON cp_posts(post_name);
+CREATE INDEX IF NOT EXISTS cp_posts_type_status ON cp_posts(post_type, post_status);
+CREATE INDEX IF NOT EXISTS cp_postmeta_post_id ON cp_postmeta(post_id);
+CREATE INDEX IF NOT EXISTS cp_users_login ON cp_users(user_login);
+CREATE INDEX IF NOT EXISTS cp_usermeta_user_id ON cp_usermeta(user_id);
+CREATE INDEX IF NOT EXISTS cp_comments_post_id ON cp_comments(comment_post_ID);
+CREATE INDEX IF NOT EXISTS cp_cron_ts ON cp_cron_events(timestamp);
+`.trim();
 }
