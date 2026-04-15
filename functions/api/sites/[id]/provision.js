@@ -42,12 +42,27 @@ const err = (msg, s) => _j({ ok: false, error: msg }, s || 400);
 // ── Cloudflare API ────────────────────────────────────────────────────────────
 const CF_API = 'https://api.cloudflare.com/client/v4';
 
-function cfHeaders(apiToken) {
-  return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiToken };
+// CF 인증 헤더 빌더
+// Global API Key → X-Auth-Key + X-Auth-Email (email 필수)
+// API Token      → Authorization: Bearer
+function cfHeaders(token, email) {
+  if (email) {
+    // Global API Key 방식
+    return {
+      'Content-Type': 'application/json',
+      'X-Auth-Key':   token,
+      'X-Auth-Email': email,
+    };
+  }
+  // API Token 방식
+  return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token };
 }
 
-async function cfReq(token, path, method = 'GET', body) {
-  const opts = { method, headers: cfHeaders(token) };
+// cfAuth 객체: { token, email } — email があれば Global API Key モード
+async function cfReq(auth, path, method = 'GET', body) {
+  const token = typeof auth === 'string' ? auth : auth.token;
+  const email = typeof auth === 'string' ? null  : auth.email;
+  const opts = { method, headers: cfHeaders(token, email) };
   if (body !== undefined && body !== null) opts.body = JSON.stringify(body);
   try {
     const res  = await fetch(CF_API + path, opts);
@@ -155,9 +170,9 @@ function deobfuscate(str, salt) {
 
 // ── CF 리소스 생성 ────────────────────────────────────────────────────────────
 
-async function createD1(token, accountId, prefix) {
+async function createD1(auth, accountId, prefix) {
   const name = `cloudpress-site-${prefix}-${Date.now().toString(36)}`;
-  const res  = await cfReq(token, `/accounts/${accountId}/d1/database`, 'POST', { name });
+  const res  = await cfReq(auth, `/accounts/${accountId}/d1/database`, 'POST', { name });
   if (res.success && res.result) {
     const id = res.result.uuid || res.result.id || res.result.database_id;
     if (id) return { ok: true, id, name };
@@ -165,9 +180,9 @@ async function createD1(token, accountId, prefix) {
   return { ok: false, error: 'D1 생성 실패: ' + cfErrMsg(res) };
 }
 
-async function createKV(token, accountId, prefix) {
+async function createKV(auth, accountId, prefix) {
   const title = `cloudpress-site-${prefix}-kv`;
-  const res   = await cfReq(token, `/accounts/${accountId}/storage/kv/namespaces`, 'POST', { title });
+  const res   = await cfReq(auth, `/accounts/${accountId}/storage/kv/namespaces`, 'POST', { title });
   if (res.success && res.result?.id) {
     return { ok: true, id: res.result.id, title };
   }
@@ -175,12 +190,12 @@ async function createKV(token, accountId, prefix) {
 }
 
 // ── 사이트 D1 스키마 초기화 ───────────────────────────────────────────────────
-async function initSiteD1Schema(token, accountId, d1Id, schemaSql) {
+async function initSiteD1Schema(auth, accountId, d1Id, schemaSql) {
   if (!schemaSql?.trim()) {
     schemaSql = getMinimalSchema();
   }
 
-  const res = await cfReq(token, `/accounts/${accountId}/d1/database/${d1Id}/query`, 'POST', {
+  const res = await cfReq(auth, `/accounts/${accountId}/d1/database/${d1Id}/query`, 'POST', {
     sql: schemaSql,
   });
 
@@ -195,17 +210,16 @@ async function initSiteD1Schema(token, accountId, d1Id, schemaSql) {
 }
 
 // ── CACHE KV 도메인 매핑 일괄 PUT ────────────────────────────────────────────
-async function putCacheKVBulk(token, accountId, kvId, entries) {
+async function putCacheKVBulk(auth, accountId, kvId, entries) {
   if (!entries.length) return;
+  const token = typeof auth === 'string' ? auth : auth.token;
+  const email = typeof auth === 'string' ? null  : auth.email;
   try {
     const res = await fetch(
       `${CF_API}/accounts/${accountId}/storage/kv/namespaces/${kvId}/bulk`,
       {
         method:  'PUT',
-        headers: {
-          'Authorization': 'Bearer ' + token,
-          'Content-Type':  'application/json',
-        },
+        headers: cfHeaders(token, email),
         body: JSON.stringify(entries.map(({ key, value }) => ({ key, value }))),
       }
     );
@@ -534,7 +548,9 @@ async function fetchCMSSource(githubRepo, githubBranch, githubToken) {
 
 // ── Workers Script Upload API (multipart/form-data) ───────────────────────────
 
-async function uploadWorkerWithCMSSource(token, accountId, workerName, opts, cmsSourceMap) {
+async function uploadWorkerWithCMSSource(auth, accountId, workerName, opts, cmsSourceMap) {
+  const token = typeof auth === 'string' ? auth : auth.token;
+  const email = typeof auth === 'string' ? null  : auth.email;
   const {
     mainDbId,
     cacheKvId,
@@ -607,7 +623,7 @@ async function uploadWorkerWithCMSSource(token, accountId, workerName, opts, cms
       {
         method:  'PUT',
         headers: {
-          'Authorization': 'Bearer ' + token,
+          ...cfHeaders(token, email),
           'Content-Type':  `multipart/form-data; boundary=${boundary}`,
         },
         body: body.buffer,
@@ -625,51 +641,51 @@ async function uploadWorkerWithCMSSource(token, accountId, workerName, opts, cms
 
 // ── CF DNS / Route 유틸리티 ───────────────────────────────────────────────────
 
-async function cfGetZone(token, domain) {
+async function cfGetZone(auth, domain) {
   const root = domain.split('.').slice(-2).join('.');
-  const res  = await cfReq(token, `/zones?name=${encodeURIComponent(root)}&status=active`);
+  const res  = await cfReq(auth, `/zones?name=${encodeURIComponent(root)}&status=active`);
   if (res.success && res.result?.length > 0) {
     return { ok: true, zoneId: res.result[0].id };
   }
   return { ok: false, error: '존 없음: ' + root };
 }
 
-async function cfUpsertDns(token, zoneId, type, name, content, proxied = true) {
-  const list = await cfReq(token, `/zones/${zoneId}/dns_records?type=${type}&name=${encodeURIComponent(name)}`);
+async function cfUpsertDns(auth, zoneId, type, name, content, proxied = true) {
+  const list = await cfReq(auth, `/zones/${zoneId}/dns_records?type=${type}&name=${encodeURIComponent(name)}`);
   const existing = list.result?.[0];
 
   if (existing) {
-    const res = await cfReq(token, `/zones/${zoneId}/dns_records/${existing.id}`, 'PATCH', { content, proxied });
+    const res = await cfReq(auth, `/zones/${zoneId}/dns_records/${existing.id}`, 'PATCH', { content, proxied });
     return { ok: res.success, recordId: existing.id };
   }
-  const res = await cfReq(token, `/zones/${zoneId}/dns_records`, 'POST', { type, name, content, proxied, ttl: 1 });
+  const res = await cfReq(auth, `/zones/${zoneId}/dns_records`, 'POST', { type, name, content, proxied, ttl: 1 });
   if (res.success) return { ok: true, recordId: res.result?.id };
   return { ok: false, error: cfErrMsg(res) };
 }
 
-async function cfUpsertRoute(token, zoneId, pattern, workerName) {
-  const list = await cfReq(token, `/zones/${zoneId}/workers/routes`);
+async function cfUpsertRoute(auth, zoneId, pattern, workerName) {
+  const list = await cfReq(auth, `/zones/${zoneId}/workers/routes`);
   const existing = (list.result || []).find(r => r.pattern === pattern);
   if (existing) {
-    const res = await cfReq(token, `/zones/${zoneId}/workers/routes/${existing.id}`, 'PUT', { pattern, script: workerName });
+    const res = await cfReq(auth, `/zones/${zoneId}/workers/routes/${existing.id}`, 'PUT', { pattern, script: workerName });
     return { ok: res.success, routeId: existing.id };
   }
-  const res = await cfReq(token, `/zones/${zoneId}/workers/routes`, 'POST', { pattern, script: workerName });
+  const res = await cfReq(auth, `/zones/${zoneId}/workers/routes`, 'POST', { pattern, script: workerName });
   if (res.success) return { ok: true, routeId: res.result?.id };
   return { ok: false, error: cfErrMsg(res) };
 }
 
-async function getWorkerSubdomain(token, accountId, workerName) {
-  const res = await cfReq(token, `/accounts/${accountId}/workers/subdomain`);
+async function getWorkerSubdomain(auth, accountId, workerName) {
+  const res = await cfReq(auth, `/accounts/${accountId}/workers/subdomain`);
   if (res.success && res.result?.subdomain) {
     return `${workerName}.${res.result.subdomain}.workers.dev`;
   }
   return `${workerName}.workers.dev`;
 }
 
-async function enableWorkersDev(token, accountId, workerName) {
+async function enableWorkersDev(auth, accountId, workerName) {
   const res = await cfReq(
-    token,
+    auth,
     `/accounts/${accountId}/workers/scripts/${workerName}/subdomain`,
     'POST',
     { enabled: true }
@@ -678,11 +694,11 @@ async function enableWorkersDev(token, accountId, workerName) {
 }
 
 // ── 메인 바인딩 ID 자동 탐색 ─────────────────────────────────────────────────
-async function resolveMainBindingIds(token, accountId) {
+async function resolveMainBindingIds(auth, accountId) {
   const result = { mainDbId: '', cacheKvId: '', sessionsKvId: '' };
 
   try {
-    const pagesRes = await cfReq(token, `/accounts/${accountId}/pages/projects`);
+    const pagesRes = await cfReq(auth, `/accounts/${accountId}/pages/projects`);
     if (!pagesRes.success) return result;
 
     const project = (pagesRes.result || []).find(p =>
@@ -691,7 +707,7 @@ async function resolveMainBindingIds(token, accountId) {
     );
     if (!project) return result;
 
-    const projRes = await cfReq(token, `/accounts/${accountId}/pages/projects/${project.name}`);
+    const projRes = await cfReq(auth, `/accounts/${accountId}/pages/projects/${project.name}`);
     if (!projRes.success) return result;
 
     const bindings   = projRes.result?.deployment_configs?.production?.d1_databases || {};
@@ -767,21 +783,29 @@ export async function onRequestPost({ request, env, params }) {
   const adminCfToken   = settingVal(settings, 'cf_api_token');
   const adminCfAccount = settingVal(settings, 'cf_account_id');
 
-  let cfToken   = null;
+  let cfAuth    = null;  // { token, email? } — email 있으면 Global API Key 모드
   let cfAccount = null;
 
   if (site.cf_global_api_key && site.cf_account_id) {
     const raw = deobfuscate(site.cf_global_api_key, encKey);
-    cfToken   = (raw && raw.length > 5) ? raw : site.cf_global_api_key;
+    const key = (raw && raw.length > 5) ? raw : site.cf_global_api_key;
+    // cf_account_email이 있으면 Global API Key (X-Auth-Key+X-Auth-Email)
+    // 없으면 API Token (Bearer) 로 폴백
+    cfAuth    = site.cf_account_email
+      ? { token: key, email: site.cf_account_email }
+      : { token: key };
     cfAccount = site.cf_account_id;
   }
 
-  if (!cfToken || !cfAccount) {
-    cfToken   = adminCfToken;
-    cfAccount = adminCfAccount;
+  if (!cfAuth || !cfAccount) {
+    // 어드민 전역 설정은 항상 API Token 방식
+    if (adminCfToken && adminCfAccount) {
+      cfAuth    = { token: adminCfToken };
+      cfAccount = adminCfAccount;
+    }
   }
 
-  if (!cfToken || !cfAccount) {
+  if (!cfAuth || !cfAccount) {
     const e = 'Cloudflare API 키가 설정되지 않았습니다. 계정 설정에서 CF Global API Key와 Account ID를 입력해주세요.';
     await failSite(env.DB, siteId, 'config_missing', e);
     return err(e, 400);
@@ -840,8 +864,8 @@ export async function onRequestPost({ request, env, params }) {
 
   if (!d1Id && !kvId) {
     const [d1Res, kvRes] = await Promise.all([
-      createD1(cfToken, cfAccount, prefix),
-      createKV(cfToken, cfAccount, prefix),
+      createD1(cfAuth, cfAccount, prefix),
+      createKV(cfAuth, cfAccount, prefix),
     ]);
 
     if (!d1Res.ok) { await failSite(env.DB, siteId, 'd1_create', d1Res.error); return err(d1Res.error, 500); }
@@ -853,14 +877,14 @@ export async function onRequestPost({ request, env, params }) {
     console.log(`[provision] D1 생성: ${d1Res.name} (${d1Id}), KV 생성: ${kvRes.title} (${kvId})`);
 
   } else if (!d1Id) {
-    const d1Res = await createD1(cfToken, cfAccount, prefix);
+    const d1Res = await createD1(cfAuth, cfAccount, prefix);
     if (!d1Res.ok) { await failSite(env.DB, siteId, 'd1_create', d1Res.error); return err(d1Res.error, 500); }
     d1Id = d1Res.id;
     siteState.set({ site_d1_id: d1Id, site_d1_name: d1Res.name });
     console.log(`[provision] D1 생성: ${d1Res.name} (${d1Id}), KV 재사용: ${kvId}`);
 
   } else if (!kvId) {
-    const kvRes = await createKV(cfToken, cfAccount, prefix);
+    const kvRes = await createKV(cfAuth, cfAccount, prefix);
     if (!kvRes.ok) { await failSite(env.DB, siteId, 'kv_create', kvRes.error); return err(kvRes.error, 500); }
     kvId = kvRes.id;
     siteState.set({ site_kv_id: kvId, site_kv_title: kvRes.title });
@@ -881,8 +905,8 @@ export async function onRequestPost({ request, env, params }) {
   const needsBindingResolve = !mainDbId || !cacheKvId || !sessionsKvId;
 
   const [schemaRes, resolvedIds] = await Promise.all([
-    initSiteD1Schema(cfToken, cfAccount, d1Id, schemaSql),
-    needsBindingResolve ? resolveMainBindingIds(cfToken, cfAccount) : Promise.resolve(null),
+    initSiteD1Schema(cfAuth, cfAccount, d1Id, schemaSql),
+    needsBindingResolve ? resolveMainBindingIds(cfAuth, cfAccount) : Promise.resolve(null),
   ]);
 
   if (!schemaRes.ok) {
@@ -911,8 +935,12 @@ export async function onRequestPost({ request, env, params }) {
   siteState.set({ provision_step: 'worker_upload' });
   console.log(`[provision] Worker 업로드 중: ${workerName}`);
 
+  // Worker 바인딩에 넣을 CF 자격증명은 항상 API Token 형태로 전달
+  // (Worker 내부에서 cfApiToken을 env 변수로 사용할 때는 Bearer 방식)
+  const cfApiTokenForWorker = cfAuth.email ? '' : cfAuth.token;
+
   const upRes = await uploadWorkerWithCMSSource(
-    cfToken,
+    cfAuth,
     cfAccount,
     workerName,
     {
@@ -922,7 +950,7 @@ export async function onRequestPost({ request, env, params }) {
       siteD1Id:    d1Id,
       siteKvId:    kvId,
       cfAccountId: cfAccount,
-      cfApiToken:  cfToken,
+      cfApiToken:  cfApiTokenForWorker,
       sitePrefix:  prefix,
       siteName:    site.name,
       siteDomain:  domain,
@@ -938,7 +966,7 @@ export async function onRequestPost({ request, env, params }) {
   console.log(`[provision] Worker 업로드 완료: ${workerName}`);
   siteState.set({ worker_name: workerName });
 
-  await enableWorkersDev(cfToken, cfAccount, workerName).catch(() => {});
+  await enableWorkersDev(cfAuth, cfAccount, workerName).catch(() => {});
 
   // ── Step 6: CACHE KV 도메인 매핑 (bulk 1회) ───────────────────────────────
   siteState.set({ provision_step: 'kv_mapping' });
@@ -953,8 +981,8 @@ export async function onRequestPost({ request, env, params }) {
     suspended:   0,
   });
 
-  if (cacheKvId && cfToken && cfAccount) {
-    await putCacheKVBulk(cfToken, cfAccount, cacheKvId, [
+  if (cacheKvId && cfAccount) {
+    await putCacheKVBulk(cfAuth, cfAccount, cacheKvId, [
       { key: `site_domain:${domain}`,    value: siteMapping },
       { key: `site_domain:${wwwDomain}`, value: siteMapping },
       { key: `site_prefix:${prefix}`,    value: siteMapping },
@@ -965,8 +993,8 @@ export async function onRequestPost({ request, env, params }) {
   siteState.set({ provision_step: 'dns_setup' });
 
   const [cnameTarget, zone] = await Promise.all([
-    getWorkerSubdomain(cfToken, cfAccount, workerName),
-    cfGetZone(cfToken, domain),
+    getWorkerSubdomain(cfAuth, cfAccount, workerName),
+    cfGetZone(cfAuth, domain),
   ]);
 
   let domainStatus   = 'manual_required';
@@ -978,8 +1006,8 @@ export async function onRequestPost({ request, env, params }) {
     cfZoneId = zone.zoneId;
 
     const [dr, drw] = await Promise.all([
-      cfUpsertDns(cfToken, cfZoneId, 'CNAME', domain,    cnameTarget, true),
-      cfUpsertDns(cfToken, cfZoneId, 'CNAME', wwwDomain, cnameTarget, true),
+      cfUpsertDns(cfAuth, cfZoneId, 'CNAME', domain,    cnameTarget, true),
+      cfUpsertDns(cfAuth, cfZoneId, 'CNAME', wwwDomain, cnameTarget, true),
     ]);
     if (dr.ok)  dnsRecordId    = dr.recordId;
     if (drw.ok) dnsRecordWwwId = drw.recordId;
@@ -987,8 +1015,8 @@ export async function onRequestPost({ request, env, params }) {
     siteState.set({ provision_step: 'worker_route' });
 
     const [rr, rw] = await Promise.all([
-      cfUpsertRoute(cfToken, cfZoneId, domain + '/*',    workerName),
-      cfUpsertRoute(cfToken, cfZoneId, wwwDomain + '/*', workerName),
+      cfUpsertRoute(cfAuth, cfZoneId, domain + '/*',    workerName),
+      cfUpsertRoute(cfAuth, cfZoneId, wwwDomain + '/*', workerName),
     ]);
     if (rr.ok) routeId    = rr.routeId;
     if (rw.ok) routeWwwId = rw.routeId;
