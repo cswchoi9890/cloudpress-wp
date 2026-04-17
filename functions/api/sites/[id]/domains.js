@@ -94,7 +94,7 @@ export async function onRequest({ request, env, params }) {
 
   // schema.sql 기준 컬럼만 SELECT
   const site = await env.DB.prepare(
-    `SELECT id, user_id, name, primary_domain, domain_status, status
+    `SELECT id, user_id, name, primary_domain, domain_status, site_prefix, status, suspended
      FROM sites WHERE id=? AND user_id=? AND deleted_at IS NULL`
   ).bind(siteId, user.id).first();
 
@@ -210,7 +210,7 @@ export async function onRequest({ request, env, params }) {
 
       // KV 캐시 갱신
       try {
-        const siteData = JSON.stringify({ id: siteId, name: site.name, status: 'active', suspended: 0 });
+        const siteData = JSON.stringify({ id: siteId, name: site.name, site_prefix: site.site_prefix || siteId, status: 'active', suspended: 0 });
         await env.CACHE.put(`site_domain:${domain}`, siteData, { expirationTtl: 86400 });
         await env.CACHE.put(`site_domain:www.${domain}`, siteData, { expirationTtl: 86400 });
       } catch (_) {}
