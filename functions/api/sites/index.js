@@ -12,56 +12,12 @@
 //
 //  결과: 사이트 생성 경로 D1 subrequest ~4회 → ~2회로 감소
 
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-};
-const _j = (d, s = 200) => new Response(JSON.stringify(d), {
-  status: s, headers: { 'Content-Type': 'application/json', ...CORS },
-});
-const ok  = (d = {}) => _j({ ok: true,  ...d });
-const err = (msg, s = 400) => _j({ ok: false, error: msg }, s);
+import { CORS, _j, ok, err, getToken, getUser, loadAllSettings, settingVal, genId } from './_shared.js';
 
-function getToken(req) {
-  const a = req.headers.get('Authorization') || '';
-  if (a.startsWith('Bearer ')) return a.slice(7);
-  const c = req.headers.get('Cookie') || '';
-  const m = c.match(/cp_session=([^;]+)/);
-  return m ? m[1] : null;
-}
-
-async function getUser(env, req) {
-  try {
-    if (!env || !env.SESSIONS || !env.DB) return null;
-    const t = getToken(req);
-    if (!t) return null;
-    const uid = await env.SESSIONS.get(`session:${t}`);
-    if (!uid) return null;
-    return await env.DB.prepare('SELECT id,name,email,role,plan FROM users WHERE id=?').bind(uid).first();
-  } catch { return null; }
 }
 
 // ── 설정 일괄 로드 (D1 1회 쿼리) ────────────────────────────────────────────
 // 반환: { key → value } 순수 JS 객체
-async function loadAllSettings(DB) {
-  try {
-    const { results } = await DB.prepare('SELECT key, value FROM settings').all();
-    const map = {};
-    for (const r of results || []) map[r.key] = r.value ?? '';
-    return map;
-  } catch { return {}; }
-}
-
-function settingVal(settings, key, fallback = '') {
-  const v = settings[key];
-  return (v != null && v !== '') ? v : fallback;
-}
-
-function genId() {
-  return 'site_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
 // s_ + 5자 영숫자 소문자 — CF 리소스 이름 / KV key에 안전
 function genPrefix() {
   const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
