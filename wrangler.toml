@@ -7,6 +7,7 @@
 # - CF_ACCOUNT_ID / CF_API_TOKEN은 wrangler secret put으로 설정
 
 name = "cloudpress-wp"
+main = "worker.js"
 compatibility_date = "2025-01-01"
 
 # nodejs_compat 제거 — 있으면 삭제
