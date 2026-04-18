@@ -543,6 +543,8 @@ function bundleCMSSources(sourceMap) {
 
   // ── 위상 정렬 (의존성 순서 결정) ────────────────────────────────────────────
   const importRe = /^import\s+(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/mg;
+  // multiline import 지원: import {\n  a,\n  b\n} from '...'
+  const importReMulti = /^import\s+\{[^}]*\}\s*from\s+['"]([^'"]+)['"]\s*;?\s*$/mgs;
   const visited  = new Set();
   const order    = [];
 
@@ -551,8 +553,22 @@ function bundleCMSSources(sourceMap) {
     visited.add(path);
     const src = sourceMap.get(path) || '';
     let m;
+    // single-line imports
     importRe.lastIndex = 0;
     while ((m = importRe.exec(src)) !== null) {
+      const dep = normalizeRelPath(path, m[1]);
+      if (sourceMap.has(dep)) visit(dep);
+    }
+    // multiline imports
+    importReMulti.lastIndex = 0;
+    while ((m = importReMulti.exec(src)) !== null) {
+      const dep = normalizeRelPath(path, m[1]);
+      if (sourceMap.has(dep)) visit(dep);
+    }
+    // export * from '...' (barrel re-exports)
+    const reExportRe = /^export\s+\*\s+(?:as\s+\w+\s+)?from\s+['"]([^'"]+)['"]\s*;?\s*$/mg;
+    reExportRe.lastIndex = 0;
+    while ((m = reExportRe.exec(src)) !== null) {
       const dep = normalizeRelPath(path, m[1]);
       if (sourceMap.has(dep)) visit(dep);
     }
@@ -631,8 +647,14 @@ function bundleCMSSources(sourceMap) {
     const path = order[idx];
     const src  = sourceMap.get(path) || '';
 
-    // 1) import 구문 전부 제거
-    let code = src.replace(/^import\s+(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+['"][^'"]+['"]\s*;?\s*\n?/mg, '');
+    // 1) import 구문 전부 제거 (single-line + multiline)
+    let code = src
+      // multiline: import {\n  a,\n  b\n} from '...'  (s 플래그로 . 이 \n 포함)
+      .replace(/^import\s+\{[^}]*\}\s*from\s+['"][^'"]+['"]\s*;?\s*\n?/mgs, '')
+      // single-line: import { a } from '...'  /  import * as X from '...'  /  import X from '...'
+      .replace(/^import\s+(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+['"][^'"]+['"]\s*;?\s*\n?/mg, '')
+      // side-effect: import '...'
+      .replace(/^import\s+['"][^'"]+['"]\s*;?\s*\n?/mg, '');
 
     // 2) export default: worker.js만 유지, 나머지 제거
     if (path !== 'worker.js') {
@@ -640,7 +662,8 @@ function bundleCMSSources(sourceMap) {
     }
 
     if (path !== 'worker.js') {
-      // 3) export { x } from '...' (re-export) 전체 제거
+      // 3) export * from '...'  및  export { x } from '...' (re-export) 전체 제거
+      code = code.replace(/^export\s+\*\s*(?:as\s+\w+\s+)?from\s+['"][^'"]*['"]\s*;?\s*\n?/mg, '');
       code = code.replace(/^export\s+\{[^}]*\}\s*(?:from\s+['"][^'"]*['"]\s*)?;?\s*\n?/mg, '');
 
       // 4) export 키워드만 제거 → 로컬 선언으로 전환
