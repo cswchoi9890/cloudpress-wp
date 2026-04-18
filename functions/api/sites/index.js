@@ -12,7 +12,7 @@
 //
 //  결과: 사이트 생성 경로 D1 subrequest ~4회 → ~2회로 감소
 
-import { CORS, _j, ok, err, getToken, getUser, loadAllSettings, settingVal, genId } from './_shared.js';
+import { CORS, _j, ok, err, getToken, getUser, loadAllSettings, settingVal, genId } from '../_shared.js';
 
 
 // ── 설정 일괄 로드 (D1 1회 쿼리) ────────────────────────────────────────────
