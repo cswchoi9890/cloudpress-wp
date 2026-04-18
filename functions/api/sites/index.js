@@ -134,7 +134,7 @@ export async function onRequestPost({ request, env }) {
   const siteId     = genId();
   const sitePrefix = genPrefix();
   const wpAdminPw  = genPw(20);
-  const wpAdminUrl = `https://${domain}/wp-admin/`;
+  const wpAdminUrl = `https://${domain}/cp-admin/`;
 
   // ── [D1 #2] DB 레코드 생성 (1회) ──────────────────────────────
   try {
