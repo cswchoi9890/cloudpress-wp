@@ -179,7 +179,7 @@ export async function onRequest({ request, env, params }) {
         { headers: { 'Authorization': 'Bearer ' + cfToken } }
       ).then(r => r.json()).catch(() => ({ result: [] }));
 
-      const workerName = settingVal(settings, 'cf_worker_name', 'cloudpress-proxy');
+      const workerName = site.worker_name || settingVal(settings, 'cf_worker_name', '');
       const hasRoute = routes.result?.some(r => r.script === workerName && r.pattern.includes(domain));
 
       if (hasRoute) {
