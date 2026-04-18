@@ -14,7 +14,6 @@
 
 import { CORS, _j, ok, err, getToken, getUser, loadAllSettings, settingVal, genId } from './_shared.js';
 
-}
 
 // ── 설정 일괄 로드 (D1 1회 쿼리) ────────────────────────────────────────────
 // 반환: { key → value } 순수 JS 객체
