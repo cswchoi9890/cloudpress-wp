@@ -28,11 +28,18 @@ function genPrefix() {
 }
 
 function genPw(len = 20) {
-  const chars = 'ABCDEFGHIJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%';
+  // URL-safe chars only, no ambiguous 0/O/I/l, no special chars that break env vars/URLs
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  const charsLen = chars.length; // 56 — 256/56=4 rem 32, reject b>=224 to eliminate modulo bias
+  const limit = Math.floor(256 / charsLen) * charsLen; // 224
   let pw = '';
-  const arr = new Uint8Array(len);
-  crypto.getRandomValues(arr);
-  for (const b of arr) pw += chars[b % chars.length];
+  while (pw.length < len) {
+    const arr = crypto.getRandomValues(new Uint8Array(len * 2));
+    for (const b of arr) {
+      if (b < limit) pw += chars[b % charsLen];
+      if (pw.length === len) break;
+    }
+  }
   return pw;
 }
 
@@ -134,7 +141,7 @@ export async function onRequestPost({ request, env }) {
   const siteId     = genId();
   const sitePrefix = genPrefix();
   const wpAdminPw  = genPw(20);
-  const wpAdminUrl = `https://${domain}/cp-admin/`;
+  const wpAdminUrl = `https://${domain}/wp-admin/`;
 
   // ── [D1 #2] DB 레코드 생성 (1회) ──────────────────────────────
   try {
