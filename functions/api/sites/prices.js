@@ -1,5 +1,5 @@
 // functions/api/sites/prices.js — 공개 플랜 가격 조회 API
-import { CORS, _j, ok, err } from './_shared.js';
+import { CORS, _j, ok, err } from '../_shared.js';
 
 export const onRequestOptions=()=>new Response(null,{status:204,headers:CORS});
 export async function onRequestGet({env}){
