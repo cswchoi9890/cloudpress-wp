@@ -588,7 +588,7 @@ function bundleCMSSources(sourceMap) {
     // → export 키워드만 떼어내 로컬 함수/변수로 전환
     if (path !== 'worker.js') {
       code = code.replace(/^export\s+((?:async\s+)?function|const|let|var|class)\s+/mg, '$1 ');
-      code = code.replace(/^export\s+\{[^}]*\}\s*;?\s*\n?/mg, '');
+      code = code.replace(/^export\s+\{[^}]*\}\s*(?:from\s+['"][^'"]*['"]\s*)?;?\s*\n?/mg, '');
     }
 
     parts.push(`// ── ${path} ──`);
