@@ -24,20 +24,11 @@
 //        GitHub tarball은 gzip이지만 CF Workers에서 fetch 시
 //        Content-Encoding: gzip 자동 디코딩 → ArrayBuffer는 이미 raw tar
 
+import { CORS, _j, ok, err, getToken, getUser, loadAllSettings, settingVal } from '../_shared.js';
+
 'use strict';
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
-const CORS = {
-  'Access-Control-Allow-Origin':  '*',
-  'Access-Control-Allow-Methods': 'POST,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-};
-
-const _j  = (d, s = 200) => new Response(JSON.stringify(d), {
-  status: s, headers: { 'Content-Type': 'application/json', ...CORS },
-});
-const ok  = (d)      => _j({ ok: true,  ...(d || {}) });
-const err = (msg, s) => _j({ ok: false, error: msg }, s || 400);
 
 // ── Cloudflare API ────────────────────────────────────────────────────────────
 const CF_API = 'https://api.cloudflare.com/client/v4';
@@ -81,40 +72,9 @@ function cfErrMsg(json) {
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
-function getToken(req) {
-  const a = req.headers.get('Authorization') || '';
-  if (a.startsWith('Bearer ')) return a.slice(7);
-  const c = req.headers.get('Cookie') || '';
-  const m = c.match(/cp_session=([^;]+)/);
-  return m ? m[1] : null;
-}
-
-async function getUser(env, req) {
-  try {
-    if (!env?.SESSIONS || !env?.DB) return null;
-    const t = getToken(req);
-    if (!t) return null;
-    const uid = await env.SESSIONS.get(`session:${t}`);
-    if (!uid) return null;
-    return await env.DB.prepare('SELECT id,name,email,role,plan FROM users WHERE id=?').bind(uid).first();
-  } catch { return null; }
 }
 
 // ── 설정 일괄 로드 (D1 1회 쿼리) ────────────────────────────────────────────
-async function loadAllSettings(DB) {
-  try {
-    const { results } = await DB.prepare('SELECT key, value FROM settings').all();
-    const map = {};
-    for (const r of results || []) map[r.key] = r.value ?? '';
-    return map;
-  } catch { return {}; }
-}
-
-function settingVal(settings, key, fallback = '') {
-  const v = settings[key];
-  return (v != null && v !== '') ? v : fallback;
-}
-
 // ── 사이트 상태 추적 (메모리) ─────────────────────────────────────────────────
 function makeSiteState(initial = {}) {
   const state = { ...initial };
@@ -570,10 +530,12 @@ async function fetchCMSSource(githubRepo, githubBranch, githubToken) {
  * @returns {string} bundled JS source
  */
 function bundleCMSSources(sourceMap) {
+  // 의존성 그래프 구성
+  const importRe = /^import\s+(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/mg;
 
-  // ── 상대경로 정규화 ─────────────────────────────────────────────────────────
   function normalizeRelPath(from, to) {
-    if (!to.startsWith('.')) return to; // 외부 모듈 무시
+    // from: 'cp-admin/index.js', to: '../cp-load.js'  → 'cp-load.js'
+    if (!to.startsWith('.')) return to; // 외부 모듈 (무시)
     const base  = from.split('/').slice(0, -1);
     const parts = to.split('/');
     for (const p of parts) {
@@ -583,20 +545,7 @@ function bundleCMSSources(sourceMap) {
     return base.join('/');
   }
 
-  // ── 소스에서 import 구문의 from 경로들을 추출 ──────────────────────────────
-  // 멀티라인 import { a,\n  b } from '...' 도 처리
-  function extractImports(src) {
-    const deps = [];
-    // 전체 import 구문을 하나의 정규식으로 추출 (s 플래그: . 이 \n 포함)
-    const re = /\bimport\s+(?:[^'"]*?)\s+from\s+(['"])([^'"]+)\1/gs;
-    let m;
-    while ((m = re.exec(src)) !== null) {
-      deps.push(m[2]);
-    }
-    return deps;
-  }
-
-  // ── 위상 정렬 (의존성 먼저) ────────────────────────────────────────────────
+  // 위상 정렬
   const visited = new Set();
   const order   = [];
 
@@ -604,58 +553,45 @@ function bundleCMSSources(sourceMap) {
     if (visited.has(path)) return;
     visited.add(path);
     const src = sourceMap.get(path) || '';
-    for (const specifier of extractImports(src)) {
-      const dep = normalizeRelPath(path, specifier);
+    let m;
+    importRe.lastIndex = 0;
+    while ((m = importRe.exec(src)) !== null) {
+      const dep = normalizeRelPath(path, m[1]);
       if (sourceMap.has(dep)) visit(dep);
     }
     order.push(path);
   }
 
+  // worker.js를 루트 엔트리로 시작
   visit('worker.js');
+  // 나머지 미방문 파일도 포함
   for (const path of sourceMap.keys()) visit(path);
-
-  // ── 소스 변환: import/export 제거 ─────────────────────────────────────────
-  function stripImportsAndExports(src, isEntry) {
-    let code = src;
-
-    // 1) import 구문 전부 제거 (멀티라인 포함)
-    //    import ... from '...' ; 또는 import '...'
-    code = code.replace(/\bimport\s+(?:[^'"]*?)\s+from\s+(['"])[^'"]+\1\s*;?/gs, '');
-    code = code.replace(/\bimport\s+(['"])[^'"]+\1\s*;?/g, '');
-
-    if (!isEntry) {
-      // 2) export default ... — 키워드만 제거
-      //    export default function / class / async function
-      code = code.replace(/^export\s+default\s+((?:async\s+)?(?:function|class)\b)/mg, '$1');
-      //    export default { ... } 또는 export default 표현식 — 키워드만 제거
-      code = code.replace(/^export\s+default\s+/mg, '');
-
-      // 3) export { name1, name2, ... } — 줄 전체 제거 (멀티라인 포함)
-      code = code.replace(/^export\s*\{[^}]*\}\s*(?:from\s+['"][^'"]+['"])?\s*;?\s*\n?/mgs, '');
-
-      // 4) export * from '...' — 줄 전체 제거
-      code = code.replace(/^export\s+\*\s+(?:as\s+\w+\s+)?from\s+['"][^'"]+['"]\s*;?\s*\n?/mg, '');
-
-      // 5) export function / export async function / export const 등 — export 키워드만 제거
-      code = code.replace(/^export\s+((?:async\s+)?(?:function\*?|class|const|let|var)\b)/mg, '$1');
-
-      // 6) 혹시 남은 export 라인 제거 (안전장치)
-      code = code.replace(/^export\s+\{[\s\S]*?\}\s*;?\s*\n?/mg, '');
-    }
-
-    return code;
-  }
 
   const parts = [
     '// CloudPress CMS — auto-bundled single-module build',
-    '// Generated by CloudPress Provisioner v17.1',
+    '// Generated by CloudPress Provisioner',
     '',
   ];
 
+  // import/export 구문 변환하여 concat
   for (const path of order) {
-    const src     = sourceMap.get(path) || '';
-    const isEntry = path === 'worker.js';
-    const code    = stripImportsAndExports(src, isEntry);
+    const src = sourceMap.get(path) || '';
+
+    // import 구문 전부 제거 (이미 인라인 포함되었으므로)
+    let code = src.replace(/^import\s+(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+['"][^'"]+['"]\s*;?\s*\n?/mg, '');
+
+    // worker.js만 'export default' 유지 — 나머지는 모두 제거
+    if (path !== 'worker.js') {
+      code = code.replace(/^export\s+default\s+/mg, '');
+    }
+
+    // worker.js 외 모든 파일의 named export / export {} 블록 제거
+    // → export 키워드만 떼어내 로컬 함수/변수로 전환
+    if (path !== 'worker.js') {
+      code = code.replace(/^export\s+((?:async\s+)?function|const|let|var|class)\s+/mg, '$1 ');
+      code = code.replace(/^export\s+\{[^}]*\}\s*;?\s*\n?/mg, '');
+    }
+
     parts.push(`// ── ${path} ──`);
     parts.push(code.trim());
     parts.push('');
