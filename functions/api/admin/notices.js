@@ -2,17 +2,7 @@
 // [수정사항]
 // - schema.sql 기준으로 컬럼명 일치: is_active→active, created_by/updated_at 컬럼 제거
 // - requireAdminOrMgr 유지 (매니저도 공지 관리 가능)
-/* ── utils ── */
-const CORS={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization'};
-const _j=(d,s=200)=>new Response(JSON.stringify(d),{status:s,headers:{'Content-Type':'application/json',...CORS}});
-const ok=(d={})=>_j({ok:true,...d});
-const err=(msg,s=400)=>_j({ok:false,error:msg},s);
-const handleOptions=()=>new Response(null,{status:204,headers:CORS});
-function getToken(req){const a=req.headers.get('Authorization')||'';if(a.startsWith('Bearer '))return a.slice(7);const c=req.headers.get('Cookie')||'';const m=c.match(/cp_session=([^;]+)/);return m?m[1]:null;}
-async function getUser(env,req){try{const t=getToken(req);if(!t)return null;const uid=await env.SESSIONS.get(`session:${t}`);if(!uid)return null;return await env.DB.prepare('SELECT id,name,email,role,plan FROM users WHERE id=?').bind(uid).first();}catch{return null;}}
-async function requireAdminOrMgr(env,req){const u=await getUser(env,req);return(u&&(u.role==='admin'||u.role==='manager'))?u:null;}
-function genId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,9);}
-/* ── end utils ── */
+import { CORS, _j, ok, err, handleOptions, getToken, getUser, requireAdminOrMgr, genId } from '../_shared.js';
 
 export const onRequestOptions = () => handleOptions();
 
