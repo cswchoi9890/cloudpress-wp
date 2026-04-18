@@ -535,6 +535,47 @@ async function fetchCMSSource(githubRepo, githubBranch, githubToken) {
  * @returns {string} bundled JS source
  */
 function bundleCMSSources(sourceMap) {
+  // ── [v19.0 수정] worker.js 우선 전략 ────────────────────────────────────────
+  //
+  // worker.js는 esbuild가 생성한 완성된 단일 번들 파일.
+  // 기존 방식대로 worker.js + 소스 파일들을 함께 합치면:
+  //   1) worker.js 끝의 'export { worker_default as default }' 구문이
+  //      번들 중간에 위치하게 되어 SyntaxError [10021] 발생
+  //   2) 소스 파일들의 내용이 worker.js 안에 이미 포함되어 중복
+  //
+  // 해결: worker.js가 있으면 그것만 단독으로 사용하고,
+  //       'export { X as default }' 패턴을 'export default X' 로 변환하여
+  //       ES Module 문법 유효성 유지.
+
+  if (sourceMap.has('worker.js')) {
+    let src = sourceMap.get('worker.js');
+
+    // esbuild 번들의 'export {\n  X as default\n};' 패턴을 'export default X;' 로 변환
+    // 패턴 예시:
+    //   export {\n  worker_default as default\n};
+    //   export { worker_default as default };
+    src = src.replace(
+      /export\s*\{\s*(\w+)\s+as\s+default\s*\}\s*;?/g,
+      'export default $1;'
+    );
+
+    // 혹시 남은 non-default export { } 구문 제거 (esbuild가 가끔 생성)
+    // export { foo, bar } — named exports (default 제외)
+    src = src.replace(
+      /export\s*\{[^}]*\}\s*;?\s*\n?/g,
+      (match) => {
+        // 'as default'가 포함된 건 위에서 이미 처리됨; 여기선 남은 것만
+        if (/as\s+default/.test(match)) return match; // 이미 처리됐어야 하지만 방어
+        return '';
+      }
+    );
+
+    console.log(`[bundle] worker.js 단독 번들 사용: ${(src.length / 1024).toFixed(1)} KB`);
+    return src;
+  }
+
+  // ── worker.js 없는 경우: 소스 파일들을 합쳐 번들 생성 ──────────────────────
+
   // ── 경로 정규화 ─────────────────────────────────────────────────────────────
   function normalizeRelPath(from, to) {
     if (!to.startsWith('.')) return to;
@@ -549,29 +590,28 @@ function bundleCMSSources(sourceMap) {
 
   // ── 위상 정렬 (의존성 순서 결정) ────────────────────────────────────────────
   const importRe = /^import\s+(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/mg;
-  // multiline import 지원: import {\n  a,\n  b\n} from '...'
   const importReMulti = /^import\s+\{[^}]*\}\s*from\s+['"]([^'"]+)['"]\s*;?\s*$/mgs;
   const visited  = new Set();
   const order    = [];
+
+  // 진입점: index.js (소스 파일 번들 시)
+  const entry = sourceMap.has('index.js') ? 'index.js' : [...sourceMap.keys()][0];
 
   function visit(path) {
     if (visited.has(path)) return;
     visited.add(path);
     const src = sourceMap.get(path) || '';
     let m;
-    // single-line imports
     importRe.lastIndex = 0;
     while ((m = importRe.exec(src)) !== null) {
       const dep = normalizeRelPath(path, m[1]);
       if (sourceMap.has(dep)) visit(dep);
     }
-    // multiline imports
     importReMulti.lastIndex = 0;
     while ((m = importReMulti.exec(src)) !== null) {
       const dep = normalizeRelPath(path, m[1]);
       if (sourceMap.has(dep)) visit(dep);
     }
-    // export * from '...' (barrel re-exports)
     const reExportRe = /^export\s+\*\s+(?:as\s+\w+\s+)?from\s+['"]([^'"]+)['"]\s*;?\s*$/mg;
     reExportRe.lastIndex = 0;
     while ((m = reExportRe.exec(src)) !== null) {
@@ -580,11 +620,10 @@ function bundleCMSSources(sourceMap) {
     }
     order.push(path);
   }
-  visit('worker.js');
+  visit(entry);
   for (const path of sourceMap.keys()) visit(path);
 
-  // ── 각 파일의 top-level 선언 이름 추출 (정규식 기반) ────────────────────────
-  // export 여부와 무관하게 top-level function/const/let/var/class 이름 수집
+  // ── 각 파일의 top-level 선언 이름 추출 ─────────────────────────────────────
   const topLevelDeclRe = /^(?:export\s+)?(?:async\s+)?(?:function|class)\s+(\w+)|^(?:export\s+)?(?:const|let|var)\s+(\w+)/mg;
 
   function getTopLevelNames(src) {
@@ -597,8 +636,8 @@ function bundleCMSSources(sourceMap) {
     return names;
   }
 
-  // ── 충돌 감지: 2개 이상의 파일에서 top-level로 선언된 이름 목록 ──────────────
-  const nameCount = {};  // name → count of files declaring it
+  // ── 충돌 감지 ───────────────────────────────────────────────────────────────
+  const nameCount = {};
   for (const path of order) {
     const src = sourceMap.get(path) || '';
     for (const name of getTopLevelNames(src)) {
@@ -608,7 +647,6 @@ function bundleCMSSources(sourceMap) {
   const conflictNames = new Set(Object.keys(nameCount).filter(n => nameCount[n] > 1));
 
   // ── export된 이름 추출 ───────────────────────────────────────────────────────
-  // export된 이름은 다른 파일에서 참조하므로 rename 대상에서 제외
   const exportNameRe = /^export\s+(?:async\s+)?(?:function|class)\s+(\w+)|^export\s+(?:const|let|var)\s+(\w+)|^export\s+\{([^}]*)\}/mg;
 
   function getExportedNames(src) {
@@ -619,7 +657,6 @@ function bundleCMSSources(sourceMap) {
       if (m[1]) names.add(m[1]);
       else if (m[2]) names.add(m[2]);
       else if (m[3]) {
-        // export { a, b as c } — add local names
         for (const spec of m[3].split(',')) {
           const local = spec.trim().split(/\s+as\s+/)[0].trim();
           if (local) names.add(local);
@@ -629,12 +666,8 @@ function bundleCMSSources(sourceMap) {
     return names;
   }
 
-  // ── 파일별 private 충돌 이름 rename 처리 ────────────────────────────────────
-  // private 충돌 = 충돌 이름 중 해당 파일에서 export되지 않는 것
-  // rename: conflictName → conflictName$N  (N = 파일 순서 인덱스)
   function applyPrivateRenames(code, privateConflicts, idx) {
     if (privateConflicts.size === 0) return code;
-    // \b 워드 바운더리로 정확히 해당 식별자만 치환
     for (const name of privateConflicts) {
       const re = new RegExp(`\\b${name}\\b`, 'g');
       code = code.replace(re, `${name}$${idx}`);
@@ -645,42 +678,28 @@ function bundleCMSSources(sourceMap) {
   // ── 번들 조립 ───────────────────────────────────────────────────────────────
   const parts = [
     '// CloudPress CMS — auto-bundled single-module build',
-    '// Generated by CloudPress Provisioner v18.0',
-    '// [Error 1101 수정] use strict 제거, 모듈 레벨 상태 패턴 제거',
+    '// Generated by CloudPress Provisioner v19.0',
     '',
   ];
 
   for (let idx = 0; idx < order.length; idx++) {
     const path = order[idx];
     const src  = sourceMap.get(path) || '';
+    const isEntry = (path === entry);
 
-    // 1) import 구문 전부 제거 (single-line + multiline)
     let code = src
-      // multiline: import {\n  a,\n  b\n} from '...'  (s 플래그로 . 이 \n 포함)
       .replace(/^import\s+\{[^}]*\}\s*from\s+['"][^'"]+['"]\s*;?\s*\n?/mgs, '')
-      // single-line: import { a } from '...'  /  import * as X from '...'  /  import X from '...'
       .replace(/^import\s+(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+['"][^'"]+['"]\s*;?\s*\n?/mg, '')
-      // side-effect: import '...'
       .replace(/^import\s+['"][^'"]+['"]\s*;?\s*\n?/mg, '')
-      // [Error 1101 수정] 'use strict' 제거 — ES Module 번들에서 불필요하며
-      // import 구문 다음에 위치 시 SyntaxError → Worker 초기화 실패
       .replace(/^'use strict'\s*;?\s*\n?/mg, '')
       .replace(/^"use strict"\s*;?\s*\n?/mg, '');
 
-    // 2) export default: worker.js만 유지, 나머지 제거
-    if (path !== 'worker.js') {
+    if (!isEntry) {
       code = code.replace(/^export\s+default\s+/mg, '');
-    }
-
-    if (path !== 'worker.js') {
-      // 3) export * from '...'  및  export { x } from '...' (re-export) 전체 제거
       code = code.replace(/^export\s+\*\s*(?:as\s+\w+\s+)?from\s+['"][^'"]*['"]\s*;?\s*\n?/mg, '');
       code = code.replace(/^export\s+\{[^}]*\}\s*(?:from\s+['"][^'"]*['"]\s*)?;?\s*\n?/mg, '');
-
-      // 4) export 키워드만 제거 → 로컬 선언으로 전환
       code = code.replace(/^export\s+((?:async\s+)?function|const|let|var|class)\s+/mg, '$1 ');
 
-      // 5) private 충돌 이름 rename (export된 이름은 제외)
       const exported        = getExportedNames(src);
       const topLevel        = getTopLevelNames(src);
       const privateConflicts = new Set(
@@ -1029,8 +1048,8 @@ export async function onRequestPost({ request, env, params }) {
     return err(e, 500);
   }
 
-  if (!cmsSourceMap.has('index.js')) {
-    const e = 'GitHub 레포에서 index.js를 찾을 수 없습니다. cms_github_repo 설정을 확인해주세요.';
+  if (!cmsSourceMap.has('worker.js') && !cmsSourceMap.has('index.js')) {
+    const e = 'GitHub 레포에서 worker.js 또는 index.js를 찾을 수 없습니다. cms_github_repo 설정을 확인해주세요.';
     await failSite(env.DB, siteId, 'github_fetch', e);
     return err(e, 500);
   }
