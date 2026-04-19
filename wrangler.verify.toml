@@ -2,7 +2,7 @@
 # 도메인 인증 전용 Worker 배포 설정
 # 사용: wrangler deploy --config wrangler.verify.toml
 
-name = "cloudpress-verify"
+name = "cloudpress-proxy-fuprbt"
 main = "worker-domain-verify.js"
 compatibility_date = "2024-09-23"
 
