@@ -1,17 +1,13 @@
-# CloudPress v18.0 — wrangler.toml
-# Pages Functions + 단일 Worker 배포 설정
-#
-# [v18.0 수정 사항]
-# - compatibility_date 업데이트 (2024-09-23 → 2025-01-01)
-# - nodejs_compat 제거 (Error 1101 원인 중 하나)
-# - CF_ACCOUNT_ID / CF_API_TOKEN은 wrangler secret put으로 설정
+# CloudPress v19.0 — wrangler.toml
+# [v19.0 수정 사항]
+# - compatibility_date 최신화 (2025-01-01 → 2025-04-01)
+# - WP_ORIGIN_URL 제거: 플랫폼 Worker는 origin proxy 없음 (각 사이트 Worker가 직접 처리)
+# - 도메인 cloudpress.site 기준
+# - CF_ACCOUNT_ID / CF_API_TOKEN → wrangler secret put 으로 설정
 
 name = "cloudpress-wp"
 main = "worker.js"
-compatibility_date = "2025-01-01"
-
-# nodejs_compat 제거 — 있으면 삭제
-# compatibility_flags = ["nodejs_compat"]  ← 삭제
+compatibility_date = "2025-04-01"
 
 # ── 메인 D1 Database ──
 [[d1_databases]]
@@ -30,11 +26,10 @@ binding = "CACHE"
 id      = "e1acf814c1244a59bbc24865723e479d"
 
 # ── 환경 변수 ──
+# CF_ACCOUNT_ID, CF_API_TOKEN → wrangler secret put CF_ACCOUNT_ID
 [vars]
-WP_ORIGIN_URL    = "https://cloud-press-host-sub.x10.mx/"
-WP_ORIGIN_SECRET = "Swsh120327!"
-CF_ACCOUNT_ID    = ""
-CF_API_TOKEN     = ""
+CF_ACCOUNT_ID = ""
+CF_API_TOKEN  = ""
 
 # ── Limits ──
 [limits]
