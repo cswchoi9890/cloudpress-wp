@@ -771,24 +771,34 @@ async function uploadWorkerWithCMSSource(auth, accountId, workerName, opts, cmsS
     bindings.push({ type: 'secret_text', name: 'CF_API_TOKEN', text: cfApiToken });
   }
 
-  // [수정] nodejs_compat 제거 — CMS 소스가 Web API만 사용하므로 불필요
-  // nodejs_compat 플래그는 Worker 초기화 시 내부 오류([10021])를 유발할 수 있음
+  // [v19.0] Script 모드 메타데이터
+  // - main_module 제거: Script 형식(addEventListener)에서 main_module은 ESM 전용 → 오류 원인
+  // - compatibility_date 최신화
+  // - usage_model: 'standard' — 기본값 명시
   const metadata = {
-    main_module:        'worker.js',
-    compatibility_date: '2024-09-23',
+    compatibility_date: '2025-04-01',
+    usage_model:        'standard',
     bindings,
   };
 
-  // [수정] 모든 JS 파일을 단일 번들로 합침
-  // 이유: CF Workers Upload API에서 다중 ES Module 업로드 시
-  //       슬래시 포함 경로(cp-admin/index.js)를 모듈 name으로 처리 못해
-  //       [10021] internal error 발생
+  // [v19.0] CMS worker.js는 GitHub에서 받은 완전히 번들된 단일 파일
+  // → bundleCMSSources() 재번들은 불필요하며 오히려 export/import 처리 오류 유발
+  // → cmsSourceMap에서 worker.js를 직접 사용 (이미 addEventListener 기반 Script 포맷)
   let bundledSource;
-  try {
-    bundledSource = bundleCMSSources(cmsSourceMap);
-    console.log(`[provision] 번들 완료: ${(bundledSource.length / 1024).toFixed(1)} KB`);
-  } catch (e) {
-    return { ok: false, error: 'JS 번들 오류: ' + e.message };
+  if (cmsSourceMap && cmsSourceMap.has('worker.js')) {
+    bundledSource = cmsSourceMap.get('worker.js');
+    console.log(`[provision] CMS worker.js 직접 사용: ${(bundledSource.length / 1024).toFixed(1)} KB`);
+  } else {
+    // fallback: 소스맵이 없거나 worker.js가 없으면 번들 시도
+    try {
+      bundledSource = bundleCMSSources(cmsSourceMap || new Map());
+      console.log(`[provision] 번들 fallback 완료: ${(bundledSource.length / 1024).toFixed(1)} KB`);
+    } catch (e) {
+      return { ok: false, error: 'JS 번들 오류: ' + e.message };
+    }
+  }
+  if (!bundledSource || bundledSource.length < 100) {
+    return { ok: false, error: 'CMS 소스가 비어 있습니다. GitHub에서 올바르게 다운로드되었는지 확인하세요.' };
   }
 
   const boundary = '----CPUpload' + Date.now().toString(36) + randSuffix(4);
@@ -806,7 +816,7 @@ async function uploadWorkerWithCMSSource(auth, accountId, workerName, opts, cmsS
   const scriptPart = enc.encode(
     `--${boundary}${CRLF}` +
     `Content-Disposition: form-data; name="worker.js"; filename="worker.js"${CRLF}` +
-    `Content-Type: application/javascript+module${CRLF}${CRLF}` +
+    `Content-Type: application/javascript${CRLF}${CRLF}` +
     bundledSource + CRLF
   );
 
