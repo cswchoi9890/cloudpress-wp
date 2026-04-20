@@ -771,13 +771,13 @@ async function uploadWorkerWithCMSSource(auth, accountId, workerName, opts, cmsS
     bindings.push({ type: 'secret_text', name: 'CF_API_TOKEN', text: cfApiToken });
   }
 
-  // [v19.0] Script 모드 메타데이터
-  // - main_module 제거: Script 형식(addEventListener)에서 main_module은 ESM 전용 → 오류 원인
-  // - compatibility_date 최신화
-  // - usage_model: 'standard' — 기본값 명시
+  // [v20.0] ESM 모듈 메타데이터
+  // main_module 필수: multipart upload API에서 main_module | body_part | assets 중 하나 없으면
+  // [10021] "multipart uploads must contain a readable body_part, main_module, or assets" 에러
+  // worker.js 파일명이 form-data name="worker.js"와 일치해야 CF가 진입점으로 인식
   const metadata = {
+    main_module:        'worker.js',
     compatibility_date: '2025-04-01',
-    usage_model:        'standard',
     bindings,
   };
 
@@ -816,7 +816,7 @@ async function uploadWorkerWithCMSSource(auth, accountId, workerName, opts, cmsS
   const scriptPart = enc.encode(
     `--${boundary}${CRLF}` +
     `Content-Disposition: form-data; name="worker.js"; filename="worker.js"${CRLF}` +
-    `Content-Type: application/javascript${CRLF}${CRLF}` +
+    `Content-Type: application/javascript+module${CRLF}${CRLF}` +
     bundledSource + CRLF
   );
 
