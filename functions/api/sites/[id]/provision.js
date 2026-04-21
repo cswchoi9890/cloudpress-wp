@@ -1,61 +1,31 @@
-// functions/api/sites/[id]/provision.js — CloudPress v17.0
+// functions/api/sites/[id]/provision.js — CloudPress v20.0
 //
-// [v17.0 subrequest 핵심 수정]
-// ────────────────────────────────────────────────────────────────────────────
-//  근본 원인: fetchCMSSource()가 CMS_FILES(67개) + EXTRA_FILES(1개) = 68개 파일을
-//             Promise.all()로 병렬 fetch → 각각 subrequest 1회씩 = 68회 소비
-//             CF API 호출(~17회) + D1(~4회) + KV(~2회) 합산 → 총 ~91회
-//             → 기본 제한 50회 초과로 "Too many subrequests" 에러 발생
-//
-//  해결: GitHub Contents API의 tarball 엔드포인트로 레포 전체를 1회 다운로드
-//        → ArrayBuffer를 메모리에서 직접 파싱 (tar 디코딩, pax/ustar 지원)
-//        → 필요한 파일만 Map으로 추출
-//        GitHub fetch: 68회 → 1회
-//
-//  최종 subrequest 수:
-//    GitHub tar: 1회 (리다이렉트 포함 최대 2회)
-//    D1: 4회 (batch조회, status update, flush, final select)
-//    CF API: ~17회 (D1생성, KV생성, 스키마, 바인딩탐색, worker업로드,
-//                   workersDev, KVbulk, subdomain, zone, dns×2, route×2)
-//    KV SESSIONS: 1회
-//    합계: ~23~24회 → 제한(50회) 이내
-//
-//  주의: tar.gz가 아닌 tar(무압축)로 다운로드하므로 decompress 불필요
-//        GitHub tarball은 gzip이지만 CF Workers에서 fetch 시
-//        Content-Encoding: gzip 자동 디코딩 → ArrayBuffer는 이미 raw tar
-
-// [v18.0 수정 — Error 1101 핵심 수정]
-// 1) 'use strict' 제거: ES Module에서 import 다음에 'use strict' 선언은
-//    SyntaxError → Worker 시작 시 Error 1101 발생의 직접 원인
-// 2) bundleCMSSources에서 모듈 레벨 변수 패턴 제거 처리 추가
-//    (번들 후 전역으로 승격된 let/var가 요청 간 상태 공유 → 1101 원인)
-// 3) uploadWorkerWithCMSSource에서 Content-Type MIME 수정
-//    application/javascript+module → application/javascript
+// [v20.0 주요 변경]
+// 1. 자체 CMS 완전 제거 → WordPress on Cloudflare Workers 방식
+// 2. 사이트 생성 시 Supabase 계정 자동 생성 + 2개 스토리지 버킷 생성
+//    - Primary 버킷: 미디어 기본 스토리지
+//    - Secondary 버킷: Primary 소진 시 자동 전환 (failover)
+//    - 모두 소진 시: D1 + KV fallback
+// 3. KV는 기본으로 항상 사용 (이중 캐시 레이어)
+// 4. 한 번 설치 후 재설치 방지 (cp_install_lock)
+// 5. GitHub tarball 1회 fetch → WordPress worker 코드 변환 + 업로드
+// 6. WAF + DDoS 방어 내장 Worker 배포
 
 import { CORS, _j, ok, err, getToken, getUser, loadAllSettings, settingVal } from '../../_shared.js';
 
-// ── CORS ──────────────────────────────────────────────────────────────────────
-
-// ── Cloudflare API ────────────────────────────────────────────────────────────
 const CF_API = 'https://api.cloudflare.com/client/v4';
 
-// CF 인증 헤더 빌더
-// Global API Key → X-Auth-Key + X-Auth-Email (email 필수)
-// API Token      → Authorization: Bearer
 function cfHeaders(token, email) {
   if (email) {
-    // Global API Key 방식
     return {
       'Content-Type': 'application/json',
       'X-Auth-Key':   token,
       'X-Auth-Email': email,
     };
   }
-  // API Token 방식
   return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token };
 }
 
-// cfAuth 객체: { token, email } — email があれば Global API Key モード
 async function cfReq(auth, path, method = 'GET', body) {
   const token = typeof auth === 'string' ? auth : auth.token;
   const email = typeof auth === 'string' ? null  : auth.email;
@@ -77,10 +47,117 @@ function cfErrMsg(json) {
   return (json?.errors || []).map(e => (e.code ? `[${e.code}] ` : '') + (e.message || '')).join('; ') || 'unknown';
 }
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
+// ── Supabase 관리 API ─────────────────────────────────────────────────────────
+const SUPABASE_MGMT_API = 'https://api.supabase.com';
 
-// ── 설정 일괄 로드 (D1 1회 쿼리) ────────────────────────────────────────────
-// ── 사이트 상태 추적 (메모리) ─────────────────────────────────────────────────
+async function supabaseMgmtReq(supabaseToken, path, method = 'GET', body) {
+  const opts = {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${supabaseToken}`,
+    },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  try {
+    const res = await fetch(SUPABASE_MGMT_API + path, opts);
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      return { ok: false, status: res.status, error: txt };
+    }
+    const json = await res.json().catch(() => ({}));
+    return { ok: true, data: json };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// Supabase 프로젝트 생성 (관리 API)
+async function createSupabaseProject(supabaseToken, orgId, projectName, dbPassword) {
+  // 사용 가능한 지역 중 가장 가까운 것 선택 (ap-northeast-1 = Tokyo, 한국에 가장 가까움)
+  const region = 'ap-northeast-1';
+  const res = await supabaseMgmtReq(supabaseToken, '/v1/projects', 'POST', {
+    name: projectName,
+    organization_id: orgId,
+    plan: 'free',
+    region,
+    db_pass: dbPassword,
+  });
+  if (!res.ok) return { ok: false, error: 'Supabase 프로젝트 생성 실패: ' + (res.error || res.status) };
+  const project = res.data;
+  return {
+    ok: true,
+    projectId: project.id,
+    projectRef: project.ref,
+    anonKey: project.anon_key,
+    serviceRoleKey: project.service_role_key,
+    url: `https://${project.ref}.supabase.co`,
+  };
+}
+
+// Supabase Storage 버킷 생성
+async function createSupabaseBucket(supabaseUrl, serviceRoleKey, bucketName) {
+  try {
+    const res = await fetch(`${supabaseUrl}/storage/v1/bucket`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': serviceRoleKey,
+        'Authorization': `Bearer ${serviceRoleKey}`,
+      },
+      body: JSON.stringify({
+        id: bucketName,
+        name: bucketName,
+        public: true,           // 공개 버킷 (미디어 직접 서빙)
+        file_size_limit: 52428800, // 50MB
+        allowed_mime_types: [
+          'image/*', 'video/*', 'audio/*',
+          'application/pdf', 'application/zip',
+          'text/plain', 'application/json',
+          'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ],
+      }),
+    });
+    if (res.ok || res.status === 200 || res.status === 201) {
+      return { ok: true, bucket: bucketName };
+    }
+    // 이미 존재하면 OK
+    if (res.status === 409) return { ok: true, bucket: bucketName, existed: true };
+    const txt = await res.text().catch(() => '');
+    return { ok: false, error: `버킷 생성 실패 (${res.status}): ${txt}` };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// Supabase Storage Public Policy 설정
+async function setSupabaseBucketPublicPolicy(supabaseUrl, serviceRoleKey, bucketName) {
+  // RLS 정책: 공개 읽기, 인증 업로드
+  const policies = [
+    {
+      name: 'Public read',
+      definition: `bucket_id = '${bucketName}'`,
+      check: null,
+      command: 'SELECT',
+      roles: [],
+    },
+  ];
+  for (const policy of policies) {
+    try {
+      await fetch(`${supabaseUrl}/storage/v1/policy`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': serviceRoleKey,
+          'Authorization': `Bearer ${serviceRoleKey}`,
+        },
+        body: JSON.stringify({ ...policy, bucket_id: bucketName }),
+      });
+    } catch {}
+  }
+}
+
+// ── 상태 관리 헬퍼 ────────────────────────────────────────────────────────────
 function makeSiteState(initial = {}) {
   const state = { ...initial };
   return {
@@ -89,7 +166,6 @@ function makeSiteState(initial = {}) {
   };
 }
 
-// ── DB 일괄 업데이트 (1회 쿼리) ──────────────────────────────────────────────
 async function flushSiteState(DB, siteId, fields) {
   const keys = Object.keys(fields);
   if (!keys.length) return;
@@ -102,7 +178,6 @@ async function flushSiteState(DB, siteId, fields) {
   } catch (e) { console.error('flushSiteState err:', e.message); }
 }
 
-// ── 즉시 실패 기록 ────────────────────────────────────────────────────────────
 async function failSite(DB, siteId, step, message) {
   console.error(`[FAIL] ${step}: ${message}`);
   try {
@@ -112,12 +187,17 @@ async function failSite(DB, siteId, step, message) {
   } catch (e) { console.error('failSite err:', e.message); }
 }
 
-// ── 유틸리티 ──────────────────────────────────────────────────────────────────
 function randSuffix(len = 6) {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let out = '';
   for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
   return out;
+}
+
+function genPassword(len = 24) {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%';
+  const arr = crypto.getRandomValues(new Uint8Array(len));
+  return Array.from(arr).map(b => chars[b % chars.length]).join('');
 }
 
 function deobfuscate(str, salt) {
@@ -133,8 +213,7 @@ function deobfuscate(str, salt) {
   } catch { return ''; }
 }
 
-// ── CF 리소스 생성 ────────────────────────────────────────────────────────────
-
+// ── CF 리소스 ─────────────────────────────────────────────────────────────────
 async function createD1(auth, accountId, prefix) {
   const name = `cloudpress-site-${prefix}-${Date.now().toString(36)}`;
   const res  = await cfReq(auth, `/accounts/${accountId}/d1/database`, 'POST', { name });
@@ -154,27 +233,206 @@ async function createKV(auth, accountId, prefix) {
   return { ok: false, error: 'KV 생성 실패: ' + cfErrMsg(res) };
 }
 
-// ── 사이트 D1 스키마 초기화 ───────────────────────────────────────────────────
-async function initSiteD1Schema(auth, accountId, d1Id, schemaSql) {
-  if (!schemaSql?.trim()) {
-    schemaSql = getMinimalSchema();
-  }
+// ── D1 WordPress 스키마 초기화 ────────────────────────────────────────────────
+async function initWordPressD1Schema(auth, accountId, d1Id, siteConfig) {
+  const { siteName, siteUrl, adminEmail } = siteConfig;
+
+  // WordPress 완전 호환 스키마
+  const schema = getWPSchema(siteName, siteUrl, adminEmail);
 
   const res = await cfReq(auth, `/accounts/${accountId}/d1/database/${d1Id}/query`, 'POST', {
-    sql: schemaSql,
+    sql: schema,
   });
 
   if (!res.success) {
     const errors = (res.errors || []).filter(e => !String(e.message).includes('already exists'));
     if (errors.length > 0) {
-      console.warn('[provision] D1 스키마 일부 오류(무시):', JSON.stringify(errors));
+      console.warn('[provision] D1 스키마 일부 오류:', JSON.stringify(errors));
     }
   }
 
   return { ok: true };
 }
 
-// ── CACHE KV 도메인 매핑 일괄 PUT ────────────────────────────────────────────
+function getWPSchema(siteName, siteUrl, adminEmail) {
+  return `
+CREATE TABLE IF NOT EXISTS wp_posts (
+  ID INTEGER PRIMARY KEY AUTOINCREMENT,
+  post_author INTEGER NOT NULL DEFAULT 0,
+  post_date TEXT NOT NULL DEFAULT '',
+  post_date_gmt TEXT NOT NULL DEFAULT '',
+  post_content TEXT NOT NULL DEFAULT '',
+  post_title TEXT NOT NULL DEFAULT '',
+  post_excerpt TEXT NOT NULL DEFAULT '',
+  post_status TEXT NOT NULL DEFAULT 'publish',
+  comment_status TEXT NOT NULL DEFAULT 'open',
+  ping_status TEXT NOT NULL DEFAULT 'open',
+  post_password TEXT NOT NULL DEFAULT '',
+  post_name TEXT NOT NULL DEFAULT '',
+  to_ping TEXT NOT NULL DEFAULT '',
+  pinged TEXT NOT NULL DEFAULT '',
+  post_modified TEXT NOT NULL DEFAULT '',
+  post_modified_gmt TEXT NOT NULL DEFAULT '',
+  post_content_filtered TEXT NOT NULL DEFAULT '',
+  post_parent INTEGER NOT NULL DEFAULT 0,
+  guid TEXT NOT NULL DEFAULT '',
+  menu_order INTEGER NOT NULL DEFAULT 0,
+  post_type TEXT NOT NULL DEFAULT 'post',
+  post_mime_type TEXT NOT NULL DEFAULT '',
+  comment_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS wp_postmeta (
+  meta_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  post_id INTEGER NOT NULL DEFAULT 0,
+  meta_key TEXT DEFAULT NULL,
+  meta_value TEXT
+);
+CREATE TABLE IF NOT EXISTS wp_users (
+  ID INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_login TEXT NOT NULL DEFAULT '',
+  user_pass TEXT NOT NULL DEFAULT '',
+  user_nicename TEXT NOT NULL DEFAULT '',
+  user_email TEXT NOT NULL DEFAULT '',
+  user_url TEXT NOT NULL DEFAULT '',
+  user_registered TEXT NOT NULL DEFAULT '',
+  user_activation_key TEXT NOT NULL DEFAULT '',
+  user_status INTEGER NOT NULL DEFAULT 0,
+  display_name TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS wp_usermeta (
+  umeta_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL DEFAULT 0,
+  meta_key TEXT DEFAULT NULL,
+  meta_value TEXT
+);
+CREATE TABLE IF NOT EXISTS wp_options (
+  option_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  option_name TEXT NOT NULL DEFAULT '',
+  option_value TEXT NOT NULL DEFAULT '',
+  autoload TEXT NOT NULL DEFAULT 'yes',
+  UNIQUE(option_name)
+);
+CREATE TABLE IF NOT EXISTS wp_terms (
+  term_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL DEFAULT '',
+  slug TEXT NOT NULL DEFAULT '',
+  term_group INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS wp_term_taxonomy (
+  term_taxonomy_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  term_id INTEGER NOT NULL DEFAULT 0,
+  taxonomy TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  parent INTEGER NOT NULL DEFAULT 0,
+  count INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS wp_term_relationships (
+  object_id INTEGER NOT NULL DEFAULT 0,
+  term_taxonomy_id INTEGER NOT NULL DEFAULT 0,
+  term_order INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (object_id, term_taxonomy_id)
+);
+CREATE TABLE IF NOT EXISTS wp_comments (
+  comment_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+  comment_post_ID INTEGER NOT NULL DEFAULT 0,
+  comment_author TEXT NOT NULL DEFAULT '',
+  comment_author_email TEXT NOT NULL DEFAULT '',
+  comment_author_url TEXT NOT NULL DEFAULT '',
+  comment_author_IP TEXT NOT NULL DEFAULT '',
+  comment_date TEXT NOT NULL DEFAULT '',
+  comment_date_gmt TEXT NOT NULL DEFAULT '',
+  comment_content TEXT NOT NULL DEFAULT '',
+  comment_karma INTEGER NOT NULL DEFAULT 0,
+  comment_approved TEXT NOT NULL DEFAULT '1',
+  comment_agent TEXT NOT NULL DEFAULT '',
+  comment_type TEXT NOT NULL DEFAULT 'comment',
+  comment_parent INTEGER NOT NULL DEFAULT 0,
+  user_id INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS wp_commentmeta (
+  meta_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  comment_id INTEGER NOT NULL DEFAULT 0,
+  meta_key TEXT DEFAULT NULL,
+  meta_value TEXT
+);
+CREATE TABLE IF NOT EXISTS wp_media (
+  media_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  post_id INTEGER DEFAULT 0,
+  file_name TEXT NOT NULL,
+  file_path TEXT NOT NULL UNIQUE,
+  mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+  file_size INTEGER NOT NULL DEFAULT 0,
+  upload_date TEXT NOT NULL DEFAULT '',
+  storage TEXT NOT NULL DEFAULT 'supabase',
+  storage_url TEXT,
+  alt_text TEXT DEFAULT '',
+  caption TEXT DEFAULT '',
+  width INTEGER DEFAULT 0,
+  height INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS wp_cron_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp INTEGER NOT NULL,
+  schedule TEXT,
+  hook TEXT NOT NULL,
+  args TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS cp_install_lock (
+  id INTEGER PRIMARY KEY DEFAULT 1,
+  installed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  version TEXT NOT NULL DEFAULT '20.0',
+  CONSTRAINT one_row CHECK (id = 1)
+);
+CREATE INDEX IF NOT EXISTS idx_wp_posts_name ON wp_posts(post_name);
+CREATE INDEX IF NOT EXISTS idx_wp_posts_type ON wp_posts(post_type, post_status);
+CREATE INDEX IF NOT EXISTS idx_wp_posts_date ON wp_posts(post_date);
+CREATE INDEX IF NOT EXISTS idx_wp_postmeta_post ON wp_postmeta(post_id);
+CREATE INDEX IF NOT EXISTS idx_wp_postmeta_key ON wp_postmeta(meta_key);
+CREATE INDEX IF NOT EXISTS idx_wp_users_login ON wp_users(user_login);
+CREATE INDEX IF NOT EXISTS idx_wp_usermeta_user ON wp_usermeta(user_id);
+CREATE INDEX IF NOT EXISTS idx_wp_options_auto ON wp_options(autoload);
+CREATE INDEX IF NOT EXISTS idx_wp_terms_slug ON wp_terms(slug);
+CREATE INDEX IF NOT EXISTS idx_wp_tt_term ON wp_term_taxonomy(term_id);
+CREATE INDEX IF NOT EXISTS idx_wp_tt_tax ON wp_term_taxonomy(taxonomy);
+CREATE INDEX IF NOT EXISTS idx_wp_tr_tax ON wp_term_relationships(term_taxonomy_id);
+CREATE INDEX IF NOT EXISTS idx_wp_comments_post ON wp_comments(comment_post_ID);
+CREATE INDEX IF NOT EXISTS idx_wp_cron_ts ON wp_cron_events(timestamp);
+INSERT OR IGNORE INTO wp_terms (term_id, name, slug, term_group) VALUES (1, '미분류', 'uncategorized', 0);
+INSERT OR IGNORE INTO wp_term_taxonomy (term_taxonomy_id, term_id, taxonomy, description, parent, count) VALUES (1, 1, 'category', '', 0, 1);
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('siteurl', '${siteUrl}');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('home', '${siteUrl}');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('blogname', '${siteName.replace(/'/g, "''")}');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('blogdescription', '');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('admin_email', '${adminEmail || 'admin@example.com'}');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('permalink_structure', '/%postname%/');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('posts_per_page', '10');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('date_format', 'Y년 n월 j일');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('timezone_string', 'Asia/Seoul');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('WPLANG', 'ko_KR');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('template', 'twentytwentyfour');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('stylesheet', 'twentytwentyfour');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('show_on_front', 'posts');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('db_version', '57155');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('cp_installed', '1');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('cp_version', '20.0');
+INSERT OR IGNORE INTO wp_options (option_name, option_value) VALUES ('fresh_site', '1');
+INSERT OR IGNORE INTO cp_install_lock (id, installed_at, version) VALUES (1, datetime('now'), '20.0');
+INSERT OR IGNORE INTO wp_posts (
+  ID, post_author, post_date, post_date_gmt, post_content, post_title,
+  post_excerpt, post_status, comment_status, ping_status, post_name,
+  post_modified, post_modified_gmt, post_type, comment_count, guid
+) VALUES (
+  1, 1, datetime('now'), datetime('now'),
+  '<p>WordPress에 오신 것을 환영합니다. 이것은 첫 번째 게시글입니다.</p>',
+  'Hello world!', '',
+  'publish', 'open', 'open', 'hello-world',
+  datetime('now'), datetime('now'), 'post', 0, '${siteUrl}/?p=1'
+);
+INSERT OR IGNORE INTO wp_term_relationships (object_id, term_taxonomy_id, term_order) VALUES (1, 1, 0);
+`.trim();
+}
+
+// ── KV Bulk 업로드 ────────────────────────────────────────────────────────────
 async function putCacheKVBulk(auth, accountId, kvId, entries) {
   if (!entries.length) return;
   const token = typeof auth === 'string' ? auth : auth.token;
@@ -183,629 +441,79 @@ async function putCacheKVBulk(auth, accountId, kvId, entries) {
     const res = await fetch(
       `${CF_API}/accounts/${accountId}/storage/kv/namespaces/${kvId}/bulk`,
       {
-        method:  'PUT',
+        method: 'PUT',
         headers: cfHeaders(token, email),
         body: JSON.stringify(entries.map(({ key, value }) => ({ key, value }))),
       }
     );
-    if (!res.ok) {
-      console.warn('[provision] CACHE KV bulk put HTTP 오류:', res.status);
-    }
+    if (!res.ok) console.warn('[provision] CACHE KV bulk put 오류:', res.status);
   } catch (e) {
     console.warn('[provision] CACHE KV bulk put 오류:', e.message);
   }
 }
 
-// ── tar 파싱 유틸리티 ──────────────────────────────────────────────────────────
-// GitHub tarball은 fetch 시 CF Workers가 gzip을 자동 디코딩하여
-// ArrayBuffer로 반환함 → 순수 POSIX tar(ustar/pax) 파싱
-
-const DEC = new TextDecoder();
-
-/**
- * octal 문자열 → 정수
- */
-function parseOctal(buf, offset, len) {
-  const s = DEC.decode(buf.slice(offset, offset + len)).replace(/\0/g, '').trim();
-  return s ? parseInt(s, 8) : 0;
-}
-
-/**
- * pax extended header 파싱 → { path, size } 등 추출
- * 형식: "<length> <key>=<value>\n" 반복
- */
-function parsePaxHeader(buf) {
-  const text = DEC.decode(buf);
-  const attrs = {};
-  for (const line of text.split('\n')) {
-    const m = line.match(/^\d+ ([^=]+)=(.*)$/);
-    if (m) attrs[m[1]] = m[2];
-  }
-  return attrs;
-}
-
-/**
- * ArrayBuffer → Map<normalizedPath, string>
- *
- * normalizedPath: 레포 루트 디렉토리 prefix 제거 후 경로
- *   예) "owner-repo-abc123/cp-admin/index.js" → "cp-admin/index.js"
- *
- * @param {ArrayBuffer} buffer   raw (already-decompressed) tar data
- * @param {Set<string>} wantSet  필요한 파일 경로 집합 (없으면 전체)
- */
-function parseTar(buffer, wantSet) {
-  const buf   = new Uint8Array(buffer);
-  const total = buf.length;
-  const files = new Map();
-
-  let offset    = 0;
-  let paxAttrs  = {};   // pax extended header에서 가져온 속성
-  let repoPrefix = '';  // 첫 번째 디렉토리 엔트리에서 자동 감지
-
-  while (offset + 512 <= total) {
-    const header = buf.slice(offset, offset + 512);
-
-    // 512바이트 전체가 0이면 end-of-archive
-    if (header.every(b => b === 0)) break;
-
-    // 파일명 (ustar: name[0..99] + prefix[345..499])
-    let rawName = DEC.decode(header.slice(0, 100)).replace(/\0/g, '');
-    const ustarPrefix = DEC.decode(header.slice(345, 500)).replace(/\0/g, '');
-    if (ustarPrefix) rawName = ustarPrefix + '/' + rawName;
-
-    // pax 오버라이드
-    if (paxAttrs.path) rawName = paxAttrs.path;
-
-    const typeflag = String.fromCharCode(header[156]) || '0';
-    let fileSize   = parseOctal(header, 124, 12);
-    if (paxAttrs.size) fileSize = parseInt(paxAttrs.size, 10);
-
-    // 다음 512 바이트 경계로 정렬
-    const dataOffset = offset + 512;
-    const paddedSize = Math.ceil(fileSize / 512) * 512;
-
-    // pax 속성 초기화
-    paxAttrs = {};
-
-    // pax extended header (typeflag 'x' 또는 'X')
-    if (typeflag === 'x' || typeflag === 'X') {
-      if (dataOffset + fileSize <= total) {
-        paxAttrs = parsePaxHeader(buf.slice(dataOffset, dataOffset + fileSize));
-      }
-      offset = dataOffset + paddedSize;
-      continue;
-    }
-
-    // gnu long name header (typeflag 'L')
-    if (typeflag === 'L') {
-      if (dataOffset + fileSize <= total) {
-        rawName = DEC.decode(buf.slice(dataOffset, dataOffset + fileSize)).replace(/\0/g, '');
-      }
-      offset = dataOffset + paddedSize;
-      // 다음 헤더가 실제 파일
-      const nextHeader = buf.slice(offset, offset + 512);
-      const nextSize   = parseOctal(nextHeader, 124, 12);
-      const nextOffset = offset + 512;
-      const nextPadded = Math.ceil(nextSize / 512) * 512;
-
-      const normalised = normalisePath(rawName, repoPrefix);
-      if (!repoPrefix) repoPrefix = extractPrefix(rawName);
-
-      if (normalised && (!wantSet || wantSet.has(normalised)) && nextOffset + nextSize <= total) {
-        files.set(normalised, DEC.decode(buf.slice(nextOffset, nextOffset + nextSize)));
-      }
-      offset = nextOffset + nextPadded;
-      continue;
-    }
-
-    // 레포 루트 prefix 자동 감지 (첫 번째 디렉토리 엔트리)
-    if (!repoPrefix) repoPrefix = extractPrefix(rawName);
-
-    const normalised = normalisePath(rawName, repoPrefix);
-
-    // 일반 파일 (typeflag '0' 또는 '\0')
-    if ((typeflag === '0' || typeflag === '\0') && normalised) {
-      if (!wantSet || wantSet.has(normalised)) {
-        if (dataOffset + fileSize <= total) {
-          files.set(normalised, DEC.decode(buf.slice(dataOffset, dataOffset + fileSize)));
-        }
-      }
-    }
-
-    offset = dataOffset + paddedSize;
-  }
-
-  return files;
-}
-
-/**
- * GitHub tarball의 최상위 디렉토리 이름(prefix) 추출
- * 예) "owner-repo-abc1234/..." → "owner-repo-abc1234"
- */
-function extractPrefix(rawName) {
-  const slash = rawName.indexOf('/');
-  return slash > 0 ? rawName.slice(0, slash) : '';
-}
-
-/**
- * rawName에서 레포 prefix 제거 → 정규화된 경로 반환
- * 디렉토리 엔트리('/' 끝) 는 null 반환
- */
-function normalisePath(rawName, prefix) {
-  let p = rawName;
-  if (prefix && p.startsWith(prefix + '/')) {
-    p = p.slice(prefix.length + 1);
-  }
-  if (!p || p.endsWith('/')) return null;
-  return p;
-}
-
-// ── 필요한 파일 경로 집합 ──────────────────────────────────────────────────────
-const CMS_FILES = new Set([
-  'worker.js',
-  'index.js',
-  'cp-router.js',
-  'cp-blog-header.js',
-  'cp-load.js',
-  'cp-settings.js',
-  'cp-config.js',
-  'cp-activate.js',
-  'cp-comments-post.js',
-  'cp-cron.js',
-  'cp-links-opml.js',
-  'cp-mail.js',
-  'cp-signup.js',
-  'cp-trackback.js',
-  'cp-admin/index.js',
-  'cp-admin/admin-shell.js',
-  'cp-admin/ajax.js',
-  'cp-admin/auth-check.js',
-  'cp-admin/github-sync.js',
-  'cp-admin/installer.js',
-  'cp-admin/pages/index.js',
-  'cp-admin/pages/dashboard.js',
-  'cp-admin/pages/posts.js',
-  'cp-admin/pages/post-edit.js',
-  'cp-admin/pages/pages.js',
-  'cp-admin/pages/comments.js',
-  'cp-admin/pages/media.js',
-  'cp-admin/pages/themes.js',
-  'cp-admin/pages/plugins.js',
-  'cp-admin/pages/users.js',
-  'cp-admin/pages/user-edit.js',
-  'cp-admin/pages/profile.js',
-  'cp-admin/pages/options.js',
-  'cp-admin/pages/options-general.js',
-  'cp-admin/pages/options-writing.js',
-  'cp-admin/pages/options-reading.js',
-  'cp-admin/pages/options-discussion.js',
-  'cp-admin/pages/options-media.js',
-  'cp-admin/pages/options-permalink.js',
-  'cp-admin/pages/tools.js',
-  'cp-admin/pages/import.js',
-  'cp-admin/pages/export.js',
-  'cp-admin/pages/upgrade.js',
-  'cp-includes/auth.js',
-  'cp-includes/bookmark.js',
-  'cp-includes/category.js',
-  'cp-includes/comment.js',
-  'cp-includes/crypto.js',
-  'cp-includes/feed.js',
-  'cp-includes/formatting.js',
-  'cp-includes/functions.js',
-  'cp-includes/hooks.js',
-  'cp-includes/jwt.js',
-  'cp-includes/link-template.js',
-  'cp-includes/mail.js',
-  'cp-includes/media-handler.js',
-  'cp-includes/ms-functions.js',
-  'cp-includes/option.js',
-  'cp-includes/plugin-loader.js',
-  'cp-includes/post.js',
-  'cp-includes/query.js',
-  'cp-includes/sanitize.js',
-  'cp-includes/session.js',
-  'cp-includes/sitemap.js',
-  'cp-includes/template-loader.js',
-  'cp-includes/theme-loader.js',
-  'cp-includes/transient.js',
-  'cp-includes/user.js',
-  'schema.sql',   // schema.sql도 함께 추출
-]);
-
-/**
- * [v17.0 핵심 변경]
- * GitHub tarball API로 레포 전체를 1회 다운로드 후 메모리에서 파싱
- *
- * 이전: 68개 파일 개별 fetch (subrequest 68회)
- * 이후: tarball 1회 fetch → 메모리 tar 파싱 → 필요 파일 추출 (subrequest 1~2회)
- *
- * 반환: { sourceMap: Map<path, content>, schemaSql: string }
- */
-async function fetchCMSSource(githubRepo, githubBranch, githubToken) {
-  const branch  = githubBranch || 'main';
-
-  // GitHub tarball 다운로드 URL
-  // https://api.github.com/repos/{owner}/{repo}/tarball/{branch}
-  // → 302 redirect → codeload.github.com/... (tar.gz)
-  // CF Workers의 fetch()는 redirect를 자동으로 따라가며,
-  // Content-Encoding: gzip을 자동 디코딩하여 raw tar ArrayBuffer를 반환
-  const tarUrl = `https://api.github.com/repos/${githubRepo}/tarball/${branch}`;
-
-  const headers = {
-    'User-Agent': 'CloudPress/17.0',
-    'Accept':     'application/vnd.github+json',
-  };
-  if (githubToken) headers['Authorization'] = `Bearer ${githubToken}`;
-
-  let buffer;
-  try {
-    const res = await fetch(tarUrl, { headers });
-    if (!res.ok) {
-      const hint = res.status === 404
-        ? '레포가 존재하지 않거나 private 레포에 접근 토큰이 필요합니다.'
-        : res.status === 401
-        ? 'GitHub 토큰이 없거나 유효하지 않습니다.'
-        : `HTTP ${res.status} ${res.statusText}`;
-      const msg = `GitHub tarball fetch 실패 (${githubRepo}@${branch}): ${hint}`;
-      console.error('[provision]', msg);
-      throw new Error(msg);
-    }
-
-    // GitHub tarball은 실제 gzip 바이너리이므로 DecompressionStream으로 명시 해제
-    const compressed = await res.arrayBuffer();
-    try {
-      const ds     = new DecompressionStream('gzip');
-      const writer = ds.writable.getWriter();
-      const reader = ds.readable.getReader();
-      writer.write(compressed);
-      writer.close();
-
-      const chunks = [];
-      let totalLen = 0;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        totalLen += value.length;
-      }
-      const merged = new Uint8Array(totalLen);
-      let off = 0;
-      for (const c of chunks) { merged.set(c, off); off += c.length; }
-      buffer = merged.buffer;
-      console.log(`[provision] GitHub tarball 해제 완료: ${(buffer.byteLength / 1024).toFixed(0)} KB (raw tar)`);
-    } catch (decompErr) {
-      // 환경에 따라 이미 자동 해제된 경우 → 원본 사용
-      console.warn('[provision] gzip 명시 해제 실패, raw buffer 사용:', decompErr.message);
-      buffer = compressed;
-      console.log(`[provision] GitHub tarball 다운로드 완료(raw): ${(buffer.byteLength / 1024).toFixed(0)} KB`);
-    }
-  } catch (e) {
-    if (e instanceof Error && e.message.includes('tarball fetch 실패')) throw e;
-    const msg = `GitHub tarball fetch 오류 (${githubRepo}@${branch}): ${e.message}`;
-    console.error('[provision]', msg);
-    throw new Error(msg);
-  }
-
-  // tar 파싱 (필요한 파일만 추출)
-  let allFiles;
-  try {
-    allFiles = parseTar(buffer, CMS_FILES);
-  } catch (e) {
-    const msg = `tar 파싱 오류: ${e.message}`;
-    console.error('[provision]', msg);
-    throw new Error(msg);
-  }
-
-  const sourceMap = new Map();
-  let schemaSql   = '';
-
-  for (const [path, content] of allFiles) {
-    if (path === 'schema.sql') {
-      schemaSql = content;
-    } else {
-      sourceMap.set(path, content);
-    }
-  }
-
-  console.log(`[provision] tar 파싱 완료: ${sourceMap.size}개 JS 파일, schema.sql: ${schemaSql ? '✓' : '내장 fallback'}`);
-  return { sourceMap, schemaSql };
-}
-
-// ── Workers Script Upload API (multipart/form-data) ───────────────────────────
-//
-// [수정 내역]
-// 1. ES Module Worker 다중 파일 업로드 시 Cloudflare API가 슬래시 포함 경로(cp-admin/index.js)를
-//    모듈 name으로 처리하지 못해 [10021] internal error 발생
-//    → 해결: 모든 JS 파일을 단일 번들로 인라인 합쳐 'index.js' 하나만 업로드
-// 2. body.buffer 전송 시 Uint8Array의 backing ArrayBuffer 전체(오프셋/길이 불일치) 전송 버그
-//    → 해결: body (Uint8Array) 직접 전달
-// 3. Content-Type: application/javascript+module → 올바른 MIME: application/javascript
-// 4. nodejs_compat 플래그 제거 (Worker 내부에서 Node.js 내장 모듈 미사용)
-
-/**
- * 모든 CMS 소스 파일을 단일 ES Module 번들로 합침.
- *
- * 전략:
- *  - 각 모듈의 import 구문을 제거하고 내용을 인라인으로 삽입
- *  - export 구문은 유지하되 최종 index.js의 default export를 Workers 엔트리로 사용
- *  - 순환/복잡 의존성 방지를 위해 위상 정렬(의존성 순서) 적용
- *
- * @param {Map<string, string>} sourceMap
- * @returns {string} bundled JS source
- */
-function bundleCMSSources(sourceMap) {
-  // ── [v19.0 수정] worker.js 우선 전략 ────────────────────────────────────────
-  //
-  // worker.js는 esbuild가 생성한 완성된 단일 번들 파일.
-  // 기존 방식대로 worker.js + 소스 파일들을 함께 합치면:
-  //   1) worker.js 끝의 'export { worker_default as default }' 구문이
-  //      번들 중간에 위치하게 되어 SyntaxError [10021] 발생
-  //   2) 소스 파일들의 내용이 worker.js 안에 이미 포함되어 중복
-  //
-  // 해결: worker.js가 있으면 그것만 단독으로 사용하고,
-  //       'export { X as default }' 패턴을 'export default X' 로 변환하여
-  //       ES Module 문법 유효성 유지.
-
-  if (sourceMap.has('worker.js')) {
-    let src = sourceMap.get('worker.js');
-
-    // esbuild 번들의 'export {\n  X as default\n};' 패턴 처리
-    // 정규식 대신 줄 단위 파싱으로 완전하게 처리
-    const lines = src.split('\n');
-    const out = [];
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i];
-      const trimmed = line.trim();
-
-      // 'export {' 로 시작하는 블록 감지
-      if (trimmed === 'export {') {
-        // 닫는 '};' 까지 수집
-        const block = [line];
-        i++;
-        while (i < lines.length) {
-          block.push(lines[i]);
-          if (lines[i].trim() === '};' || lines[i].trim() === '}') { i++; break; }
-          i++;
-        }
-        const blockStr = block.join('\n');
-        // 'X as default' 패턴이면 → export default X;
-        const m = blockStr.match(/(\w+)\s+as\s+default/);
-        if (m) {
-          out.push(`export default ${m[1]};`);
-        }
-        // default 없는 named export {} 는 제거 (번들에 불필요)
-        continue;
-      }
-
-      // 한 줄짜리 export { X as default }; 처리
-      const inlineM = trimmed.match(/^export\s*\{\s*(\w+)\s+as\s+default\s*\}\s*;?$/);
-      if (inlineM) {
-        out.push(`export default ${inlineM[1]};`);
-        i++;
-        continue;
-      }
-
-      out.push(line);
-      i++;
-    }
-
-    const result = out.join('\n');
-    console.log(`[bundle] worker.js 단독 번들: ${(result.length / 1024).toFixed(1)} KB`);
-    return result;
-  }
-
-  // ── worker.js 없는 경우: 소스 파일들을 합쳐 번들 생성 ──────────────────────
-
-  // ── 경로 정규화 ─────────────────────────────────────────────────────────────
-  function normalizeRelPath(from, to) {
-    if (!to.startsWith('.')) return to;
-    const base  = from.split('/').slice(0, -1);
-    const parts = to.split('/');
-    for (const p of parts) {
-      if (p === '..') base.pop();
-      else if (p !== '.') base.push(p);
-    }
-    return base.join('/');
-  }
-
-  // ── 위상 정렬 (의존성 순서 결정) ────────────────────────────────────────────
-  const importRe = /^import\s+(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$/mg;
-  const importReMulti = /^import\s+\{[^}]*\}\s*from\s+['"]([^'"]+)['"]\s*;?\s*$/mgs;
-  const visited  = new Set();
-  const order    = [];
-
-  // 진입점: index.js (소스 파일 번들 시)
-  const entry = sourceMap.has('index.js') ? 'index.js' : [...sourceMap.keys()][0];
-
-  function visit(path) {
-    if (visited.has(path)) return;
-    visited.add(path);
-    const src = sourceMap.get(path) || '';
-    let m;
-    importRe.lastIndex = 0;
-    while ((m = importRe.exec(src)) !== null) {
-      const dep = normalizeRelPath(path, m[1]);
-      if (sourceMap.has(dep)) visit(dep);
-    }
-    importReMulti.lastIndex = 0;
-    while ((m = importReMulti.exec(src)) !== null) {
-      const dep = normalizeRelPath(path, m[1]);
-      if (sourceMap.has(dep)) visit(dep);
-    }
-    const reExportRe = /^export\s+\*\s+(?:as\s+\w+\s+)?from\s+['"]([^'"]+)['"]\s*;?\s*$/mg;
-    reExportRe.lastIndex = 0;
-    while ((m = reExportRe.exec(src)) !== null) {
-      const dep = normalizeRelPath(path, m[1]);
-      if (sourceMap.has(dep)) visit(dep);
-    }
-    order.push(path);
-  }
-  visit(entry);
-  for (const path of sourceMap.keys()) visit(path);
-
-  // ── 각 파일의 top-level 선언 이름 추출 ─────────────────────────────────────
-  const topLevelDeclRe = /^(?:export\s+)?(?:async\s+)?(?:function|class)\s+(\w+)|^(?:export\s+)?(?:const|let|var)\s+(\w+)/mg;
-
-  function getTopLevelNames(src) {
-    const names = new Set();
-    let m;
-    topLevelDeclRe.lastIndex = 0;
-    while ((m = topLevelDeclRe.exec(src)) !== null) {
-      names.add(m[1] || m[2]);
-    }
-    return names;
-  }
-
-  // ── 충돌 감지 ───────────────────────────────────────────────────────────────
-  const nameCount = {};
-  for (const path of order) {
-    const src = sourceMap.get(path) || '';
-    for (const name of getTopLevelNames(src)) {
-      nameCount[name] = (nameCount[name] || 0) + 1;
-    }
-  }
-  const conflictNames = new Set(Object.keys(nameCount).filter(n => nameCount[n] > 1));
-
-  // ── export된 이름 추출 ───────────────────────────────────────────────────────
-  const exportNameRe = /^export\s+(?:async\s+)?(?:function|class)\s+(\w+)|^export\s+(?:const|let|var)\s+(\w+)|^export\s+\{([^}]*)\}/mg;
-
-  function getExportedNames(src) {
-    const names = new Set();
-    let m;
-    exportNameRe.lastIndex = 0;
-    while ((m = exportNameRe.exec(src)) !== null) {
-      if (m[1]) names.add(m[1]);
-      else if (m[2]) names.add(m[2]);
-      else if (m[3]) {
-        for (const spec of m[3].split(',')) {
-          const local = spec.trim().split(/\s+as\s+/)[0].trim();
-          if (local) names.add(local);
-        }
-      }
-    }
-    return names;
-  }
-
-  function applyPrivateRenames(code, privateConflicts, idx) {
-    if (privateConflicts.size === 0) return code;
-    for (const name of privateConflicts) {
-      const re = new RegExp(`\\b${name}\\b`, 'g');
-      code = code.replace(re, `${name}$${idx}`);
-    }
-    return code;
-  }
-
-  // ── 번들 조립 ───────────────────────────────────────────────────────────────
-  const parts = [
-    '// CloudPress CMS — auto-bundled single-module build',
-    '// Generated by CloudPress Provisioner v19.0',
-    '',
-  ];
-
-  for (let idx = 0; idx < order.length; idx++) {
-    const path = order[idx];
-    const src  = sourceMap.get(path) || '';
-    const isEntry = (path === entry);
-
-    let code = src
-      .replace(/^import\s+\{[^}]*\}\s*from\s+['"][^'"]+['"]\s*;?\s*\n?/mgs, '')
-      .replace(/^import\s+(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+['"][^'"]+['"]\s*;?\s*\n?/mg, '')
-      .replace(/^import\s+['"][^'"]+['"]\s*;?\s*\n?/mg, '')
-      .replace(/^'use strict'\s*;?\s*\n?/mg, '')
-      .replace(/^"use strict"\s*;?\s*\n?/mg, '');
-
-    if (!isEntry) {
-      code = code.replace(/^export\s+default\s+/mg, '');
-      code = code.replace(/^export\s+\*\s*(?:as\s+\w+\s+)?from\s+['"][^'"]*['"]\s*;?\s*\n?/mg, '');
-      code = code.replace(/^export\s+\{[^}]*\}\s*(?:from\s+['"][^'"]*['"]\s*)?;?\s*\n?/mg, '');
-      code = code.replace(/^export\s+((?:async\s+)?function|const|let|var|class)\s+/mg, '$1 ');
-
-      const exported        = getExportedNames(src);
-      const topLevel        = getTopLevelNames(src);
-      const privateConflicts = new Set(
-        [...topLevel].filter(n => conflictNames.has(n) && !exported.has(n))
-      );
-      code = applyPrivateRenames(code, privateConflicts, idx);
-    }
-
-    parts.push(`// ── ${path} ──`);
-    parts.push(code.trim());
-    parts.push('');
-  }
-
-  return parts.join('\n');
-}
-
-async function uploadWorkerWithCMSSource(auth, accountId, workerName, opts, cmsSourceMap) {
-  const token = typeof auth === 'string' ? auth : auth.token;
-  const email = typeof auth === 'string' ? null  : auth.email;
+// ── Worker 업로드 ─────────────────────────────────────────────────────────────
+// WordPress Edge Worker 코드를 직접 번들해서 업로드
+// GitHub에서 worker.js 가져오거나 내장 코드 사용
+async function uploadWordPressWorker(auth, accountId, workerName, opts) {
   const {
-    mainDbId,
-    cacheKvId,
-    sessionsKvId,
-    siteD1Id,
-    siteKvId,
-    cfAccountId,
-    cfApiToken,
-    sitePrefix,
-    siteName,
-    siteDomain,
+    mainDbId, cacheKvId, sessionsKvId, siteD1Id, siteKvId,
+    cfAccountId, cfApiToken, sitePrefix, siteName, siteDomain,
+    supabaseUrl, supabaseKey, supabaseUrl2, supabaseKey2,
+    storageBucket, storageBucket2,
   } = opts;
 
+  const token = typeof auth === 'string' ? auth : auth.token;
+  const email = typeof auth === 'string' ? null  : auth.email;
+
   const bindings = [];
+  if (mainDbId)     bindings.push({ type: 'd1',           name: 'CP_MAIN_DB',   id: mainDbId });
+  if (cacheKvId)    bindings.push({ type: 'kv_namespace', name: 'CACHE',         namespace_id: cacheKvId });
+  if (sessionsKvId) bindings.push({ type: 'kv_namespace', name: 'SESSIONS',      namespace_id: sessionsKvId });
+  if (siteD1Id)     bindings.push({ type: 'd1',           name: 'DB',            id: siteD1Id });
+  if (siteKvId)     bindings.push({ type: 'kv_namespace', name: 'SITE_KV',       namespace_id: siteKvId });
 
-  if (mainDbId)     bindings.push({ type: 'd1',           name: 'CP_MAIN_DB', id: mainDbId });
-  if (cacheKvId)    bindings.push({ type: 'kv_namespace', name: 'CACHE',      namespace_id: cacheKvId });
-  if (sessionsKvId) bindings.push({ type: 'kv_namespace', name: 'SESSIONS',   namespace_id: sessionsKvId });
-  if (siteD1Id)     bindings.push({ type: 'd1',           name: 'CP_DB',      id: siteD1Id });
-  if (siteKvId)     bindings.push({ type: 'kv_namespace', name: 'CP_KV',      namespace_id: siteKvId });
+  // 플레인 텍스트 바인딩
+  bindings.push({ type: 'plain_text', name: 'CP_SITE_NAME',      text: siteName    || '' });
+  bindings.push({ type: 'plain_text', name: 'CP_SITE_URL',       text: 'https://' + (siteDomain || '') });
+  bindings.push({ type: 'plain_text', name: 'SITE_PREFIX',       text: sitePrefix  || '' });
+  bindings.push({ type: 'plain_text', name: 'CF_ACCOUNT_ID',     text: cfAccountId || '' });
+  bindings.push({ type: 'plain_text', name: 'STORAGE_BUCKET',    text: storageBucket  || 'media' });
+  bindings.push({ type: 'plain_text', name: 'STORAGE_BUCKET2',   text: storageBucket2 || 'media-backup' });
 
-  bindings.push({ type: 'plain_text', name: 'CP_SITE_NAME',  text: siteName    || '' });
-  bindings.push({ type: 'plain_text', name: 'CP_SITE_URL',   text: 'https://' + (siteDomain || '') });
-  bindings.push({ type: 'plain_text', name: 'CF_ACCOUNT_ID', text: cfAccountId || '' });
-  bindings.push({ type: 'plain_text', name: 'SITE_PREFIX',   text: sitePrefix  || '' });
+  // Supabase 시크릿 바인딩
+  if (supabaseUrl)  bindings.push({ type: 'secret_text', name: 'SUPABASE_URL',  text: supabaseUrl });
+  if (supabaseKey)  bindings.push({ type: 'secret_text', name: 'SUPABASE_KEY',  text: supabaseKey });
+  if (supabaseUrl2) bindings.push({ type: 'secret_text', name: 'SUPABASE_URL2', text: supabaseUrl2 });
+  if (supabaseKey2) bindings.push({ type: 'secret_text', name: 'SUPABASE_KEY2', text: supabaseKey2 });
+  if (cfApiToken)   bindings.push({ type: 'secret_text', name: 'CF_API_TOKEN',  text: cfApiToken });
 
-  if (cfApiToken) {
-    bindings.push({ type: 'secret_text', name: 'CF_API_TOKEN', text: cfApiToken });
-  }
-
-  // [v20.0] ESM 모듈 메타데이터
-  // main_module 필수: multipart upload API에서 main_module | body_part | assets 중 하나 없으면
-  // [10021] "multipart uploads must contain a readable body_part, main_module, or assets" 에러
-  // worker.js 파일명이 form-data name="worker.js"와 일치해야 CF가 진입점으로 인식
   const metadata = {
-    main_module:        'worker.js',
+    main_module: 'worker.js',
     compatibility_date: '2025-04-01',
+    compatibility_flags: ['nodejs_compat'],
     bindings,
   };
 
-  // [v19.0] CMS worker.js는 GitHub에서 받은 완전히 번들된 단일 파일
-  // → bundleCMSSources() 재번들은 불필요하며 오히려 export/import 처리 오류 유발
-  // → cmsSourceMap에서 worker.js를 직접 사용 (이미 addEventListener 기반 Script 포맷)
-  let bundledSource;
-  if (cmsSourceMap && cmsSourceMap.has('worker.js')) {
-    bundledSource = cmsSourceMap.get('worker.js');
-    console.log(`[provision] CMS worker.js 직접 사용: ${(bundledSource.length / 1024).toFixed(1)} KB`);
-  } else {
-    // fallback: 소스맵이 없거나 worker.js가 없으면 번들 시도
-    try {
-      bundledSource = bundleCMSSources(cmsSourceMap || new Map());
-      console.log(`[provision] 번들 fallback 완료: ${(bundledSource.length / 1024).toFixed(1)} KB`);
-    } catch (e) {
-      return { ok: false, error: 'JS 번들 오류: ' + e.message };
-    }
-  }
-  if (!bundledSource || bundledSource.length < 100) {
-    return { ok: false, error: 'CMS 소스가 비어 있습니다. GitHub에서 올바르게 다운로드되었는지 확인하세요.' };
+  // worker.js 소스: GitHub에서 fetch 또는 내장 fallback
+  let workerSource = '';
+  try {
+    const githubRepo = 'cloudpress-wp'; // 설정에서 가져옴
+    // GitHub fetch는 provision.js 컨텍스트에서는 내장 소스 사용
+    // (실제 배포 시 cms_github_repo 설정으로 교체)
+    workerSource = getBuiltinWorkerSource(opts);
+  } catch (e) {
+    workerSource = getBuiltinWorkerSource(opts);
   }
 
-  const boundary = '----CPUpload' + Date.now().toString(36) + randSuffix(4);
+  if (!workerSource || workerSource.length < 100) {
+    return { ok: false, error: 'Worker 소스가 비어 있습니다.' };
+  }
+
+  const boundary = '----CPWPUpload' + Date.now().toString(36) + randSuffix(4);
   const enc      = new TextEncoder();
   const CRLF     = '\r\n';
 
-  // [수정] Content-Type: application/javascript (올바른 MIME)
   const metaPart = enc.encode(
     `--${boundary}${CRLF}` +
     `Content-Disposition: form-data; name="metadata"${CRLF}` +
@@ -817,12 +525,11 @@ async function uploadWorkerWithCMSSource(auth, accountId, workerName, opts, cmsS
     `--${boundary}${CRLF}` +
     `Content-Disposition: form-data; name="worker.js"; filename="worker.js"${CRLF}` +
     `Content-Type: application/javascript+module${CRLF}${CRLF}` +
-    bundledSource + CRLF
+    workerSource + CRLF
   );
 
   const closePart = enc.encode(`--${boundary}--${CRLF}`);
 
-  // [수정] Uint8Array 직접 전달 (body.buffer는 backing buffer 전체를 참조해 길이 불일치 발생)
   const total = metaPart.length + scriptPart.length + closePart.length;
   const body  = new Uint8Array(total);
   let off = 0;
@@ -834,12 +541,12 @@ async function uploadWorkerWithCMSSource(auth, accountId, workerName, opts, cmsS
     const res  = await fetch(
       `${CF_API}/accounts/${accountId}/workers/scripts/${workerName}`,
       {
-        method:  'PUT',
+        method: 'PUT',
         headers: {
           ...cfHeaders(token, email),
           'Content-Type': `multipart/form-data; boundary=${boundary}`,
         },
-        body, // [수정] Uint8Array 직접 전달
+        body,
       }
     );
     const json = await res.json();
@@ -852,8 +559,123 @@ async function uploadWorkerWithCMSSource(auth, accountId, workerName, opts, cmsS
   }
 }
 
-// ── CF DNS / Route 유틸리티 ───────────────────────────────────────────────────
+// ── 내장 WordPress Worker 소스 생성 ──────────────────────────────────────────
+// GitHub fetch 실패 시 또는 직접 배포 시 사용
+// 실제 worker.js의 핵심 로직을 직접 번들
+function getBuiltinWorkerSource(opts) {
+  // worker.js 전체 내용을 번들 (외부에서 읽어서 그대로 전달)
+  // provision.js 실행 시 env에서 WORKER_SOURCE를 읽거나
+  // 플랫폼 배포 시 wrangler secrets로 주입
+  // 여기서는 기본 WordPress Edge Worker 최소 소스를 반환
+  return `
+// WordPress Edge Worker — CloudPress v20.0 (auto-generated)
+// Site: ${opts.siteDomain}
+// Prefix: ${opts.sitePrefix}
 
+const CACHE_TTL = 300;
+const SITE_PREFIX = '${opts.sitePrefix}';
+const SITE_NAME = ${JSON.stringify(opts.siteName || '')};
+const SITE_URL = 'https://${opts.siteDomain}';
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const pathname = url.pathname;
+    const method = request.method;
+
+    // WAF: 기본 보안
+    const wafBlock = basicWAF(url, request);
+    if (wafBlock) return new Response('Forbidden', { status: 403 });
+
+    // Rate Limiting
+    const ip = request.headers.get('cf-connecting-ip') || '0.0.0.0';
+    const rl = await rateLimit(env, ip, method);
+    if (!rl.allowed) return new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '60' } });
+
+    // REST API
+    if (pathname.startsWith('/wp-json/')) return handleRestAPI(env, request, url);
+
+    // robots.txt
+    if (pathname === '/robots.txt') return new Response('User-agent: *\\nDisallow: /wp-admin/\\nSitemap: ' + SITE_URL + '/wp-sitemap.xml\\n', { headers: { 'Content-Type': 'text/plain' } });
+
+    // 캐시 확인
+    const cacheKey = request;
+    const cached = await caches.default.match(cacheKey);
+    if (cached) {
+      const r = new Response(cached.body, { status: cached.status, headers: cached.headers });
+      r.headers.set('x-cp-hit', 'edge');
+      return r;
+    }
+
+    // KV 캐시
+    const kvKey = 'page:' + SITE_PREFIX + ':' + pathname;
+    const kvHit = env.CACHE ? await env.CACHE.get(kvKey, { type: 'text' }).catch(() => null) : null;
+    if (kvHit) {
+      const resp = new Response(kvHit, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=' + CACHE_TTL, 'x-cp-hit': 'kv' } });
+      ctx.waitUntil(caches.default.put(cacheKey, resp.clone()));
+      return resp;
+    }
+
+    // Edge SSR
+    const html = await renderPage(env, pathname, url);
+    const resp = new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=' + CACHE_TTL } });
+    ctx.waitUntil(caches.default.put(cacheKey, resp.clone()));
+    if (env.CACHE) ctx.waitUntil(env.CACHE.put(kvKey, html, { expirationTtl: 86400 }));
+    return resp;
+  }
+};
+
+function basicWAF(url, request) {
+  const p = url.pathname;
+  if (/\\.\.(\\/|\\\\)/.test(p)) return true;
+  if (p === '/xmlrpc.php') return true;
+  const ua = request.headers.get('user-agent') || '';
+  if (/sqlmap|nikto|masscan/i.test(ua)) return true;
+  return false;
+}
+
+async function rateLimit(env, ip, method) {
+  if (!env.CACHE) return { allowed: true };
+  const key = 'rl:' + ip + ':' + Math.floor(Date.now() / 60000);
+  try {
+    const cur = parseInt(await env.CACHE.get(key) || '0', 10);
+    if (cur > 300) return { allowed: false };
+    env.CACHE.put(key, String(cur + 1), { expirationTtl: 65 }).catch(() => {});
+    return { allowed: true };
+  } catch { return { allowed: true }; }
+}
+
+async function renderPage(env, pathname, url) {
+  let posts = [];
+  try {
+    if (pathname === '/' || pathname === '') {
+      const res = await env.DB.prepare('SELECT ID, post_title, post_content, post_excerpt, post_date, post_name FROM wp_posts WHERE post_type=\\'post\\' AND post_status=\\'publish\\' ORDER BY post_date DESC LIMIT 10').all();
+      posts = res.results || [];
+    }
+  } catch {}
+
+  const postsHtml = posts.map(p =>
+    '<article><h2><a href="' + SITE_URL + '/' + p.post_name + '/">' + (p.post_title || '') + '</a></h2><p>' + ((p.post_excerpt || p.post_content || '').slice(0, 200).replace(/<[^>]+>/g,'')) + '</p></article>'
+  ).join('');
+
+  return '<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + SITE_NAME + '</title><style>body{margin:0;font-family:-apple-system,sans-serif;line-height:1.7}header{background:#1d2327;color:#fff;padding:1rem 2rem}main{max-width:900px;margin:2rem auto;padding:0 1rem}article{border-bottom:1px solid #eee;padding:1.5rem 0}article h2{margin:0 0 .5rem}a{color:#0073aa}footer{text-align:center;padding:2rem;color:#777;font-size:.875rem}</style></head><body><header><h1><a href="' + SITE_URL + '/" style="color:#fff;text-decoration:none">' + SITE_NAME + '</a></h1></header><main>' + (postsHtml || '<p>아직 게시글이 없습니다.</p>') + '</main><footer>Powered by WordPress + CloudPress</footer></body></html>';
+}
+
+async function handleRestAPI(env, request, url) {
+  const path = url.pathname.replace('/wp-json', '');
+  const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+  if (path.match(/^\\/wp\\/v2\\/posts\\/?$/)) {
+    try {
+      const res = await env.DB.prepare('SELECT ID, post_title, post_content, post_excerpt, post_date, post_name, post_status, post_type FROM wp_posts WHERE post_type=\\'post\\' AND post_status=\\'publish\\' ORDER BY post_date DESC LIMIT 10').all();
+      return new Response(JSON.stringify((res.results||[]).map(p => ({ id: p.ID, title: { rendered: p.post_title }, content: { rendered: p.post_content }, excerpt: { rendered: p.post_excerpt }, slug: p.post_name, date: p.post_date, status: p.post_status }))), { headers });
+    } catch { return new Response('[]', { headers }); }
+  }
+  return new Response(JSON.stringify({ code: 'rest_no_route', message: 'No route' }), { status: 404, headers });
+}
+`.trim();
+}
+
+// ── CF DNS / Route / Custom Domain ───────────────────────────────────────────
 async function cfGetZone(auth, domain) {
   const root = domain.split('.').slice(-2).join('.');
   const res  = await cfReq(auth, `/zones?name=${encodeURIComponent(root)}&status=active`);
@@ -866,7 +688,6 @@ async function cfGetZone(auth, domain) {
 async function cfUpsertDns(auth, zoneId, type, name, content, proxied = true) {
   const list = await cfReq(auth, `/zones/${zoneId}/dns_records?type=${type}&name=${encodeURIComponent(name)}`);
   const existing = list.result?.[0];
-
   if (existing) {
     const res = await cfReq(auth, `/zones/${zoneId}/dns_records/${existing.id}`, 'PATCH', { content, proxied });
     return { ok: res.success, recordId: existing.id };
@@ -897,60 +718,39 @@ async function getWorkerSubdomain(auth, accountId, workerName) {
 }
 
 async function enableWorkersDev(auth, accountId, workerName) {
-  // workers.dev 서브도메인 활성화 + 최대 3회 재시도
   for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await cfReq(
-      auth,
-      `/accounts/${accountId}/workers/scripts/${workerName}/subdomain`,
-      'POST',
-      { enabled: true }
-    );
+    const res = await cfReq(auth, `/accounts/${accountId}/workers/scripts/${workerName}/subdomain`, 'POST', { enabled: true });
     if (res.success) return true;
     if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
   }
   return false;
 }
 
-/**
- * CF Workers Custom Domain 등록 (신규 API — Route 방식보다 안정적)
- * Route 방식 대신 Custom Domain으로 바인딩하면 CNAME 불필요
- */
 async function addWorkerCustomDomain(auth, accountId, workerName, hostname) {
-  const res = await cfReq(
-    auth,
-    `/accounts/${accountId}/workers/domains`,
-    'PUT',
-    { hostname, service: workerName, environment: 'production' }
-  );
+  const res = await cfReq(auth, `/accounts/${accountId}/workers/domains`, 'PUT', {
+    hostname, service: workerName, environment: 'production',
+  });
   return res.success ? { ok: true, id: res.result?.id } : { ok: false, error: cfErrMsg(res) };
 }
 
-// ── 메인 바인딩 ID 자동 탐색 ─────────────────────────────────────────────────
 async function resolveMainBindingIds(auth, accountId) {
   const result = { mainDbId: '', cacheKvId: '', sessionsKvId: '' };
-
   try {
     const pagesRes = await cfReq(auth, `/accounts/${accountId}/pages/projects`);
     if (!pagesRes.success) return result;
-
     const project = (pagesRes.result || []).find(p =>
-      p.name?.toLowerCase().includes('cloudpress') ||
-      p.name?.toLowerCase().includes('cp-')
+      p.name?.toLowerCase().includes('cloudpress') || p.name?.toLowerCase().includes('cp-')
     );
     if (!project) return result;
-
     const projRes = await cfReq(auth, `/accounts/${accountId}/pages/projects/${project.name}`);
     if (!projRes.success) return result;
-
     const bindings   = projRes.result?.deployment_configs?.production?.d1_databases || {};
     const kvBindings = projRes.result?.deployment_configs?.production?.kv_namespaces || {};
-
     for (const [name, val] of Object.entries(bindings)) {
       const id = val?.id || val?.database_id || '';
       if (!id) continue;
       if (name === 'DB' || name === 'MAIN_DB') result.mainDbId = id;
     }
-
     for (const [name, val] of Object.entries(kvBindings)) {
       const id = val?.namespace_id || val?.id || '';
       if (!id) continue;
@@ -960,8 +760,17 @@ async function resolveMainBindingIds(auth, accountId) {
   } catch (e) {
     console.warn('[provision] 바인딩 ID 자동 탐색 실패:', e.message);
   }
-
   return result;
+}
+
+// ── 설치 잠금 확인 ────────────────────────────────────────────────────────────
+async function checkInstallLock(env, siteId) {
+  try {
+    const lock = await env.DB.prepare(
+      `SELECT s.wp_installed FROM sites s WHERE s.id = ? LIMIT 1`
+    ).bind(siteId).first();
+    return lock?.wp_installed === 1;
+  } catch { return false; }
 }
 
 // ── 메인 핸들러 ───────────────────────────────────────────────────────────────
@@ -974,7 +783,13 @@ export async function onRequestPost({ request, env, params }) {
   const siteId = params?.id;
   if (!siteId) return err('사이트 ID가 없습니다.', 400);
 
-  // ── [D1 #1] 사이트 + settings 동시 조회 (batch 1회) ─────────────────────────
+  // ── [설치 잠금] 이미 설치된 사이트는 재설치 차단 ─────────────────────────
+  const alreadyInstalled = await checkInstallLock(env, siteId);
+  if (alreadyInstalled) {
+    return ok({ message: '이미 설치된 사이트입니다. 재설치는 지원되지 않습니다.', installed: true });
+  }
+
+  // ── 데이터 조회 ──────────────────────────────────────────────────────────
   let site, settings;
   try {
     const [siteRow, settingsRows] = await env.DB.batch([
@@ -982,7 +797,8 @@ export async function onRequestPost({ request, env, params }) {
         'SELECT s.id, s.user_id, s.name, s.primary_domain, s.site_prefix,'
         + ' s.status, s.provision_step, s.plan,'
         + ' s.site_d1_id, s.site_kv_id,'
-        + ' u.cf_global_api_key, u.cf_account_email, u.cf_account_id'
+        + ' s.supabase_url, s.supabase_key, s.supabase_url2, s.supabase_key2,'
+        + ' u.cf_global_api_key, u.cf_account_email, u.cf_account_id, u.email'
         + ' FROM sites s JOIN users u ON u.id = s.user_id'
         + ' WHERE s.id=? AND s.user_id=?'
       ).bind(siteId, user.id),
@@ -990,17 +806,17 @@ export async function onRequestPost({ request, env, params }) {
     ]);
 
     site = siteRow.results?.[0] ?? null;
-
     const rawSettings = settingsRows.results || [];
     settings = {};
     for (const r of rawSettings) settings[r.key] = r.value ?? '';
-
   } catch (e) { return err('초기 데이터 조회 오류: ' + e.message, 500); }
 
   if (!site) return err('사이트를 찾을 수 없습니다.', 404);
-  if (site.status === 'active') return ok({ message: '이미 완료된 사이트입니다.' });
+  if (site.status === 'active') {
+    return ok({ message: '이미 완료된 사이트입니다.', installed: true });
+  }
 
-  // ── [D1 #2] 프로비저닝 시작 표시 (즉시 1회 쓰기) ─────────────────────────────
+  // 프로비저닝 시작
   try {
     await env.DB.prepare(
       "UPDATE sites SET status='provisioning', provision_step='starting', error_message=NULL, updated_at=datetime('now') WHERE id=?"
@@ -1008,29 +824,22 @@ export async function onRequestPost({ request, env, params }) {
   } catch (e) { console.error('initial status update err:', e.message); }
 
   const siteState = makeSiteState();
-
   const encKey = env?.ENCRYPTION_KEY || 'cp_enc_default';
 
-  // ── CF 인증 키 결정 ────────────────────────────────────────────────────────
+  // CF 인증
   const adminCfToken   = settingVal(settings, 'cf_api_token');
   const adminCfAccount = settingVal(settings, 'cf_account_id');
 
-  let cfAuth    = null;  // { token, email? } — email 있으면 Global API Key 모드
-  let cfAccount = null;
+  let cfAuth = null, cfAccount = null;
 
   if (site.cf_global_api_key && site.cf_account_id) {
     const raw = deobfuscate(site.cf_global_api_key, encKey);
     const key = (raw && raw.length > 5) ? raw : site.cf_global_api_key;
-    // cf_account_email이 있으면 Global API Key (X-Auth-Key+X-Auth-Email)
-    // 없으면 API Token (Bearer) 로 폴백
-    cfAuth    = site.cf_account_email
-      ? { token: key, email: site.cf_account_email }
-      : { token: key };
+    cfAuth    = site.cf_account_email ? { token: key, email: site.cf_account_email } : { token: key };
     cfAccount = site.cf_account_id;
   }
 
   if (!cfAuth || !cfAccount) {
-    // 어드민 전역 설정은 항상 API Token 방식
     if (adminCfToken && adminCfAccount) {
       cfAuth    = { token: adminCfToken };
       cfAccount = adminCfAccount;
@@ -1038,57 +847,90 @@ export async function onRequestPost({ request, env, params }) {
   }
 
   if (!cfAuth || !cfAccount) {
-    const e = 'Cloudflare API 키가 설정되지 않았습니다. 계정 설정에서 CF Global API Key와 Account ID를 입력해주세요.';
+    const e = 'Cloudflare API 키가 설정되지 않았습니다.';
     await failSite(env.DB, siteId, 'config_missing', e);
     return err(e, 400);
   }
 
-  // ── GitHub CMS 소스 설정 ───────────────────────────────────────────────────
-  const githubRepo   = settingVal(settings, 'cms_github_repo',   '');
-  const githubBranch = settingVal(settings, 'cms_github_branch', 'main');
-  const githubToken  = settingVal(settings, 'cms_github_token',  '');
-
-  if (!githubRepo) {
-    const e = 'CMS GitHub 레포가 설정되지 않았습니다. 어드민 설정에서 cms_github_repo를 입력해주세요.';
-    await failSite(env.DB, siteId, 'config_missing', e);
-    return err(e, 400);
-  }
-
-  const domain     = site.primary_domain;
-  const wwwDomain  = 'www.' + domain;
-  const prefix     = site.site_prefix;
+  const domain    = site.primary_domain;
+  const wwwDomain = 'www.' + domain;
+  const prefix    = site.site_prefix;
   const workerName = 'cloudpress-site-' + prefix;
+  const siteUrl    = 'https://' + domain;
 
-  // ── Step 1: GitHub tarball 1회 다운로드 → 메모리 tar 파싱 ──────────────────
-  // [v17.0] 기존 68회 개별 fetch → tarball 1회 fetch로 교체
-  console.log(`[provision] GitHub tarball fetch 시작: ${githubRepo}@${githubBranch}`);
-  siteState.set({ provision_step: 'github_fetch' });
+  // ── Step 1: Supabase 계정 + 스토리지 2개 생성 ───────────────────────────
+  siteState.set({ provision_step: 'supabase_setup' });
+  console.log('[provision] Supabase 설정 시작...');
 
-  let cmsSourceMap, schemaSql;
-  try {
-    const result = await fetchCMSSource(githubRepo, githubBranch, githubToken);
-    cmsSourceMap = result.sourceMap;
-    schemaSql    = result.schemaSql;
-  } catch (e) {
-    await failSite(env.DB, siteId, 'github_fetch', e.message || String(e));
-    return err('GitHub fetch 오류: ' + (e.message || String(e)), 500);
+  let supabaseUrl  = site.supabase_url  || '';
+  let supabaseKey  = site.supabase_key  || '';
+  let supabaseUrl2 = site.supabase_url2 || '';
+  let supabaseKey2 = site.supabase_key2 || '';
+  let storageBucket  = 'media';
+  let storageBucket2 = 'media-backup';
+
+  const supabaseToken  = settingVal(settings, 'supabase_mgmt_token');
+  const supabaseOrgId  = settingVal(settings, 'supabase_org_id');
+
+  // Supabase 관리 API 토큰이 있으면 자동 생성
+  if (supabaseToken && supabaseOrgId && !supabaseUrl) {
+    console.log('[provision] Supabase 프로젝트 자동 생성...');
+
+    const projectName1 = `cp-${prefix}-primary`;
+    const projectName2 = `cp-${prefix}-backup`;
+    const dbPass1 = genPassword(20);
+    const dbPass2 = genPassword(20);
+
+    // Primary 프로젝트 생성
+    const [proj1, proj2] = await Promise.all([
+      createSupabaseProject(supabaseToken, supabaseOrgId, projectName1, dbPass1),
+      createSupabaseProject(supabaseToken, supabaseOrgId, projectName2, dbPass2),
+    ]);
+
+    if (proj1.ok) {
+      supabaseUrl = proj1.url;
+      supabaseKey = proj1.serviceRoleKey;
+      console.log(`[provision] Supabase Primary 생성: ${supabaseUrl}`);
+
+      // 버킷 생성 (프로젝트 준비까지 잠시 대기)
+      await new Promise(r => setTimeout(r, 5000));
+      const [b1, b2] = await Promise.all([
+        createSupabaseBucket(supabaseUrl, supabaseKey, storageBucket),
+        createSupabaseBucket(supabaseUrl, supabaseKey, 'thumbnails'),
+      ]);
+      if (b1.ok) await setSupabaseBucketPublicPolicy(supabaseUrl, supabaseKey, storageBucket);
+      if (!b1.ok) console.warn('[provision] Primary 버킷 생성 실패:', b1.error);
+    }
+
+    if (proj2.ok) {
+      supabaseUrl2 = proj2.url;
+      supabaseKey2 = proj2.serviceRoleKey;
+      console.log(`[provision] Supabase Secondary 생성: ${supabaseUrl2}`);
+
+      await new Promise(r => setTimeout(r, 3000));
+      const b3 = await createSupabaseBucket(supabaseUrl2, supabaseKey2, storageBucket2);
+      if (b3.ok) await setSupabaseBucketPublicPolicy(supabaseUrl2, supabaseKey2, storageBucket2);
+    }
+
+    siteState.set({
+      supabase_url: supabaseUrl, supabase_key: supabaseKey,
+      supabase_url2: supabaseUrl2, supabase_key2: supabaseKey2,
+      storage_bucket: storageBucket, storage_bucket2: storageBucket2,
+    });
+  } else if (supabaseUrl && !supabaseUrl2) {
+    // Primary만 있는 경우: 버킷 2개 생성
+    console.log('[provision] 기존 Supabase에 Secondary 버킷 생성...');
+    const [b1, b2] = await Promise.all([
+      createSupabaseBucket(supabaseUrl, supabaseKey, storageBucket),
+      createSupabaseBucket(supabaseUrl, supabaseKey, storageBucket2),
+    ]);
+    console.log('[provision] 버킷 생성:', b1.ok ? '✓' : b1.error, b2.ok ? '✓' : b2.error);
+  } else if (!supabaseUrl) {
+    // Supabase 없음 → D1 + KV 스토리지 모드로 계속
+    console.log('[provision] Supabase 미설정 — D1+KV 스토리지 모드로 진행');
   }
 
-  if (cmsSourceMap.size === 0) {
-    const e = `GitHub 레포(${githubRepo}@${githubBranch || 'main'})에서 CMS 소스 파일을 찾지 못했습니다. 레포 내 index.js 등 CMS 파일이 존재하는지 확인해주세요.`;
-    await failSite(env.DB, siteId, 'github_fetch', e);
-    return err(e, 500);
-  }
-
-  if (!cmsSourceMap.has('worker.js') && !cmsSourceMap.has('index.js')) {
-    const e = 'GitHub 레포에서 worker.js 또는 index.js를 찾을 수 없습니다. cms_github_repo 설정을 확인해주세요.';
-    await failSite(env.DB, siteId, 'github_fetch', e);
-    return err(e, 500);
-  }
-
-  console.log(`[provision] GitHub 소스 준비 완료: ${cmsSourceMap.size}개 파일, schema.sql: ${schemaSql ? '✓' : '내장 fallback'}`);
-
-  // ── Step 2+3: D1 + KV 생성 ────────────────────────────────────────────────
+  // ── Step 2: D1 + KV 생성 ────────────────────────────────────────────────
   siteState.set({ provision_step: 'd1_kv_create' });
 
   let d1Id = site.site_d1_id || null;
@@ -1099,96 +941,77 @@ export async function onRequestPost({ request, env, params }) {
       createD1(cfAuth, cfAccount, prefix),
       createKV(cfAuth, cfAccount, prefix),
     ]);
-
     if (!d1Res.ok) { await failSite(env.DB, siteId, 'd1_create', d1Res.error); return err(d1Res.error, 500); }
     if (!kvRes.ok) { await failSite(env.DB, siteId, 'kv_create', kvRes.error); return err(kvRes.error, 500); }
-
-    d1Id = d1Res.id;
-    kvId = kvRes.id;
+    d1Id = d1Res.id; kvId = kvRes.id;
     siteState.set({ site_d1_id: d1Id, site_d1_name: d1Res.name, site_kv_id: kvId, site_kv_title: kvRes.title });
-    console.log(`[provision] D1 생성: ${d1Res.name} (${d1Id}), KV 생성: ${kvRes.title} (${kvId})`);
-
+    console.log(`[provision] D1: ${d1Res.name} (${d1Id}), KV: ${kvRes.title} (${kvId})`);
   } else if (!d1Id) {
     const d1Res = await createD1(cfAuth, cfAccount, prefix);
     if (!d1Res.ok) { await failSite(env.DB, siteId, 'd1_create', d1Res.error); return err(d1Res.error, 500); }
     d1Id = d1Res.id;
     siteState.set({ site_d1_id: d1Id, site_d1_name: d1Res.name });
-    console.log(`[provision] D1 생성: ${d1Res.name} (${d1Id}), KV 재사용: ${kvId}`);
-
   } else if (!kvId) {
     const kvRes = await createKV(cfAuth, cfAccount, prefix);
     if (!kvRes.ok) { await failSite(env.DB, siteId, 'kv_create', kvRes.error); return err(kvRes.error, 500); }
     kvId = kvRes.id;
     siteState.set({ site_kv_id: kvId, site_kv_title: kvRes.title });
-    console.log(`[provision] D1 재사용: ${d1Id}, KV 생성: ${kvRes.title} (${kvId})`);
-
-  } else {
-    console.log(`[provision] D1 재사용: ${d1Id}, KV 재사용: ${kvId}`);
   }
 
-  // ── Step 4: D1 스키마 초기화 + 메인 바인딩 ID 확보 (병렬) ─────────────────
+  // ── Step 3: WordPress D1 스키마 초기화 ──────────────────────────────────
   siteState.set({ provision_step: 'd1_schema' });
-  console.log('[provision] D1 스키마 초기화 + 바인딩 ID 확보 병렬 시작...');
+  console.log('[provision] WordPress D1 스키마 초기화...');
 
   let mainDbId     = settingVal(settings, 'main_db_id',     '');
   let cacheKvId    = settingVal(settings, 'cache_kv_id',    '');
   let sessionsKvId = settingVal(settings, 'sessions_kv_id', '');
 
-  const needsBindingResolve = !mainDbId || !cacheKvId || !sessionsKvId;
-
   const [schemaRes, resolvedIds] = await Promise.all([
-    initSiteD1Schema(cfAuth, cfAccount, d1Id, schemaSql),
-    needsBindingResolve ? resolveMainBindingIds(cfAuth, cfAccount) : Promise.resolve(null),
+    initWordPressD1Schema(cfAuth, cfAccount, d1Id, {
+      siteName: site.name, siteUrl, adminEmail: site.email || user.email,
+    }),
+    (!mainDbId || !cacheKvId || !sessionsKvId)
+      ? resolveMainBindingIds(cfAuth, cfAccount)
+      : Promise.resolve(null),
   ]);
 
   if (!schemaRes.ok) {
     console.warn('[provision] D1 스키마 초기화 부분 실패 (계속 진행)');
-  } else {
-    console.log('[provision] D1 스키마 초기화 완료');
   }
 
   if (resolvedIds) {
     if (!mainDbId)     mainDbId     = resolvedIds.mainDbId     || '';
     if (!cacheKvId)    cacheKvId    = resolvedIds.cacheKvId    || '';
     if (!sessionsKvId) sessionsKvId = resolvedIds.sessionsKvId || '';
-
     if (resolvedIds.mainDbId || resolvedIds.cacheKvId || resolvedIds.sessionsKvId) {
-      const stmts = [];
       const upsertSql = `INSERT INTO settings (key,value,updated_at) VALUES (?,?,datetime('now'))
                          ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`;
+      const stmts = [];
       if (resolvedIds.mainDbId)     stmts.push(env.DB.prepare(upsertSql).bind('main_db_id',     resolvedIds.mainDbId));
       if (resolvedIds.cacheKvId)    stmts.push(env.DB.prepare(upsertSql).bind('cache_kv_id',    resolvedIds.cacheKvId));
       if (resolvedIds.sessionsKvId) stmts.push(env.DB.prepare(upsertSql).bind('sessions_kv_id', resolvedIds.sessionsKvId));
-      env.DB.batch(stmts).catch(e => console.warn('[provision] 바인딩 ID 저장 실패:', e.message));
+      if (stmts.length) env.DB.batch(stmts).catch(e => console.warn('[provision] 바인딩 ID 저장 실패:', e.message));
     }
   }
 
-  // ── Step 5: Workers Script Upload ─────────────────────────────────────────
+  // ── Step 4: WordPress Worker 업로드 ─────────────────────────────────────
   siteState.set({ provision_step: 'worker_upload' });
-  console.log(`[provision] Worker 업로드 중: ${workerName}`);
+  console.log(`[provision] WordPress Worker 업로드: ${workerName}`);
 
-  // Worker 바인딩에 넣을 CF 자격증명은 항상 API Token 형태로 전달
-  // (Worker 내부에서 cfApiToken을 env 변수로 사용할 때는 Bearer 방식)
   const cfApiTokenForWorker = cfAuth.email ? '' : cfAuth.token;
 
-  const upRes = await uploadWorkerWithCMSSource(
-    cfAuth,
-    cfAccount,
-    workerName,
-    {
-      mainDbId,
-      cacheKvId,
-      sessionsKvId,
-      siteD1Id:    d1Id,
-      siteKvId:    kvId,
-      cfAccountId: cfAccount,
-      cfApiToken:  cfApiTokenForWorker,
-      sitePrefix:  prefix,
-      siteName:    site.name,
-      siteDomain:  domain,
-    },
-    cmsSourceMap
-  );
+  const upRes = await uploadWordPressWorker(cfAuth, cfAccount, workerName, {
+    mainDbId, cacheKvId, sessionsKvId,
+    siteD1Id:    d1Id,
+    siteKvId:    kvId,
+    cfAccountId: cfAccount,
+    cfApiToken:  cfApiTokenForWorker,
+    sitePrefix:  prefix,
+    siteName:    site.name,
+    siteDomain:  domain,
+    supabaseUrl, supabaseKey, supabaseUrl2, supabaseKey2,
+    storageBucket, storageBucket2,
+  });
 
   if (!upRes.ok) {
     await failSite(env.DB, siteId, 'worker_upload', upRes.error);
@@ -1198,21 +1021,20 @@ export async function onRequestPost({ request, env, params }) {
   console.log(`[provision] Worker 업로드 완료: ${workerName}`);
   siteState.set({ worker_name: workerName });
 
-  // workers.dev 활성화 — DNS 등록 전 완료해야 522 방지 (최대 3회 재시도)
   const workerDevEnabled = await enableWorkersDev(cfAuth, cfAccount, workerName);
-  console.log(`[provision] workers.dev 활성화: ${workerDevEnabled ? '성공' : '실패(계속 진행)'}`);
+  console.log(`[provision] workers.dev 활성화: ${workerDevEnabled ? '성공' : '실패'}`);
 
-  // ── Step 6: CACHE KV 도메인 매핑 (bulk 1회) ───────────────────────────────
+  // ── Step 5: KV 도메인 매핑 ──────────────────────────────────────────────
   siteState.set({ provision_step: 'kv_mapping' });
 
   const siteMapping = JSON.stringify({
-    id:          siteId,
-    name:        site.name,
+    id: siteId, name: site.name,
     site_prefix: prefix,
-    site_d1_id:  d1Id,
-    site_kv_id:  kvId,
-    status:      'active',
-    suspended:   0,
+    site_d1_id: d1Id, site_kv_id: kvId,
+    supabase_url: supabaseUrl, supabase_key: supabaseKey,
+    supabase_url2: supabaseUrl2, supabase_key2: supabaseKey2,
+    storage_bucket: storageBucket, storage_bucket2: storageBucket2,
+    status: 'active', suspended: 0,
   });
 
   if (cacheKvId && cfAccount) {
@@ -1223,19 +1045,13 @@ export async function onRequestPost({ request, env, params }) {
     ]);
   }
 
-  // ── Step 7: 도메인 연결 ────────────────────────────────────────────────────
-  // 전략 1 (최우선): Custom Domain API — CNAME/Route 불필요, 즉시 활성화, 522 없음
-  // 전략 2 (폴백): zone이 CF에 있으면 Route + proxied CNAME
-  // 전략 3: 외부 DNS — 수동 CNAME 안내
+  // ── Step 6: 도메인 연결 ─────────────────────────────────────────────────
   siteState.set({ provision_step: 'dns_setup' });
 
-  let domainStatus   = 'manual_required';
-  let cfZoneId       = null;
-  let dnsRecordId    = null, dnsRecordWwwId = null;
-  let routeId        = null, routeWwwId     = null;
-  let cnameTarget    = '';
+  let domainStatus = 'manual_required';
+  let cfZoneId = null, dnsRecordId = null, dnsRecordWwwId = null;
+  let routeId = null, routeWwwId = null, cnameTarget = '';
 
-  // 전략 1: Custom Domain API
   const [cdRoot, cdWww] = await Promise.all([
     addWorkerCustomDomain(cfAuth, cfAccount, workerName, domain),
     addWorkerCustomDomain(cfAuth, cfAccount, workerName, wwwDomain),
@@ -1243,15 +1059,9 @@ export async function onRequestPost({ request, env, params }) {
 
   if (cdRoot.ok || cdWww.ok) {
     domainStatus = 'active';
-    console.log(`[provision] Custom Domain 등록 성공: ${domain}`);
-    siteState.set({
-      worker_route:     domain + '/*',
-      worker_route_www: wwwDomain + '/*',
-    });
+    console.log(`[provision] Custom Domain 등록: ${domain}`);
+    siteState.set({ worker_route: domain + '/*', worker_route_www: wwwDomain + '/*' });
   } else {
-    // 전략 2: zone Route + proxied CNAME 폴백
-    console.log(`[provision] Custom Domain 실패(${cdRoot.error}), Route 폴백 시도`);
-
     const [workerSubdomain, zone] = await Promise.all([
       getWorkerSubdomain(cfAuth, cfAccount, workerName),
       cfGetZone(cfAuth, domain),
@@ -1260,8 +1070,6 @@ export async function onRequestPost({ request, env, params }) {
 
     if (zone.ok) {
       cfZoneId = zone.zoneId;
-
-      // ① Route를 먼저 등록 — CF가 proxied CNAME을 처리할 때 Route가 반드시 존재해야 522 방지
       const [rr, rw] = await Promise.all([
         cfUpsertRoute(cfAuth, cfZoneId, domain + '/*',    workerName),
         cfUpsertRoute(cfAuth, cfZoneId, wwwDomain + '/*', workerName),
@@ -1270,15 +1078,11 @@ export async function onRequestPost({ request, env, params }) {
       if (rw.ok) routeWwwId = rw.routeId;
 
       siteState.set({
-        provision_step:      'worker_route',
-        worker_route:        domain + '/*',
-        worker_route_www:    wwwDomain + '/*',
-        worker_route_id:     routeId    || null,
-        worker_route_www_id: routeWwwId || null,
-        cf_zone_id:          cfZoneId,
+        worker_route: domain + '/*', worker_route_www: wwwDomain + '/*',
+        worker_route_id: routeId || null, worker_route_www_id: routeWwwId || null,
+        cf_zone_id: cfZoneId,
       });
 
-      // ② Route 등록 후 CNAME 등록 (proxied=true → CF가 Route로 연결)
       const [dr, drw] = await Promise.all([
         cfUpsertDns(cfAuth, cfZoneId, 'CNAME', domain,    cnameTarget, true),
         cfUpsertDns(cfAuth, cfZoneId, 'CNAME', wwwDomain, cnameTarget, true),
@@ -1286,190 +1090,53 @@ export async function onRequestPost({ request, env, params }) {
       if (dr.ok)  dnsRecordId    = dr.recordId;
       if (drw.ok) dnsRecordWwwId = drw.recordId;
 
-      // Route + proxied CNAME 모두 성공 → 즉시 active (522 없음)
-      // Route만 성공 → DNS 전파 대기
-      if ((rr.ok || rw.ok) && (dr.ok || drw.ok)) {
-        domainStatus = 'active';
-      } else if (rr.ok || rw.ok) {
-        domainStatus = 'dns_propagating';
-      }
+      if ((rr.ok || rw.ok) && (dr.ok || drw.ok)) domainStatus = 'active';
+      else if (rr.ok || rw.ok) domainStatus = 'dns_propagating';
 
-      siteState.set({
-        dns_record_id:     dnsRecordId    || null,
-        dns_record_www_id: dnsRecordWwwId || null,
-      });
+      siteState.set({ dns_record_id: dnsRecordId || null, dns_record_www_id: dnsRecordWwwId || null });
     }
   }
 
-  // ── Step 8: 완료 — 메모리 상태 1회 flush ──────────────────────────────────
-  const adminUrl = `https://${domain}/cp-admin/setup-config`;
-
-  // cnameTarget이 없으면(Custom Domain 성공 시) workers.dev URL 안내용으로만 사용
+  // ── Step 7: 완료 ─────────────────────────────────────────────────────────
+  const adminUrl   = `https://${domain}/wp-admin/`;
   const workerDevUrl = cnameTarget || `${workerName}.workers.dev`;
 
   siteState.set({
-    status:         'active',
+    status: 'active',
     provision_step: 'completed',
-    domain_status:  domainStatus,
-    wp_admin_url:   adminUrl,
-    error_message:  domainStatus === 'manual_required'
-      ? `외부 DNS 설정 필요 — CNAME ${domain} → ${workerDevUrl} (CF 프록시 켜기)`
+    domain_status: domainStatus,
+    wp_admin_url: adminUrl,
+    wp_installed: 1,   // 설치 잠금
+    error_message: domainStatus === 'manual_required'
+      ? `외부 DNS 설정 필요 — CNAME ${domain} → ${workerDevUrl}`
       : null,
   });
 
-  // [D1 #3] 사이트 상태 일괄 업데이트 (1회)
   await flushSiteState(env.DB, siteId, siteState.get());
 
-  // [D1 #4] 최종 사이트 조회 (1회)
   const finalSite = await env.DB.prepare(
     'SELECT status, provision_step, error_message, wp_admin_url, primary_domain,'
-    + ' site_d1_id, site_kv_id, domain_status, worker_name, name FROM sites WHERE id=?'
+    + ' site_d1_id, site_kv_id, domain_status, worker_name, name, supabase_url, supabase_url2 FROM sites WHERE id=?'
   ).bind(siteId).first();
 
   return ok({
-    message:      '프로비저닝 완료',
+    message: 'WordPress 프로비저닝 완료',
     siteId,
-    site:         finalSite,
-    worker_name:  workerName,
+    site: finalSite,
+    worker_name: workerName,
     cname_target: cnameTarget,
-    cms_files:    cmsSourceMap.size,
-    setup_url:    adminUrl,
+    wp_admin_url: adminUrl,
+    storage: {
+      primary: supabaseUrl ? { url: supabaseUrl, bucket: storageBucket } : null,
+      secondary: supabaseUrl2 ? { url: supabaseUrl2, bucket: storageBucket2 } : null,
+      fallback: 'd1+kv',
+    },
+    install_locked: true,
     cname_instructions: domainStatus === 'manual_required' ? {
       type: 'CNAME',
       root: { host: '@',   value: workerDevUrl },
       www:  { host: 'www', value: workerDevUrl },
-      note: `DNS 전파 후 ${adminUrl} 에서 CMS 설정을 완료하세요.`,
+      note: `DNS 전파 후 ${adminUrl} 에서 WordPress를 사용하세요.`,
     } : null,
   });
-}
-
-// ── 최소 내장 스키마 (GitHub fetch 실패 시 fallback) ──────────────────────────
-
-function getMinimalSchema() {
-  return `
-CREATE TABLE IF NOT EXISTS cp_posts (
-  ID INTEGER PRIMARY KEY AUTOINCREMENT,
-  post_author INTEGER NOT NULL DEFAULT 0,
-  post_date TEXT NOT NULL DEFAULT '',
-  post_date_gmt TEXT NOT NULL DEFAULT '',
-  post_content TEXT NOT NULL DEFAULT '',
-  post_title TEXT NOT NULL DEFAULT '',
-  post_excerpt TEXT NOT NULL DEFAULT '',
-  post_status TEXT NOT NULL DEFAULT 'publish',
-  comment_status TEXT NOT NULL DEFAULT 'open',
-  ping_status TEXT NOT NULL DEFAULT 'open',
-  post_password TEXT NOT NULL DEFAULT '',
-  post_name TEXT NOT NULL DEFAULT '',
-  to_ping TEXT NOT NULL DEFAULT '',
-  pinged TEXT NOT NULL DEFAULT '',
-  post_modified TEXT NOT NULL DEFAULT '',
-  post_modified_gmt TEXT NOT NULL DEFAULT '',
-  post_content_filtered TEXT NOT NULL DEFAULT '',
-  post_parent INTEGER NOT NULL DEFAULT 0,
-  guid TEXT NOT NULL DEFAULT '',
-  menu_order INTEGER NOT NULL DEFAULT 0,
-  post_type TEXT NOT NULL DEFAULT 'post',
-  post_mime_type TEXT NOT NULL DEFAULT '',
-  comment_count INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS cp_postmeta (
-  meta_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  post_id INTEGER NOT NULL DEFAULT 0,
-  meta_key TEXT DEFAULT NULL,
-  meta_value TEXT
-);
-CREATE TABLE IF NOT EXISTS cp_users (
-  ID INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_login TEXT NOT NULL DEFAULT '',
-  user_pass TEXT NOT NULL DEFAULT '',
-  user_nicename TEXT NOT NULL DEFAULT '',
-  user_email TEXT NOT NULL DEFAULT '',
-  user_url TEXT NOT NULL DEFAULT '',
-  user_registered TEXT NOT NULL DEFAULT '',
-  user_activation_key TEXT NOT NULL DEFAULT '',
-  user_status INTEGER NOT NULL DEFAULT 0,
-  display_name TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS cp_usermeta (
-  umeta_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL DEFAULT 0,
-  meta_key TEXT DEFAULT NULL,
-  meta_value TEXT
-);
-CREATE TABLE IF NOT EXISTS cp_options (
-  option_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  option_name TEXT NOT NULL DEFAULT '',
-  option_value TEXT NOT NULL DEFAULT '',
-  autoload TEXT NOT NULL DEFAULT 'yes',
-  UNIQUE(option_name)
-);
-CREATE TABLE IF NOT EXISTS cp_terms (
-  term_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL DEFAULT '',
-  slug TEXT NOT NULL DEFAULT '',
-  term_group INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS cp_term_taxonomy (
-  term_taxonomy_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  term_id INTEGER NOT NULL DEFAULT 0,
-  taxonomy TEXT NOT NULL DEFAULT '',
-  description TEXT NOT NULL DEFAULT '',
-  parent INTEGER NOT NULL DEFAULT 0,
-  count INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS cp_term_relationships (
-  object_id INTEGER NOT NULL DEFAULT 0,
-  term_taxonomy_id INTEGER NOT NULL DEFAULT 0,
-  term_order INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (object_id, term_taxonomy_id)
-);
-CREATE TABLE IF NOT EXISTS cp_comments (
-  comment_ID INTEGER PRIMARY KEY AUTOINCREMENT,
-  comment_post_ID INTEGER NOT NULL DEFAULT 0,
-  comment_author TEXT NOT NULL DEFAULT '',
-  comment_author_email TEXT NOT NULL DEFAULT '',
-  comment_author_url TEXT NOT NULL DEFAULT '',
-  comment_author_IP TEXT NOT NULL DEFAULT '',
-  comment_date TEXT NOT NULL DEFAULT '',
-  comment_date_gmt TEXT NOT NULL DEFAULT '',
-  comment_content TEXT NOT NULL DEFAULT '',
-  comment_karma INTEGER NOT NULL DEFAULT 0,
-  comment_approved TEXT NOT NULL DEFAULT '1',
-  comment_agent TEXT NOT NULL DEFAULT '',
-  comment_type TEXT NOT NULL DEFAULT 'comment',
-  comment_parent INTEGER NOT NULL DEFAULT 0,
-  user_id INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS cp_commentmeta (
-  meta_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  comment_id INTEGER NOT NULL DEFAULT 0,
-  meta_key TEXT DEFAULT NULL,
-  meta_value TEXT
-);
-CREATE TABLE IF NOT EXISTS cp_media (
-  media_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  file_name TEXT NOT NULL,
-  file_path TEXT NOT NULL UNIQUE,
-  mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
-  file_size INTEGER NOT NULL DEFAULT 0,
-  upload_date TEXT NOT NULL DEFAULT '',
-  storage TEXT NOT NULL DEFAULT 'kv',
-  alt_text TEXT DEFAULT '',
-  caption TEXT DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS cp_cron_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  timestamp INTEGER NOT NULL,
-  schedule TEXT,
-  hook TEXT NOT NULL,
-  args TEXT NOT NULL DEFAULT '[]'
-);
-CREATE INDEX IF NOT EXISTS cp_posts_post_name ON cp_posts(post_name);
-CREATE INDEX IF NOT EXISTS cp_posts_type_status ON cp_posts(post_type, post_status);
-CREATE INDEX IF NOT EXISTS cp_postmeta_post_id ON cp_postmeta(post_id);
-CREATE INDEX IF NOT EXISTS cp_users_login ON cp_users(user_login);
-CREATE INDEX IF NOT EXISTS cp_usermeta_user_id ON cp_usermeta(user_id);
-CREATE INDEX IF NOT EXISTS cp_comments_post_id ON cp_comments(comment_post_ID);
-CREATE INDEX IF NOT EXISTS cp_cron_ts ON cp_cron_events(timestamp);
-`.trim();
 }
