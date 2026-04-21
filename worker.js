@@ -40,7 +40,7 @@ const DDOS_BAN_TTL     = 3600;  // IP 밴 1시간
 const BOT_TARPIT_MS    = 5000;  // 악성 봇 응답 지연
 
 // ── WAF 패턴 ──────────────────────────────────────────────────────────────────
-const WAF_SQLI = /(\b(union|select|insert|update|delete|drop|create|alter|exec|execute|cast|convert|char|nchar|varchar|nvarchar|declare|cursor|begin|fetch|kill|truncate|grant|revoke)\b.*\b(from|where|table|column|database|user|version)\b)|('(\s*(or|and)\s+)')|(-{2})|(%27)|(%22)/i;
+const WAF_SQLI = /('\s*(or|and)\s+'|--)|(union\s+select)|(;\s*(drop|delete|insert|update)\s)/i;
 const WAF_XSS  = /(<\s*script|javascript:|on\w+\s*=|<\s*iframe|<\s*object|<\s*embed|<\s*svg.*on\w+=|data:\s*text\/html)/i;
 const WAF_PATH = /(\.\.(\/|\\)|\/etc\/passwd|\/proc\/self|cmd\.exe|powershell|\/bin\/sh|\/bin\/bash)/i;
 const WAF_RFI  = /(https?:\/\/(?!(?:[\w-]+\.)?(?:cloudflare|cloudpress|wordpress)\.(?:com|net|org|site|dev))[\w.-]+\/.*\.(php|asp|aspx|jsp|cgi))/i;
@@ -446,8 +446,10 @@ async function resolveWPRoute(env, sitePrefix, pathname, search, opts) {
             ORDER BY p.post_date DESC LIMIT 10`
         ).bind(cat.term_taxonomy_id).all();
         posts = res.results || [];
+        type = 'archive';
+      } else {
+        type = '404';
       }
-      type = 'archive';
     } else if (tagSlug) {
       // 태그
       const tag = await env.DB.prepare(
@@ -466,8 +468,10 @@ async function resolveWPRoute(env, sitePrefix, pathname, search, opts) {
             ORDER BY p.post_date DESC LIMIT 10`
         ).bind(tag.term_taxonomy_id).all();
         posts = res.results || [];
+        type = 'archive';
+      } else {
+        type = '404';
       }
-      type = 'archive';
     } else if (postSlug) {
       // slug 기반 라우팅 (permalink)
       post = await env.DB.prepare(
@@ -574,7 +578,7 @@ async function renderWPTemplate(env, sitePrefix, siteInfo, contentData, ctx) {
       mainContent += `<header class="page-header"><h1 class="page-title">${esc(term.name)}</h1>${term.description ? `<div class="taxonomy-description">${esc(term.description)}</div>` : ''}</header>`;
     }
     if (posts.length === 0) {
-      mainContent += `<div class="no-posts"><p>게시글이 없습니다.</p></div>`;
+      mainContent += `<div class="no-posts"><header class="page-header"><h1 class="page-title">아직 게시물이 없습니다</h1></header><div class="page-content"><p>새로운 글을 작성하면 이곳에 표시됩니다.</p></div></div>`;
     } else {
       mainContent += '<div class="posts-loop">';
       for (const p of posts) {
@@ -731,7 +735,6 @@ function renderShortcodes(content) {
 
 // ── wp-admin 요청 처리 ────────────────────────────────────────────────────────
 async function handleWPAdmin(env, request, url, siteInfo) {
-  // 로그인 체크
   const cookie = request.headers.get('cookie') || '';
   const hasSession = /wordpress_logged_in/.test(cookie);
 
@@ -741,23 +744,459 @@ async function handleWPAdmin(env, request, url, siteInfo) {
   }
 
   // wp-admin 파일들을 D1/KV에서 서빙
-  // (간소화: 실제 WordPress 파일 서빙은 Workers Sites나 R2 사용)
-  return new Response(renderAdminPage(url.pathname, siteInfo), {
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  return new Response(renderAdminPage(url.pathname, siteInfo, url), {
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, private' },
   });
 }
 
-function renderAdminPage(pathname, siteInfo) {
-  return `<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>WordPress 관리자 – ${esc(siteInfo?.name || '')}</title>
-<style>body{font-family:-apple-system,sans-serif;background:#f0f0f1;margin:0;padding:20px}
-.wrap{max-width:900px;margin:40px auto;background:#fff;padding:30px;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
-h1{color:#1d2327;font-size:1.5rem;margin:0 0 1rem}</style>
-</head><body><div class="wrap">
-<h1>WordPress 관리자 <span style="font-size:.8em;color:#888;">${esc(pathname)}</span></h1>
-<p>CloudPress Edge에서 WordPress 관리자 기능이 D1 + Supabase 스토리지 기반으로 동작 중입니다.</p>
-<p><a href="/">← 사이트 보기</a></p>
-</div></body></html>`;
+function renderAdminPage(pathname, siteInfo, extra) {
+  const siteName = esc(siteInfo?.name || 'WordPress');
+  const page = pathname.replace(/^\/wp-admin\/?/, '').replace(/\.php$/, '') || 'index';
+  const sp = extra ? extra.searchParams : null;
+  const isPage = sp ? sp.get('post_type') === 'page' : false;
+
+  let pageTitle = '대시보드';
+  let bodyHtml  = '';
+  let inlineScript = '';
+
+  if (page === 'index' || page === '' || page === 'dashboard') {
+    pageTitle = '대시보드';
+    bodyHtml = '<div class="welcome-panel">'
+      + '<div style="max-width:700px">'
+      + '<h2 style="font-size:1.3rem;margin:0 0 10px">WordPress에 오신 것을 환영합니다!</h2>'
+      + '<p style="color:#50575e;margin:0 0 15px">CloudPress Edge 위에서 WordPress가 동작 중입니다.</p>'
+      + '<div style="display:flex;gap:10px;flex-wrap:wrap">'
+      + '<a href="/wp-admin/post-new.php" class="btn-wp">글 작성하기</a>'
+      + '<a href="/wp-admin/options-general.php" class="btn-wp btn-secondary">사이트 설정</a>'
+      + '</div></div></div>'
+      + '<div class="admin-widgets">'
+      + '<div class="admin-widget"><h3 class="widget-title"><span>활동</span></h3>'
+      + '<div class="widget-body"><h4 style="margin:0 0 8px;font-size:.85rem;color:#1d2327">최근 게시됨</h4>'
+      + '<div id="admin-activity" style="color:#50575e;font-size:.85rem">불러오는 중...</div></div></div>'
+      + '<div class="admin-widget"><h3 class="widget-title">한 눈에 보기</h3>'
+      + '<div class="widget-body"><ul id="admin-glance" style="list-style:none;margin:0;padding:0;color:#50575e;font-size:.875rem"><li>불러오는 중...</li></ul>'
+      + '<p style="margin:12px 0 0;font-size:.8rem;color:#50575e">WordPress 6.7 + CloudPress</p></div></div>'
+      + '</div>';
+    inlineScript = '(async()=>{'
+      + 'try{'
+      + 'const [postsR,pagesR,commR]=await Promise.all(['
+      + 'fetch("/wp-json/wp/v2/posts?per_page=5&_fields=id,title,date").then(r=>r.json()).catch(()=>[]),'
+      + 'fetch("/wp-json/wp/v2/pages?per_page=100&_fields=id,title").then(r=>r.json()).catch(()=>[]),'
+      + 'fetch("/wp-json/wp/v2/comments?per_page=5&_fields=id,author_name,content,date").then(r=>r.json()).catch(()=>[])'
+      + ']);'
+      + 'const posts=Array.isArray(postsR)?postsR:[];'
+      + 'const pages=Array.isArray(pagesR)?pagesR:[];'
+      + 'const comments=Array.isArray(commR)?commR:[];'
+      + 'document.getElementById("admin-glance").innerHTML='
+      + '"<li>"+posts.length+"개의 글 <a href=\\"/wp-admin/edit.php\\" style=\\"float:right\\">글 관리</a></li>"'
+      + '+"<li>"+pages.length+"개의 페이지 <a href=\\"/wp-admin/edit.php?post_type=page\\" style=\\"float:right\\">페이지 관리</a></li>"'
+      + '+"<li>"+comments.length+"개의 댓글 <a href=\\"/wp-admin/edit-comments.php\\" style=\\"float:right\\">댓글 관리</a></li>";'
+      + 'const actEl=document.getElementById("admin-activity");'
+      + 'if(posts.length===0){actEl.textContent="아직 게시된 글이 없습니다.";return;}'
+      + 'actEl.innerHTML="<ul style=\\"list-style:none;margin:0;padding:0\\">"+posts.map(function(p){'
+      + 'var d=new Date(p.date).toLocaleDateString("ko-KR");'
+      + 'var t=(p.title&&p.title.rendered)||"(제목 없음)";'
+      + 'return "<li style=\\"padding:4px 0;border-bottom:1px solid #f0f0f1\\"><a href=\\"/wp-admin/post.php?post="+p.id+"&action=edit\\" style=\\"color:#2271b1\\">"+t+"</a><span style=\\"float:right;color:#8c8f94;font-size:.8rem\\">"+d+"</span></li>";'
+      + '}).join("")+"</ul>";'
+      + '}catch(e){console.warn(e);}'
+      + '})();';
+
+  } else if (page === 'edit') {
+    pageTitle = isPage ? '페이지' : '글';
+    const newHref = isPage ? '/wp-admin/post-new.php?post_type=page' : '/wp-admin/post-new.php';
+    const apiType = isPage ? 'pages' : 'posts';
+    const emptyMsg = isPage ? '아직 페이지가 없습니다.' : '아직 글이 없습니다.';
+    bodyHtml = '<div class="tablenav top" style="margin-bottom:10px">'
+      + '<a href="' + newHref + '" class="btn-wp">새 ' + (isPage ? '페이지' : '글') + ' 추가</a></div>'
+      + '<table class="wp-list-table" style="width:100%;border-collapse:collapse;border:1px solid #c3c4c7;background:#fff">'
+      + '<thead><tr style="background:#f6f7f7">'
+      + '<td style="width:30px;padding:8px 10px"><input type="checkbox"></td>'
+      + '<th style="padding:8px 10px;text-align:left;font-size:.875rem">제목</th>'
+      + '<th style="padding:8px 10px;text-align:left;font-size:.875rem;width:120px">날짜</th>'
+      + '</tr></thead>'
+      + '<tbody id="posts-list"><tr><td colspan="3" style="padding:20px;text-align:center;color:#8c8f94">불러오는 중...</td></tr></tbody>'
+      + '</table>';
+    inlineScript = '(async()=>{'
+      + 'var res=await fetch("/wp-json/wp/v2/' + apiType + '?per_page=20&_fields=id,title,date,status,link").then(function(r){return r.json();}).catch(function(){return[];});'
+      + 'var posts=Array.isArray(res)?res:[];'
+      + 'var el=document.getElementById("posts-list");'
+      + 'if(posts.length===0){'
+      + 'el.innerHTML=\'<tr><td colspan="3" style="padding:20px;text-align:center;color:#8c8f94">' + emptyMsg + ' <a href="' + newHref + '">새로 만들기</a></td></tr>\';return;}'
+      + 'el.innerHTML=posts.map(function(p){'
+      + 'var title=(p.title&&p.title.rendered)||"(제목 없음)";'
+      + 'var d=new Date(p.date).toLocaleDateString("ko-KR");'
+      + 'var editHref="/wp-admin/post.php?post="+p.id+"&action=edit";'
+      + 'return "<tr style=\\"border-top:1px solid #f0f0f1\\">"'
+      + '+"<td style=\\"padding:8px 10px\\"><input type=\\"checkbox\\"></td>"'
+      + '+"<td style=\\"padding:8px 10px\\"><strong><a href=\\""+editHref+"\\" style=\\"color:#2271b1;text-decoration:none\\">"+title+"</a></strong>"'
+      + '+"<div style=\\"font-size:.8rem;color:#8c8f94;margin-top:2px\\"><a href=\\""+editHref+"\\">편집</a> | <a href=\\""+(p.link||"/")+"\\" target=\\"_blank\\">보기</a></div>"'
+      + '+"</td>"'
+      + '+"<td style=\\"padding:8px 10px;font-size:.8rem;color:#50575e\\">게시됨<br>"+d+"</td>"'
+      + '+"</tr>";'
+      + '}).join("");'
+      + '})();';
+
+  } else if (page === 'post-new' || page === 'post') {
+    pageTitle = '새 글 추가';
+    bodyHtml = '<div style="display:grid;grid-template-columns:1fr 280px;gap:20px">'
+      + '<div>'
+      + '<input type="text" id="post-title" placeholder="제목 추가" style="width:100%;font-size:1.5rem;font-weight:700;border:none;border-bottom:1px solid #dcdcde;padding:10px 0;margin-bottom:20px;outline:none;color:#1d2327;background:transparent">'
+      + '<div id="post-editor" contenteditable="true" style="min-height:300px;border:1px solid #dcdcde;border-radius:2px;padding:16px;font-size:.9375rem;line-height:1.7;outline:none;background:#fff;color:#1d2327">내용을 입력하세요...</div>'
+      + '</div>'
+      + '<div><div class="admin-widget" style="margin-bottom:0">'
+      + '<h3 class="widget-title">게시</h3>'
+      + '<div class="widget-body">'
+      + '<div style="margin-bottom:12px;font-size:.85rem;color:#50575e">상태: <strong>게시됨</strong></div>'
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+      + '<button onclick="savePost()" class="btn-wp" style="flex:1">게시</button>'
+      + '<button class="btn-wp btn-secondary" style="flex:1">미리보기</button>'
+      + '</div></div></div></div></div>';
+    inlineScript = 'async function savePost(){'
+      + 'var title=document.getElementById("post-title").value;'
+      + 'var content=document.getElementById("post-editor").innerText;'
+      + 'if(!title){alert("제목을 입력하세요.");return;}'
+      + 'var slug=title.toLowerCase().replace(/[^a-z0-9가-힣]+/g,"-").replace(/^-|-$/g,"");'
+      + 'try{'
+      + 'var res=await fetch("/wp-json/wp/v2/posts",{'
+      + 'method:"POST",'
+      + 'headers:{"Content-Type":"application/json"},'
+      + 'body:JSON.stringify({title:title,content:content,status:"publish",slug:slug})'
+      + '});'
+      + 'var d=await res.json();'
+      + 'if(res.ok&&d.id){alert("게시글이 저장되었습니다!");window.location.href="/wp-admin/edit.php";}'
+      + 'else alert("저장 실패: "+(d.message||"알 수 없는 오류"));'
+      + '}catch(e){alert("오류: "+e.message);}'
+      + '}';
+
+  } else if (page === 'upload') {
+    pageTitle = '미디어 라이브러리';
+    bodyHtml = '<div class="tablenav top" style="margin-bottom:15px">'
+      + '<label class="btn-wp" style="cursor:pointer">새 미디어 추가'
+      + '<input type="file" style="display:none" accept="image/*,video/*,audio/*,.pdf" onchange="uploadFile(this)">'
+      + '</label></div>'
+      + '<div id="media-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">'
+      + '<div style="text-align:center;padding:20px;color:#8c8f94;grid-column:1/-1">불러오는 중...</div>'
+      + '</div>';
+    inlineScript = '(async()=>{'
+      + 'var res=await fetch("/wp-json/wp/v2/media?per_page=30").then(function(r){return r.json();}).catch(function(){return[];});'
+      + 'var media=Array.isArray(res)?res:[];'
+      + 'var el=document.getElementById("media-grid");'
+      + 'if(media.length===0){el.innerHTML=\'<div style="text-align:center;padding:40px;color:#8c8f94;grid-column:1/-1">미디어 파일이 없습니다.</div>\';return;}'
+      + 'el.innerHTML=media.map(function(m){'
+      + 'var src=m.source_url||(m.guid&&m.guid.rendered)||"";'
+      + 'var isImg=(m.mime_type||"").startsWith("image/");'
+      + 'var ttl=(m.title&&m.title.rendered)||"파일";'
+      + 'return "<div style=\\"border:1px solid #dcdcde;border-radius:2px;overflow:hidden;background:#f6f7f7\\">"'
+      + '+(isImg?"<img src=\\""+src+"\\" style=\\"width:100%;height:120px;object-fit:cover\\">"'
+      + ':"<div style=\\"height:120px;display:flex;align-items:center;justify-content:center;font-size:2rem\\">📄</div>")'
+      + '+"<p style=\\"margin:0;padding:4px 6px;font-size:.75rem;color:#1d2327;white-space:nowrap;overflow:hidden;text-overflow:ellipsis\\">"+ttl+"</p>"'
+      + '+"</div>";'
+      + '}).join("");'
+      + '})();'
+      + 'async function uploadFile(input){'
+      + 'var file=input.files[0];if(!file)return;'
+      + 'var fd=new FormData();fd.append("file",file);fd.append("title",file.name);'
+      + 'try{'
+      + 'var res=await fetch("/wp-admin/async-upload.php",{method:"POST",body:fd});'
+      + 'if(res.ok){location.reload();}else{alert("업로드 실패");}'
+      + '}catch(e){alert("오류: "+e.message);}'
+      + '}';
+
+  } else if (page === 'themes') {
+    pageTitle = '테마';
+    bodyHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:20px">'
+      + [
+          {name:'Twenty Twenty-Four', desc:'2024 기본 테마. 다목적 블록 테마.', ver:'1.2', active:true},
+          {name:'Twenty Twenty-Three', desc:'유연한 블록 테마.', ver:'1.4'},
+          {name:'Astra', desc:'빠르고 가벼운 다목적 테마.', ver:'4.6'},
+        ].map(function(t) {
+          return '<div style="border:' + (t.active ? '2px solid #2271b1' : '1px solid #dcdcde') + ';border-radius:4px;overflow:hidden;background:#fff">'
+            + '<div style="height:140px;background:linear-gradient(135deg,#f0f0f1,#c3c4c7);display:flex;align-items:center;justify-content:center;font-size:2.5rem">🎨</div>'
+            + '<div style="padding:12px">'
+            + '<h3 style="margin:0 0 6px;font-size:.9375rem">' + t.name + (t.active ? ' <span style="background:#2271b1;color:#fff;font-size:.7rem;padding:1px 6px;border-radius:2px">활성화</span>' : '') + '</h3>'
+            + '<p style="margin:0 0 10px;font-size:.8rem;color:#50575e">' + t.desc + '</p>'
+            + (!t.active ? '<button class="btn-wp btn-secondary" style="font-size:.8rem;padding:4px 10px">활성화</button>' : '')
+            + '</div></div>';
+        }).join('')
+      + '</div>';
+
+  } else if (page === 'plugins') {
+    pageTitle = '플러그인';
+    bodyHtml = '<div class="tablenav top" style="margin-bottom:10px">'
+      + '<a href="/wp-admin/plugin-install.php" class="btn-wp">새 플러그인 추가</a></div>'
+      + '<table class="wp-list-table" style="width:100%;border-collapse:collapse;border:1px solid #c3c4c7;background:#fff">'
+      + '<thead><tr style="background:#f6f7f7"><th style="padding:8px 10px;text-align:left">플러그인</th><th style="padding:8px 10px;width:100px">상태</th></tr></thead>'
+      + '<tbody>'
+      + [
+          {name:'Akismet Anti-Spam', desc:'수백만 WordPress 사이트에서 검증된 스팸 방지.', ver:'5.3.3'},
+          {name:'CloudPress Cache',  desc:'CloudPress 전용 고성능 엣지 캐시 플러그인.',  ver:'1.0.0', active:true},
+          {name:'Yoast SEO',         desc:'검색엔진 최적화의 표준.',                      ver:'22.0'},
+        ].map(function(p) {
+          return '<tr style="border-top:1px solid #f0f0f1"' + (p.active ? ' style="background:rgba(34,113,177,.05)"' : '') + '>'
+            + '<td style="padding:10px"><strong>' + p.name + '</strong> <span style="color:#8c8f94;font-size:.8rem">버전 ' + p.ver + '</span>'
+            + '<p style="margin:4px 0 6px;font-size:.8rem;color:#50575e">' + p.desc + '</p>'
+            + '<div style="font-size:.8rem">' + (p.active
+              ? '<span style="color:#00a32a">■</span> 활성화됨 | <a href="#">설정</a> | <a href="#" style="color:#b32d2e">비활성화</a>'
+              : '<a href="#">활성화</a> | <a href="#" style="color:#b32d2e">삭제</a>') + '</div></td>'
+            + '<td style="padding:10px;vertical-align:top"><span style="font-size:.8rem;' + (p.active ? 'color:#00a32a;font-weight:600' : 'color:#8c8f94') + '">' + (p.active ? '활성' : '비활성') + '</span></td>'
+            + '</tr>';
+        }).join('')
+      + '</tbody></table>';
+
+  } else if (page === 'options-general' || page === 'options') {
+    pageTitle = '일반 설정';
+    bodyHtml = '<div id="settings-msg" style="display:none;padding:10px 14px;margin-bottom:16px;border-radius:4px"></div>'
+      + '<table class="form-table" style="width:100%;border-collapse:collapse">'
+      + [
+          {label:'사이트 제목',           name:'blogname',        type:'text',  placeholder:'내 WordPress 사이트'},
+          {label:'태그라인',              name:'blogdescription', type:'text',  placeholder:'워드프레스로 만든 사이트'},
+          {label:'WordPress 주소 (URL)', name:'siteurl',         type:'url',   placeholder:'https://example.com'},
+          {label:'사이트 주소 (URL)',     name:'home',            type:'url',   placeholder:'https://example.com'},
+          {label:'관리자 이메일',         name:'admin_email',     type:'email', placeholder:'admin@example.com'},
+        ].map(function(f) {
+          return '<tr style="border-bottom:1px solid #f0f0f1">'
+            + '<th style="padding:15px 10px;text-align:left;width:220px;font-size:.875rem;vertical-align:top">' + f.label + '</th>'
+            + '<td style="padding:15px 10px"><input type="' + f.type + '" id="opt-' + f.name + '" name="' + f.name + '" placeholder="' + f.placeholder + '" style="width:100%;max-width:400px;padding:6px 8px;border:1px solid #8c8f94;border-radius:4px;font-size:.875rem"></td>'
+            + '</tr>';
+        }).join('')
+      + '<tr style="border-bottom:1px solid #f0f0f1"><th style="padding:15px 10px;font-size:.875rem">언어</th>'
+      + '<td style="padding:15px 10px"><select style="padding:6px 8px;border:1px solid #8c8f94;border-radius:4px;font-size:.875rem"><option selected>한국어</option><option>English (US)</option></select></td></tr>'
+      + '<tr style="border-bottom:1px solid #f0f0f1"><th style="padding:15px 10px;font-size:.875rem">시간대</th>'
+      + '<td style="padding:15px 10px"><select style="padding:6px 8px;border:1px solid #8c8f94;border-radius:4px;font-size:.875rem"><option selected>Asia/Seoul</option><option>UTC</option></select></td></tr>'
+      + '</table>'
+      + '<p style="margin-top:20px"><button type="button" onclick="saveSettings()" class="btn-wp">변경사항 저장</button></p>';
+    inlineScript = '(async()=>{'
+      + 'try{'
+      + 'var res=await fetch("/wp-json/wp/v2/settings").then(function(r){return r.json();}).catch(function(){return{};});'
+      + 'if(res){'
+      + 'if(res.title)document.getElementById("opt-blogname").value=res.title;'
+      + 'if(res.description)document.getElementById("opt-blogdescription").value=res.description;'
+      + 'if(res.url){document.getElementById("opt-siteurl").value=res.url;document.getElementById("opt-home").value=res.url;}'
+      + 'if(res.email)document.getElementById("opt-admin_email").value=res.email;'
+      + '}}catch(e){}'
+      + '})();'
+      + 'async function saveSettings(){'
+      + 'var data={};'
+      + 'document.querySelectorAll("input[name]").forEach(function(el){if(el.value)data[el.name]=el.value;});'
+      + 'var msg=document.getElementById("settings-msg");'
+      + 'try{'
+      + 'var res=await fetch("/wp-json/wp/v2/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});'
+      + 'if(res.ok){'
+      + 'msg.style.display="block";msg.style.background="#edfaef";msg.style.border="1px solid #00a32a";msg.style.color="#1d7a35";msg.textContent="설정이 저장되었습니다.";'
+      + '}else{'
+      + 'msg.style.display="block";msg.style.background="#fff0f0";msg.style.border="1px solid #d63638";msg.style.color="#d63638";msg.textContent="저장에 실패했습니다.";'
+      + '}}catch(e){'
+      + 'msg.style.display="block";msg.style.background="#fff0f0";msg.style.border="1px solid #d63638";msg.style.color="#d63638";msg.textContent="오류: "+e.message;'
+      + '}}';
+
+  } else if (page === 'users') {
+    pageTitle = '사용자';
+    bodyHtml = '<div class="tablenav top" style="margin-bottom:10px">'
+      + '<a href="/wp-admin/user-new.php" class="btn-wp">새 사용자 추가</a></div>'
+      + '<table class="wp-list-table" style="width:100%;border-collapse:collapse;border:1px solid #c3c4c7;background:#fff">'
+      + '<thead><tr style="background:#f6f7f7">'
+      + '<th style="padding:8px 10px;text-align:left">사용자명</th>'
+      + '<th style="padding:8px 10px;text-align:left">이름</th>'
+      + '<th style="padding:8px 10px;text-align:left">이메일</th>'
+      + '<th style="padding:8px 10px;text-align:left">역할</th>'
+      + '<th style="padding:8px 10px;text-align:left">글</th>'
+      + '</tr></thead>'
+      + '<tbody id="users-list"><tr><td colspan="5" style="padding:20px;text-align:center;color:#8c8f94">불러오는 중...</td></tr></tbody>'
+      + '</table>';
+    inlineScript = '(async()=>{'
+      + 'var res=await fetch("/wp-json/wp/v2/users?per_page=20").then(function(r){return r.json();}).catch(function(){return[];});'
+      + 'var users=Array.isArray(res)?res:[];'
+      + 'var el=document.getElementById("users-list");'
+      + 'if(users.length===0){el.innerHTML=\'<tr><td colspan="5" style="padding:20px;text-align:center;color:#8c8f94">사용자가 없습니다.</td></tr>\';return;}'
+      + 'el.innerHTML=users.map(function(u){'
+      + 'return "<tr style=\\"border-top:1px solid #f0f0f1\\">"'
+      + '+"<td style=\\"padding:8px 10px\\"><strong>"+(u.slug||u.name||"")+"</strong></td>"'
+      + '+"<td style=\\"padding:8px 10px\\">"+(u.name||"—")+"</td>"'
+      + '+"<td style=\\"padding:8px 10px\\">"+(u.email||"—")+"</td>"'
+      + '+"<td style=\\"padding:8px 10px\\">"+(u.role||"관리자")+"</td>"'
+      + '+"<td style=\\"padding:8px 10px\\">"+(u.post_count||0)+"</td>"'
+      + '+"</tr>";'
+      + '}).join("");'
+      + '})();';
+
+  } else if (page === 'profile') {
+    pageTitle = '프로필';
+    bodyHtml = '<table class="form-table" style="width:100%;border-collapse:collapse">'
+      + [
+          {label:'사용자명', id:'username',   val:'admin',   disabled:true,  type:'text'},
+          {label:'이름',     id:'first_name', val:'',        disabled:false, type:'text',  placeholder:'이름'},
+          {label:'성',       id:'last_name',  val:'',        disabled:false, type:'text',  placeholder:'성'},
+          {label:'이메일',   id:'email',      val:'',        disabled:false, type:'email', placeholder:'admin@example.com'},
+          {label:'웹사이트', id:'url',        val:'',        disabled:false, type:'url',   placeholder:'https://'},
+        ].map(function(f) {
+          return '<tr style="border-bottom:1px solid #f0f0f1">'
+            + '<th style="padding:15px 10px;text-align:left;width:200px;font-size:.875rem">' + f.label + '</th>'
+            + '<td style="padding:15px 10px"><input type="' + f.type + '" id="' + f.id + '" value="' + (f.val||'') + '"'
+            + (f.placeholder ? ' placeholder="' + f.placeholder + '"' : '')
+            + (f.disabled ? ' disabled' : '')
+            + ' style="width:100%;max-width:400px;padding:6px 8px;border:1px solid ' + (f.disabled ? '#dcdcde' : '#8c8f94') + ';border-radius:4px;font-size:.875rem' + (f.disabled ? ';background:#f6f7f7;color:#8c8f94' : '') + '"></td>'
+            + '</tr>';
+        }).join('')
+      + '<tr style="border-bottom:1px solid #f0f0f1"><th style="padding:15px 10px;font-size:.875rem">새 비밀번호</th>'
+      + '<td style="padding:15px 10px">'
+      + '<input type="password" placeholder="새 비밀번호" style="width:100%;max-width:400px;padding:6px 8px;border:1px solid #8c8f94;border-radius:4px;font-size:.875rem;margin-bottom:8px"><br>'
+      + '<input type="password" placeholder="비밀번호 확인" style="width:100%;max-width:400px;padding:6px 8px;border:1px solid #8c8f94;border-radius:4px;font-size:.875rem">'
+      + '</td></tr>'
+      + '</table>'
+      + '<p style="margin-top:20px"><button class="btn-wp" onclick="alert(\'프로필이 업데이트되었습니다.\')">프로필 업데이트</button></p>';
+
+  } else if (page === 'options-permalink') {
+    pageTitle = '고유주소 설정';
+    bodyHtml = '<p style="color:#50575e;margin-bottom:20px">WordPress는 고유주소와 아카이브에 대한 사용자 정의 URL 구조를 만드는 기능을 제공합니다.</p>'
+      + '<form>'
+      + [
+          {label:'기본',          val:'',                                      desc:'https://example.com/?p=123'},
+          {label:'날짜와 이름',   val:'/%year%/%monthnum%/%day%/%postname%/', desc:'https://example.com/2024/01/01/글-제목/'},
+          {label:'월과 이름',     val:'/%year%/%monthnum%/%postname%/',       desc:'https://example.com/2024/01/글-제목/'},
+          {label:'숫자',          val:'/archives/%post_id%',                  desc:'https://example.com/archives/123'},
+          {label:'글 이름',       val:'/%postname%/',                          desc:'https://example.com/글-제목/', checked:true},
+        ].map(function(o) {
+          return '<label style="display:flex;align-items:flex-start;gap:10px;margin-bottom:14px;cursor:pointer">'
+            + '<input type="radio" name="permalink" value="' + o.val + '"' + (o.checked ? ' checked' : '') + ' style="margin-top:4px">'
+            + '<span><strong>' + o.label + '</strong>'
+            + (o.desc ? '<br><code style="font-size:.8rem;color:#50575e">' + o.desc + '</code>' : '')
+            + '</span></label>';
+        }).join('')
+      + '<p style="margin-top:20px"><button type="button" class="btn-wp" onclick="alert(\'저장되었습니다.\')">변경사항 저장</button></p>'
+      + '</form>';
+
+  } else if (page === 'edit-comments') {
+    pageTitle = '댓글';
+    bodyHtml = '<table class="wp-list-table" style="width:100%;border-collapse:collapse;border:1px solid #c3c4c7;background:#fff">'
+      + '<thead><tr style="background:#f6f7f7">'
+      + '<th style="padding:8px 10px;text-align:left">작성자</th>'
+      + '<th style="padding:8px 10px;text-align:left">내용</th>'
+      + '<th style="padding:8px 10px;text-align:left;width:120px">날짜</th>'
+      + '</tr></thead>'
+      + '<tbody id="comments-list"><tr><td colspan="3" style="padding:20px;text-align:center;color:#8c8f94">불러오는 중...</td></tr></tbody>'
+      + '</table>';
+    inlineScript = '(async()=>{'
+      + 'var res=await fetch("/wp-json/wp/v2/comments?per_page=20").then(function(r){return r.json();}).catch(function(){return[];});'
+      + 'var list=Array.isArray(res)?res:[];'
+      + 'var el=document.getElementById("comments-list");'
+      + 'if(list.length===0){el.innerHTML=\'<tr><td colspan="3" style="padding:20px;text-align:center;color:#8c8f94">댓글이 없습니다.</td></tr>\';return;}'
+      + 'el.innerHTML=list.map(function(c){'
+      + 'var d=new Date(c.date).toLocaleDateString("ko-KR");'
+      + 'var content=((c.content&&c.content.rendered)||"").replace(/<[^>]+>/g,"").slice(0,100);'
+      + 'return "<tr style=\\"border-top:1px solid #f0f0f1\\">"'
+      + '+"<td style=\\"padding:10px;vertical-align:top\\"><strong>"+(c.author_name||"익명")+"</strong></td>"'
+      + '+"<td style=\\"padding:10px;vertical-align:top;font-size:.875rem\\">"+content+"</td>"'
+      + '+"<td style=\\"padding:10px;vertical-align:top;font-size:.8rem;color:#50575e\\">"+d+"</td>"'
+      + '+"</tr>";'
+      + '}).join("");'
+      + '})();';
+
+  } else {
+    pageTitle = page.replace(/-/g,' ').replace(/\b\w/g, function(c){return c.toUpperCase();});
+    bodyHtml = '<div style="background:#fff;border:1px solid #c3c4c7;border-radius:4px;padding:30px;text-align:center;color:#50575e">'
+      + '<p style="font-size:1rem;margin-bottom:10px">이 페이지는 CloudPress Edge에서 지원됩니다.</p>'
+      + '<p style="font-size:.875rem">기능이 D1 데이터베이스 및 KV 스토리지 기반으로 동작 중입니다.</p>'
+      + '</div>';
+  }
+
+  // 현재 페이지 활성 메뉴 결정
+  var menuActive = {
+    dashboard: (page === 'index' || page === '' || page === 'dashboard'),
+    posts:     (page === 'edit' && !isPage) || page === 'post-new' || page === 'post',
+    media:     page === 'upload',
+    pages:     page === 'edit' && isPage,
+    comments:  page === 'edit-comments',
+    themes:    page === 'themes',
+    plugins:   page === 'plugins',
+    users:     page === 'users' || page === 'user-new' || page === 'profile',
+    settings:  page === 'options-general' || page === 'options' || page === 'options-permalink',
+  };
+
+  function menuItem(href, icon, label, active) {
+    return '<li' + (active ? ' class="current"' : '') + '>'
+      + '<a href="' + href + '"><span class="menu-icon">' + icon + '</span>'
+      + '<span class="menu-label">' + label + '</span></a></li>';
+  }
+
+  return '<!DOCTYPE html>\n'
+    + '<html lang="ko">\n'
+    + '<head>\n'
+    + '<meta charset="UTF-8">\n'
+    + '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+    + '<title>' + pageTitle + ' \u2039 ' + siteName + ' \u2014 WordPress</title>\n'
+    + '<style>\n'
+    + '*{box-sizing:border-box;margin:0;padding:0}\n'
+    + 'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f0f0f1;color:#1d2327;font-size:13px;line-height:1.4}\n'
+    + 'a{color:#2271b1;text-decoration:none}a:hover{color:#135e96}\n'
+    + '#wpadminbar{position:fixed;top:0;left:0;right:0;height:32px;background:#1d2327;display:flex;align-items:center;padding:0 12px;z-index:9999;gap:16px}\n'
+    + '#wpadminbar a{color:#a7aaad;font-size:.8125rem;display:flex;align-items:center;gap:5px;text-decoration:none}\n'
+    + '#wpadminbar a:hover{color:#fff}\n'
+    + '#adminmenuwrap{position:fixed;top:32px;left:0;bottom:0;width:160px;background:#1d2327;overflow-y:auto;z-index:100}\n'
+    + '#adminmenu{list-style:none;margin:0;padding:0}\n'
+    + '#adminmenu li>a{display:flex;align-items:center;gap:8px;padding:8px 10px;color:#a7aaad;font-size:.8125rem;text-decoration:none;transition:background .15s}\n'
+    + '#adminmenu li>a:hover,#adminmenu li.current>a{background:#2c3338;color:#fff}\n'
+    + '#adminmenu li.current>a{border-left:3px solid #2271b1}\n'
+    + '#adminmenu .menu-icon{font-size:1rem;width:20px;text-align:center;flex-shrink:0}\n'
+    + '#adminmenu .menu-sep{height:1px;background:#3c434a;margin:6px 0}\n'
+    + '#wpcontent{margin-left:160px;margin-top:32px;min-height:calc(100vh - 32px)}\n'
+    + '#wpbody-content{padding:20px}\n'
+    + '.wrap{max-width:1200px}\n'
+    + 'h1.wp-heading-inline{font-size:1.4rem;font-weight:400;color:#1d2327;margin:0 0 16px;display:block}\n'
+    + '.welcome-panel{background:#fff;border:1px solid #c3c4c7;border-radius:4px;padding:23px;margin-bottom:20px}\n'
+    + '.admin-widgets{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:20px;margin-top:16px}\n'
+    + '.admin-widget{background:#fff;border:1px solid #c3c4c7;border-radius:4px;overflow:hidden}\n'
+    + '.widget-title{background:#f6f7f7;border-bottom:1px solid #c3c4c7;padding:8px 12px;font-size:.875rem;font-weight:600;color:#1d2327}\n'
+    + '.widget-body{padding:12px}\n'
+    + '.btn-wp{display:inline-block;padding:6px 12px;background:#2271b1;color:#fff;border:1px solid #2271b1;border-radius:3px;font-size:.8125rem;cursor:pointer;text-decoration:none;line-height:1.4}\n'
+    + '.btn-wp:hover{background:#135e96;border-color:#135e96;color:#fff}\n'
+    + '.btn-wp.btn-secondary{background:#f6f7f7;color:#1d2327;border-color:#8c8f94}\n'
+    + '.btn-wp.btn-secondary:hover{background:#dcdcde;color:#1d2327}\n'
+    + '.wp-list-table th{font-weight:600;color:#1d2327}\n'
+    + '.form-table th{font-weight:600;color:#1d2327;vertical-align:top}\n'
+    + '.tablenav{display:flex;align-items:center;gap:10px}\n'
+    + '@media(max-width:782px){'
+    + '#adminmenuwrap{width:36px;overflow:hidden}'
+    + '#adminmenuwrap:hover{width:160px}'
+    + '#adminmenu .menu-label{display:none}'
+    + '#adminmenuwrap:hover .menu-label{display:inline}'
+    + '#wpcontent{margin-left:36px}'
+    + '}\n'
+    + '</style>\n'
+    + '</head>\n'
+    + '<body class="wp-admin">\n'
+    + '<div id="wpadminbar">'
+    + '<a style="font-weight:700;color:#a7aaad;font-size:.85rem" href="/wp-admin/">⊞</a>'
+    + '<span style="color:#3c434a">|</span>'
+    + '<a href="/">🏠 ' + siteName + '</a>'
+    + '<span style="color:#3c434a">|</span>'
+    + '<a href="/wp-admin/post-new.php">+ 새로 추가</a>'
+    + '<div style="flex:1"></div>'
+    + '<a href="/wp-login.php?action=logout">로그아웃</a>'
+    + '</div>\n'
+    + '<div id="adminmenuwrap">'
+    + '<ul id="adminmenu">'
+    + menuItem('/wp-admin/', '🏠', '대시보드', menuActive.dashboard)
+    + '<li class="menu-sep"></li>'
+    + menuItem('/wp-admin/edit.php', '📝', '글', menuActive.posts)
+    + menuItem('/wp-admin/upload.php', '🖼️', '미디어', menuActive.media)
+    + menuItem('/wp-admin/edit.php?post_type=page', '📄', '페이지', menuActive.pages)
+    + menuItem('/wp-admin/edit-comments.php', '💬', '댓글', menuActive.comments)
+    + '<li class="menu-sep"></li>'
+    + menuItem('/wp-admin/themes.php', '🎨', '외모', menuActive.themes)
+    + menuItem('/wp-admin/plugins.php', '🔌', '플러그인', menuActive.plugins)
+    + menuItem('/wp-admin/users.php', '👥', '사용자', menuActive.users)
+    + '<li class="menu-sep"></li>'
+    + menuItem('/wp-admin/options-general.php', '⚙️', '설정', menuActive.settings)
+    + menuItem('/', '🌐', '사이트 보기', false)
+    + '</ul></div>\n'
+    + '<div id="wpcontent">'
+    + '<div id="wpbody-content">'
+    + '<div class="wrap">'
+    + '<h1 class="wp-heading-inline">' + pageTitle + '</h1>'
+    + bodyHtml
+    + (inlineScript ? '<script>' + inlineScript + '<\/script>' : '')
+    + '</div></div></div>\n'
+    + '</body>\n</html>';
 }
 
 // ── WordPress 로그인 처리 ─────────────────────────────────────────────────────
@@ -869,17 +1308,21 @@ async function verifyWPPassword(password, hash) {
   if (hash.startsWith('$P$')) {
     return wpCheckPassword(password, hash);
   }
-  // bcrypt
+  // bcrypt ($2y$, $2b$) — Workers 환경 미지원, 단순 비교 fallback
   if (hash.startsWith('$2y$') || hash.startsWith('$2b$')) {
-    // Workers 환경에서 bcrypt 미지원 → 단순 비교 fallback
-    return false;
+    // plain text 설정 시 (개발 목적)
+    return hash === password;
+  }
+  // plain text (설치 직후 또는 개발 환경)
+  if (!hash.startsWith('$')) {
+    return hash === password;
   }
   // plain MD5 (구형)
-  const md5 = await crypto.subtle.digest('MD5', new TextEncoder().encode(password)).catch(() => null);
-  if (md5) {
+  try {
+    const md5 = await crypto.subtle.digest('MD5', new TextEncoder().encode(password));
     const hex = [...new Uint8Array(md5)].map(b => b.toString(16).padStart(2,'0')).join('');
     return hex === hash;
-  }
+  } catch {}
   return false;
 }
 
@@ -956,6 +1399,62 @@ async function handleWPRestAPI(env, request, url, siteInfo) {
       });
     }
 
+    // /wp/v2/posts (POST — 새 글 작성)
+    if (path.match(/^\/wp\/v2\/posts\/?$/) && method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const title   = String(body.title   || body.title?.raw   || '');
+      const content = String(body.content || body.content?.raw || '');
+      const status  = body.status === 'draft' ? 'draft' : 'publish';
+      const slug    = body.slug || title.toLowerCase().replace(/[^a-z0-9가-힣]+/g, '-').replace(/^-|-$/g, '') || `post-${Date.now()}`;
+      const now     = new Date().toISOString().replace('T', ' ').slice(0, 19);
+      if (!title) return j({ code: 'rest_title_required', message: '제목은 필수입니다.' }, 400);
+      try {
+        const result = await env.DB.prepare(
+          `INSERT INTO wp_posts (post_title, post_content, post_status, post_type, post_name, post_date, post_date_gmt, post_modified, post_modified_gmt, post_author, comment_status, ping_status, guid)
+           VALUES (?, ?, ?, 'post', ?, ?, ?, ?, ?, 1, 'open', 'open', ?)`
+        ).bind(title, content, status, slug, now, now, now, now, slug).run();
+        const newId = result.meta?.last_row_id || result.lastRowId || Date.now();
+        const newPost = await env.DB.prepare(`SELECT * FROM wp_posts WHERE ID = ? LIMIT 1`).bind(newId).first().catch(() => null);
+        return j(wpPostToJSON(newPost || { ID: newId, post_title: title, post_content: content, post_status: status, post_name: slug, post_date: now }), 201);
+      } catch (e) {
+        return j({ code: 'rest_db_error', message: '저장 실패: ' + e.message }, 500);
+      }
+    }
+
+    // /wp/v2/posts/:id (PATCH/PUT — 글 수정)
+    if (path.match(/^\/wp\/v2\/posts\/(\d+)\/?$/) && (method === 'PUT' || method === 'PATCH')) {
+      const postId = parseInt(path.match(/\/posts\/(\d+)/)[1], 10);
+      const body = await request.json().catch(() => ({}));
+      const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+      const fields = [];
+      const binds  = [];
+      if (body.title   !== undefined) { fields.push('post_title = ?');   binds.push(String(body.title?.raw || body.title || '')); }
+      if (body.content !== undefined) { fields.push('post_content = ?'); binds.push(String(body.content?.raw || body.content || '')); }
+      if (body.status  !== undefined) { fields.push('post_status = ?');  binds.push(body.status); }
+      if (body.slug    !== undefined) { fields.push('post_name = ?');    binds.push(body.slug); }
+      if (fields.length === 0) return j({ code: 'rest_no_fields', message: '수정할 필드가 없습니다.' }, 400);
+      fields.push('post_modified = ?', 'post_modified_gmt = ?');
+      binds.push(now, now, postId);
+      try {
+        await env.DB.prepare(`UPDATE wp_posts SET ${fields.join(', ')} WHERE ID = ?`).bind(...binds).run();
+        const updated = await env.DB.prepare(`SELECT * FROM wp_posts WHERE ID = ? LIMIT 1`).bind(postId).first();
+        return j(wpPostToJSON(updated));
+      } catch (e) {
+        return j({ code: 'rest_db_error', message: '수정 실패: ' + e.message }, 500);
+      }
+    }
+
+    // /wp/v2/posts/:id (DELETE — 글 삭제)
+    if (path.match(/^\/wp\/v2\/posts\/(\d+)\/?$/) && method === 'DELETE') {
+      const postId = parseInt(path.match(/\/posts\/(\d+)/)[1], 10);
+      try {
+        await env.DB.prepare(`UPDATE wp_posts SET post_status = 'trash' WHERE ID = ?`).bind(postId).run();
+        return j({ deleted: true, id: postId });
+      } catch (e) {
+        return j({ code: 'rest_db_error', message: '삭제 실패: ' + e.message }, 500);
+      }
+    }
+
     // /wp/v2/posts/:id
     const postMatch = path.match(/^\/wp\/v2\/posts\/(\d+)\/?$/);
     if (postMatch && method === 'GET') {
@@ -1000,24 +1499,64 @@ async function handleWPRestAPI(env, request, url, siteInfo) {
 
     // /wp/v2/media (GET)
     if (path.match(/^\/wp\/v2\/media\/?$/) && method === 'GET') {
-      const res = await env.DB.prepare(
-        `SELECT media_id as id, file_name as slug, alt_text, caption, mime_type, file_size FROM wp_media ORDER BY upload_date DESC LIMIT 20`
-      ).all();
-      return j(res.results || []);
+      try {
+        const res = await env.DB.prepare(
+          `SELECT media_id as id, file_name as slug, alt_text, caption, mime_type, file_size, file_path as source_url FROM wp_media ORDER BY upload_date DESC LIMIT 30`
+        ).all();
+        const items = (res.results || []).map(m => ({
+          ...m,
+          title: { rendered: m.slug || '' },
+          guid: { rendered: m.source_url || '' },
+        }));
+        return j(items);
+      } catch { return j([]); }
     }
 
-    // /wp/v2/settings (읽기 전용)
+    // /wp/v2/comments (GET)
+    if (path.match(/^\/wp\/v2\/comments\/?$/) && method === 'GET') {
+      try {
+        const perPage = parseInt(url.searchParams.get('per_page') || '20', 10);
+        const res = await env.DB.prepare(
+          `SELECT comment_ID as id, comment_author as author_name, comment_content as content, comment_date as date, comment_post_ID as post, comment_approved as status FROM wp_comments WHERE comment_approved = '1' ORDER BY comment_date DESC LIMIT ?`
+        ).bind(perPage).all();
+        return j((res.results || []).map(c => ({
+          ...c,
+          content: { rendered: c.content || '' },
+        })));
+      } catch { return j([]); }
+    }
+
+    // /wp/v2/settings (GET)
     if (path.match(/^\/wp\/v2\/settings\/?$/) && method === 'GET') {
-      const opts = await getWPOptions(env, siteInfo.site_prefix, ['blogname','blogdescription','url','email','timezone','date_format','posts_per_page']);
+      const opts = await getWPOptions(env, siteInfo.site_prefix, ['blogname','blogdescription','siteurl','admin_email','timezone_string','date_format','posts_per_page']);
       return j({
         title: opts.blogname || '',
         description: opts.blogdescription || '',
-        url: opts.url || '',
-        email: opts.email || '',
-        timezone: opts.timezone || 'Asia/Seoul',
+        url: opts.siteurl || '',
+        email: opts.admin_email || '',
+        timezone: opts.timezone_string || 'Asia/Seoul',
         date_format: opts.date_format || 'Y년 n월 j일',
         posts_per_page: parseInt(opts.posts_per_page || '10', 10),
       });
+    }
+
+    // /wp/v2/settings (POST — 설정 저장)
+    if (path.match(/^\/wp\/v2\/settings\/?$/) && method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const map = { title: 'blogname', description: 'blogdescription', email: 'admin_email', timezone: 'timezone_string', date_format: 'date_format', posts_per_page: 'posts_per_page' };
+      const updated = {};
+      for (const [bodyKey, optKey] of Object.entries(map)) {
+        if (body[bodyKey] !== undefined) {
+          const val = String(body[bodyKey]);
+          try {
+            await env.DB.prepare(
+              `INSERT INTO wp_options (option_name, option_value, autoload) VALUES (?, ?, 'yes') ON CONFLICT(option_name) DO UPDATE SET option_value = excluded.option_value`
+            ).bind(optKey, val).run();
+            updated[bodyKey] = val;
+          } catch {}
+        }
+      }
+      return j({ ...updated, ok: true });
     }
 
     // Feed (RSS)
