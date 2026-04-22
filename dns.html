@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=5.0"/>
+  <title>DNS 관리 — CloudPress</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
+  <link rel="alternate icon" href="/favicon.ico"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="dashboard.css"/>
+  <style>
+    .dns-zone-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;margin-bottom:18px;overflow:hidden}
+    .dns-zone-header{padding:16px 20px;display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none;transition:background .15s}
+    .dns-zone-header:hover{background:var(--surface2)}
+    .zone-icon{width:36px;height:36px;border-radius:8px;background:rgba(249,115,22,.1);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .zone-name{font-family:var(--font-head);font-weight:700;font-size:.95rem;flex:1}
+    .zone-meta{font-size:.75rem;color:var(--muted);display:flex;gap:10px;align-items:center}
+    .zone-body{border-top:1px solid var(--border);padding:0}
+    .zone-body.collapsed{display:none}
+    .dns-toolbar{padding:14px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--bg);border-bottom:1px solid var(--border)}
+    .dns-toolbar input{flex:1;min-width:160px;background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:7px 12px;color:var(--text);font-size:.85rem;outline:none}
+    .dns-toolbar input:focus{border-color:var(--accent)}
+    .dns-toolbar select{background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;color:var(--text);font-size:.85rem;outline:none;cursor:pointer}
+    .dns-table{width:100%;border-collapse:collapse}
+    .dns-table th{padding:9px 14px;font-size:.75rem;color:var(--muted);font-weight:600;text-align:left;border-bottom:1px solid var(--border);background:var(--bg);white-space:nowrap}
+    .dns-table td{padding:10px 14px;font-size:.83rem;border-bottom:1px solid var(--border);vertical-align:middle;word-break:break-all}
+    .dns-table tr:last-child td{border-bottom:none}
+    .dns-table tr:hover td{background:rgba(249,115,22,.03)}
+    .type-badge{display:inline-block;padding:2px 7px;border-radius:5px;font-size:.72rem;font-weight:700;font-family:monospace}
+    .type-A{background:rgba(34,197,94,.12);color:#16a34a}
+    .type-AAAA{background:rgba(34,197,94,.12);color:#16a34a}
+    .type-CNAME{background:rgba(99,102,241,.12);color:#4f46e5}
+    .type-MX{background:rgba(249,115,22,.12);color:var(--accent)}
+    .type-TXT{background:rgba(234,179,8,.12);color:#b45309}
+    .type-NS{background:rgba(168,85,247,.12);color:#7c3aed}
+    .type-SRV{background:rgba(236,72,153,.12);color:#be185d}
+    .type-CAA{background:rgba(14,165,233,.12);color:#0369a1}
+    .proxied-yes{display:inline-flex;align-items:center;gap:4px;font-size:.73rem;font-weight:600;color:#f97316;white-space:nowrap}
+    .proxied-no{display:inline-flex;align-items:center;gap:4px;font-size:.73rem;color:var(--muted);white-space:nowrap}
+    .dns-actions{display:flex;gap:5px;flex-shrink:0}
+    .add-dns-form{padding:16px 20px;background:var(--bg);border-top:1px solid var(--border)}
+    .add-dns-form h4{font-size:.85rem;font-weight:700;margin-bottom:12px;color:var(--text)}
+    .form-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+    .form-row input,.form-row select,.form-row textarea{background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:8px 11px;color:var(--text);font-size:.85rem;outline:none;flex:1;min-width:100px}
+    .form-row input:focus,.form-row select:focus,.form-row textarea:focus{border-color:var(--accent)}
+    .form-row textarea{resize:vertical;min-height:60px}
+    .form-row .w-type{flex:0 0 100px}
+    .form-row .w-ttl{flex:0 0 80px}
+    .form-row .w-prio{flex:0 0 70px}
+    .proxied-toggle{display:flex;align-items:center;gap:6px;font-size:.82rem;cursor:pointer;user-select:none}
+    .proxied-toggle input{width:15px;height:15px;cursor:pointer;accent-color:var(--accent)}
+    .domain-add-zone{background:var(--surface);border:1px solid var(--border2);border-radius:12px;padding:20px;margin-bottom:20px}
+    .domain-add-zone h3{font-family:var(--font-head);font-weight:700;font-size:.95rem;margin-bottom:12px}
+    .domain-add-zone .info-text{font-size:.82rem;color:var(--muted);margin-bottom:14px;line-height:1.6}
+    .nameserver-box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-top:10px}
+    .nameserver-box .ns-label{font-size:.73rem;color:var(--muted);margin-bottom:6px}
+    .ns-list{display:flex;flex-direction:column;gap:4px}
+    .ns-item{display:flex;align-items:center;gap:8px;font-family:monospace;font-size:.82rem;font-weight:600}
+    .status-ok{color:#16a34a}
+    .status-pending{color:var(--accent)}
+    .status-inactive{color:var(--muted)}
+    .empty-records{text-align:center;padding:24px;color:var(--muted);font-size:.85rem}
+    .search-filter{display:flex;gap:8px;align-items:center;padding:12px 20px;background:var(--bg);border-bottom:1px solid var(--border)}
+    .search-filter input{flex:1;background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:7px 12px;color:var(--text);font-size:.85rem;outline:none}
+    .search-filter input:focus{border-color:var(--accent)}
+    .ttl-display{font-size:.78rem;color:var(--muted);font-family:monospace}
+    .edit-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:none;align-items:center;justify-content:center;padding:16px}
+    .edit-modal-bg.open{display:flex}
+    .edit-modal{background:var(--surface);border:1px solid var(--border2);border-radius:14px;width:100%;max-width:520px;padding:24px;max-height:90vh;overflow-y:auto}
+    .edit-modal h3{font-family:var(--font-head);font-weight:700;font-size:1rem;margin-bottom:18px}
+    .edit-modal .field-group{margin-bottom:12px}
+    .edit-modal .field-group label{display:block;font-size:.78rem;color:var(--muted);margin-bottom:4px;font-weight:600}
+    .edit-modal .field-group input,.edit-modal .field-group select,.edit-modal .field-group textarea{width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:9px 12px;color:var(--text);font-size:.87rem;outline:none}
+    .edit-modal .field-group input:focus,.edit-modal .field-group select:focus,.edit-modal .field-group textarea:focus{border-color:var(--accent)}
+    .edit-modal .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+    .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:10px 20px;border-radius:10px;font-size:.85rem;font-weight:600;z-index:9999;opacity:0;pointer-events:none;transition:opacity .3s}
+    .toast.show{opacity:1}
+    .zone-status-badge{padding:2px 8px;border-radius:10px;font-size:.7rem;font-weight:700}
+    .zone-active{background:rgba(34,197,94,.12);color:#16a34a}
+    .zone-pending{background:rgba(249,115,22,.12);color:var(--accent)}
+    .zone-inactive{background:rgba(148,163,184,.12);color:var(--muted)}
+    .ns-setup-info{background:rgba(99,102,241,.07);border:1px solid rgba(99,102,241,.2);border-radius:10px;padding:14px 16px;margin-bottom:14px;font-size:.83rem;line-height:1.6}
+    .ns-setup-info strong{color:#818cf8}
+  </style>
+</head>
+<body>
+<div class="app-wrap">
+  <aside class="sidebar" id="sidebar">
+    <a href="/dashboard.html" class="sb-logo">
+      <svg width="22" height="22" viewBox="0 0 28 28" fill="none"><path d="M14 2L26 8V20L14 26L2 20V8L14 2Z" stroke="currentColor" stroke-width="1.5"/><path d="M14 8L20 11V17L14 20L8 17V11L14 8Z" fill="currentColor" opacity=".5"/><circle cx="14" cy="14" r="2.2" fill="currentColor"/></svg>
+      CloudPress
+    </a>
+    <nav class="sb-nav">
+      <div class="sb-section">
+        <div class="sb-label">메인</div>
+        <a href="/dashboard.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>대시보드</a>
+        <a href="/create.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>사이트 추가</a>
+        <a href="/dns.html" class="sb-link active"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>DNS 관리</a>
+      </div>
+      <div class="sb-section">
+        <div class="sb-label">계정</div>
+        <a href="/account.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>내 계정</a>
+        <a href="/pricing.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M2 10h20" stroke="currentColor" stroke-width="1.5"/></svg>플랜 안내</a>
+      </div>
+      <div class="sb-section" id="adminMenu" style="display:none">
+        <div class="sb-label">관리자</div>
+        <a href="/admin.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" stroke="currentColor" stroke-width="1.5"/></svg>어드민 패널</a>
+      </div>
+      <div class="sb-section">
+        <button class="sb-link danger" onclick="CP.logout()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="16 17 21 12 16 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="21" y1="12" x2="9" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>로그아웃</button>
+      </div>
+    </nav>
+    <div class="sb-user">
+      <div class="sb-avatar" id="sbAvatar">?</div>
+      <div class="sb-uinfo"><div class="sb-uname" id="sbName">—</div><div class="sb-uemail" id="sbEmail">—</div></div>
+    </div>
+  </aside>
+  <div class="sidebar-overlay" id="overlay" onclick="closeSidebar()"></div>
+  <main class="main">
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:14px">
+        <button class="sidebar-toggle" onclick="openSidebar()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 12h18M3 6h18M3 18h18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+        <span class="topbar-title">DNS 관리</span>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="openAddDomainModal()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>도메인 추가
+      </button>
+    </div>
+
+    <div class="content">
+      <div class="ns-setup-info">
+        <strong>🌐 Cloudflare 네임서버 인증 방식</strong><br>
+        도메인의 네임서버를 Cloudflare 네임서버로 변경하면 자동으로 인증됩니다. 이미 Cloudflare 계정에 등록된 도메인은 즉시 사용 가능합니다.
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <h2 style="font-family:var(--font-head);font-size:1rem;font-weight:700">클라우드플레어 도메인 목록</h2>
+        <button class="btn btn-ghost btn-sm" onclick="loadZones()" id="refreshBtn">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M23 4v6h-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M1 20v-6h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          새로고침
+        </button>
+      </div>
+
+      <div id="zonesList">
+        <div style="text-align:center;padding:60px;color:var(--muted)">
+          <div style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite"></div>
+          <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- 레코드 편집 모달 -->
+<div class="edit-modal-bg" id="editModal">
+  <div class="edit-modal">
+    <h3 id="editModalTitle">DNS 레코드 수정</h3>
+    <div class="field-group">
+      <label>타입</label>
+      <select id="editType" onchange="updateEditFormFields()">
+        <option>A</option><option>AAAA</option><option>CNAME</option>
+        <option>MX</option><option>TXT</option><option>NS</option>
+        <option>SRV</option><option>CAA</option>
+      </select>
+    </div>
+    <div class="field-group">
+      <label>이름 (Name)</label>
+      <input type="text" id="editName" placeholder="예: @ 또는 www"/>
+    </div>
+    <div class="field-group">
+      <label id="editContentLabel">내용 (Content)</label>
+      <input type="text" id="editContent" placeholder="예: 1.2.3.4"/>
+    </div>
+    <div class="field-group" id="editPrioGroup" style="display:none">
+      <label>우선순위 (Priority)</label>
+      <input type="number" id="editPrio" value="10" min="0" max="65535"/>
+    </div>
+    <div class="field-group">
+      <label>TTL</label>
+      <select id="editTTL">
+        <option value="1">자동</option>
+        <option value="60">1분</option>
+        <option value="300">5분</option>
+        <option value="600">10분</option>
+        <option value="1800">30분</option>
+        <option value="3600">1시간</option>
+        <option value="86400">1일</option>
+      </select>
+    </div>
+    <div class="field-group" id="editProxiedGroup">
+      <label class="proxied-toggle">
+        <input type="checkbox" id="editProxied" checked/>
+        Cloudflare 프록시 사용 (주황 구름 🟠)
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeEditModal()">취소</button>
+      <button class="btn btn-primary" onclick="saveRecord()" id="saveRecordBtn">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 도메인 추가 모달 -->
+<div class="edit-modal-bg" id="addDomainModal">
+  <div class="edit-modal">
+    <h3>도메인 추가 (Cloudflare에 등록)</h3>
+    <p style="font-size:.83rem;color:var(--muted);margin-bottom:16px;line-height:1.6">
+      Cloudflare 계정에 새 도메인을 추가합니다. 도메인 등록 기관에서 Cloudflare 네임서버로 변경하면 활성화됩니다.
+    </p>
+    <div class="field-group">
+      <label>도메인 이름</label>
+      <input type="text" id="newDomainName" placeholder="예: example.com" autocomplete="off"/>
+    </div>
+    <div class="field-group">
+      <label>플랜</label>
+      <select id="newDomainPlan">
+        <option value="free">Free</option>
+        <option value="pro">Pro</option>
+        <option value="business">Business</option>
+      </select>
+    </div>
+    <div id="addDomainResult" style="margin-top:10px"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeAddDomainModal()">취소</button>
+      <button class="btn btn-primary" onclick="addDomain()" id="addDomainBtn">추가하기</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+<script>
+let zones = [];
+let currentZoneId = null;
+let currentRecordId = null;
+let editMode = 'add'; // 'add' | 'edit'
+let recordsByZone = {}; // zoneId → records[]
+let expandedZones = new Set();
+
+function showToast(msg, ok=true) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = ok ? 'var(--text)' : '#ef4444';
+  t.style.color = ok ? 'var(--bg)' : '#fff';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+async function loadZones() {
+  const btn = document.getElementById('refreshBtn');
+  if (btn) btn.disabled = true;
+  document.getElementById('zonesList').innerHTML = `
+    <div style="text-align:center;padding:60px;color:var(--muted)">
+      <div style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite"></div>
+    </div>`;
+  try {
+    const res = await CP.apiFetch('/api/dns/zones');
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || '도메인 목록 불러오기 실패');
+    zones = data.zones || [];
+    renderZones();
+  } catch(e) {
+    document.getElementById('zonesList').innerHTML = `
+      <div style="text-align:center;padding:40px;color:var(--muted)">
+        <div style="font-size:2rem;margin-bottom:8px">⚠️</div>
+        <div style="font-size:.87rem">${e.message}</div>
+        <div style="font-size:.78rem;margin-top:6px">계정 설정에서 Cloudflare API 키를 확인해주세요.</div>
+      </div>`;
+  }
+  if (btn) btn.disabled = false;
+}
+
+function renderZones() {
+  const el = document.getElementById('zonesList');
+  if (!zones.length) {
+    el.innerHTML = `<div style="text-align:center;padding:40px;color:var(--muted)">
+      <div style="font-size:2rem;margin-bottom:8px">🌐</div>
+      <div style="font-size:.87rem">등록된 도메인이 없습니다.</div>
+      <div style="font-size:.78rem;margin-top:6px">오른쪽 상단 "도메인 추가" 버튼으로 추가하세요.</div>
+    </div>`;
+    return;
+  }
+  el.innerHTML = zones.map(z => renderZoneCard(z)).join('');
+}
+
+function renderZoneCard(z) {
+  const statusClass = z.status === 'active' ? 'zone-active' : z.status === 'pending' ? 'zone-pending' : 'zone-inactive';
+  const statusLabel = z.status === 'active' ? '활성' : z.status === 'pending' ? '대기 중' : '비활성';
+  const isExpanded = expandedZones.has(z.id);
+  return `
+  <div class="dns-zone-card" id="zone-${z.id}">
+    <div class="dns-zone-header" onclick="toggleZone('${z.id}')">
+      <div class="zone-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#f97316" stroke-width="1.5"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" stroke="#f97316" stroke-width="1.5"/></svg>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div class="zone-name">${esc(z.name)}</div>
+        <div class="zone-meta">
+          <span class="zone-status-badge ${statusClass}">${statusLabel}</span>
+          <span>${z.plan?.name || 'Free'}</span>
+          ${z.nameservers ? `<span>${z.nameservers.length}개 NS</span>` : ''}
+        </div>
+      </div>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="flex-shrink:0;transition:transform .2s;transform:rotate(${isExpanded?'180':'0'}deg)" id="chevron-${z.id}"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </div>
+    <div class="zone-body ${isExpanded ? '' : 'collapsed'}" id="zonebody-${z.id}">
+      ${z.status === 'pending' ? `
+      <div style="padding:12px 20px;background:rgba(249,115,22,.05);border-bottom:1px solid var(--border)">
+        <div style="font-size:.82rem;color:var(--accent);font-weight:600;margin-bottom:8px">⚠️ 네임서버 변경 필요</div>
+        <div style="font-size:.79rem;color:var(--muted);margin-bottom:8px">도메인 등록 기관에서 아래 Cloudflare 네임서버로 변경하세요:</div>
+        <div class="ns-list">${(z.nameservers||[]).map(ns=>`<div class="ns-item"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/></svg>${esc(ns)}</div>`).join('')}</div>
+      </div>` : ''}
+      <div class="dns-toolbar">
+        <input type="text" placeholder="레코드 검색..." id="search-${z.id}" oninput="filterRecords('${z.id}')"/>
+        <select id="typeFilter-${z.id}" onchange="filterRecords('${z.id}')">
+          <option value="">모든 타입</option>
+          <option>A</option><option>AAAA</option><option>CNAME</option>
+          <option>MX</option><option>TXT</option><option>NS</option><option>SRV</option>
+        </select>
+        <button class="btn btn-primary btn-sm" onclick="openAddRecordModal('${z.id}')">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>레코드 추가
+        </button>
+      </div>
+      <div id="records-${z.id}">
+        <div style="text-align:center;padding:32px;color:var(--muted);font-size:.85rem">
+          <div style="display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite"></div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function toggleZone(zoneId) {
+  const body = document.getElementById(`zonebody-${zoneId}`);
+  const chevron = document.getElementById(`chevron-${zoneId}`);
+  if (body.classList.contains('collapsed')) {
+    body.classList.remove('collapsed');
+    chevron.style.transform = 'rotate(180deg)';
+    expandedZones.add(zoneId);
+    if (!recordsByZone[zoneId]) await loadRecords(zoneId);
+  } else {
+    body.classList.add('collapsed');
+    chevron.style.transform = 'rotate(0deg)';
+    expandedZones.delete(zoneId);
+  }
+}
+
+async function loadRecords(zoneId) {
+  const el = document.getElementById(`records-${zoneId}`);
+  if (!el) return;
+  try {
+    const res = await CP.apiFetch(`/api/dns/zones/${zoneId}/records`);
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || '레코드 조회 실패');
+    recordsByZone[zoneId] = data.records || [];
+    renderRecords(zoneId);
+  } catch(e) {
+    if (el) el.innerHTML = `<div class="empty-records">레코드 조회 실패: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderRecords(zoneId, filter='', typeFilter='') {
+  const el = document.getElementById(`records-${zoneId}`);
+  if (!el) return;
+  let recs = (recordsByZone[zoneId] || []);
+  if (filter) recs = recs.filter(r => r.name.includes(filter) || r.content.includes(filter));
+  if (typeFilter) recs = recs.filter(r => r.type === typeFilter);
+  if (!recs.length) {
+    el.innerHTML = `<div class="empty-records">DNS 레코드가 없습니다.</div>`;
+    return;
+  }
+  el.innerHTML = `<div style="overflow-x:auto">
+    <table class="dns-table">
+      <thead><tr>
+        <th>타입</th><th>이름</th><th>내용</th><th>TTL</th><th>프록시</th><th>작업</th>
+      </tr></thead>
+      <tbody>${recs.map(r => `
+        <tr>
+          <td><span class="type-badge type-${r.type}">${esc(r.type)}</span></td>
+          <td style="font-family:monospace;font-weight:600;font-size:.82rem">${esc(r.name)}</td>
+          <td style="font-family:monospace;font-size:.8rem;max-width:220px">${esc(r.content)}${r.priority ? ` <span class="ttl-display">(우선순위: ${r.priority})</span>` : ''}</td>
+          <td class="ttl-display">${r.ttl === 1 ? '자동' : r.ttl + 's'}</td>
+          <td>${r.proxiable ? (r.proxied ? '<span class="proxied-yes">🟠 ON</span>' : '<span class="proxied-no">⚪ OFF</span>') : '<span class="proxied-no">—</span>'}</td>
+          <td>
+            <div class="dns-actions">
+              <button class="btn btn-ghost btn-sm" onclick="openEditRecordModal('${zoneId}','${r.id}')" title="수정">✏️</button>
+              <button class="btn btn-ghost btn-sm" onclick="deleteRecord('${zoneId}','${r.id}','${esc(r.name)}')" title="삭제" style="color:var(--error)">🗑️</button>
+            </div>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function filterRecords(zoneId) {
+  const f = document.getElementById(`search-${zoneId}`)?.value || '';
+  const t = document.getElementById(`typeFilter-${zoneId}`)?.value || '';
+  renderRecords(zoneId, f, t);
+}
+
+// ── 레코드 추가/편집 모달 ─────────────────────────────────────────────────────
+function openAddRecordModal(zoneId) {
+  editMode = 'add';
+  currentZoneId = zoneId;
+  currentRecordId = null;
+  document.getElementById('editModalTitle').textContent = 'DNS 레코드 추가';
+  document.getElementById('editType').value = 'A';
+  document.getElementById('editName').value = '';
+  document.getElementById('editContent').value = '';
+  document.getElementById('editPrio').value = '10';
+  document.getElementById('editTTL').value = '1';
+  document.getElementById('editProxied').checked = true;
+  document.getElementById('saveRecordBtn').textContent = '추가';
+  updateEditFormFields();
+  document.getElementById('editModal').classList.add('open');
+}
+
+function openEditRecordModal(zoneId, recordId) {
+  const rec = (recordsByZone[zoneId]||[]).find(r => r.id === recordId);
+  if (!rec) return;
+  editMode = 'edit';
+  currentZoneId = zoneId;
+  currentRecordId = recordId;
+  document.getElementById('editModalTitle').textContent = 'DNS 레코드 수정';
+  document.getElementById('editType').value = rec.type;
+  document.getElementById('editName').value = rec.name;
+  document.getElementById('editContent').value = rec.content;
+  document.getElementById('editPrio').value = rec.priority || 10;
+  document.getElementById('editTTL').value = String(rec.ttl);
+  document.getElementById('editProxied').checked = !!rec.proxied;
+  document.getElementById('saveRecordBtn').textContent = '저장';
+  updateEditFormFields();
+  document.getElementById('editModal').classList.add('open');
+}
+
+function closeEditModal() {
+  document.getElementById('editModal').classList.remove('open');
+}
+
+function updateEditFormFields() {
+  const type = document.getElementById('editType').value;
+  const prioGroup = document.getElementById('editPrioGroup');
+  const proxiedGroup = document.getElementById('editProxiedGroup');
+  const contentLabel = document.getElementById('editContentLabel');
+  prioGroup.style.display = (type === 'MX' || type === 'SRV' || type === 'CAA') ? '' : 'none';
+  proxiedGroup.style.display = (type === 'A' || type === 'AAAA' || type === 'CNAME') ? '' : 'none';
+  const labels = { A:'IPv4 주소', AAAA:'IPv6 주소', CNAME:'대상 호스트명', MX:'메일 서버', TXT:'텍스트 값', NS:'네임서버', SRV:'서비스 대상', CAA:'인증서 발급 기관' };
+  contentLabel.textContent = (labels[type] || '내용 (Content)');
+}
+
+async function saveRecord() {
+  const type = document.getElementById('editType').value;
+  const name = document.getElementById('editName').value.trim();
+  const content = document.getElementById('editContent').value.trim();
+  const ttl = parseInt(document.getElementById('editTTL').value);
+  const proxied = document.getElementById('editProxied').checked && ['A','AAAA','CNAME'].includes(type);
+  const priority = parseInt(document.getElementById('editPrio').value) || 10;
+  if (!name || !content) { showToast('이름과 내용을 입력해주세요.', false); return; }
+  const btn = document.getElementById('saveRecordBtn');
+  btn.disabled = true; btn.textContent = '처리 중...';
+  try {
+    const body = { type, name, content, ttl, proxied };
+    if (['MX','SRV','CAA'].includes(type)) body.priority = priority;
+    let res;
+    if (editMode === 'add') {
+      res = await CP.apiFetch(`/api/dns/zones/${currentZoneId}/records`, { method:'POST', body:JSON.stringify(body) });
+    } else {
+      res = await CP.apiFetch(`/api/dns/zones/${currentZoneId}/records/${currentRecordId}`, { method:'PUT', body:JSON.stringify(body) });
+    }
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || '저장 실패');
+    closeEditModal();
+    showToast(editMode === 'add' ? '레코드가 추가되었습니다.' : '레코드가 수정되었습니다.');
+    recordsByZone[currentZoneId] = null;
+    await loadRecords(currentZoneId);
+  } catch(e) {
+    showToast(e.message, false);
+  }
+  btn.disabled = false;
+  btn.textContent = editMode === 'add' ? '추가' : '저장';
+}
+
+async function deleteRecord(zoneId, recordId, name) {
+  if (!confirm(`"${name}" 레코드를 삭제하시겠습니까?`)) return;
+  try {
+    const res = await CP.apiFetch(`/api/dns/zones/${zoneId}/records/${recordId}`, { method:'DELETE' });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || '삭제 실패');
+    showToast('레코드가 삭제되었습니다.');
+    recordsByZone[zoneId] = null;
+    await loadRecords(zoneId);
+  } catch(e) {
+    showToast(e.message, false);
+  }
+}
+
+// ── 도메인 추가 모달 ──────────────────────────────────────────────────────────
+function openAddDomainModal() {
+  document.getElementById('newDomainName').value = '';
+  document.getElementById('addDomainResult').innerHTML = '';
+  document.getElementById('addDomainModal').classList.add('open');
+}
+function closeAddDomainModal() {
+  document.getElementById('addDomainModal').classList.remove('open');
+}
+
+async function addDomain() {
+  const name = document.getElementById('newDomainName').value.trim().toLowerCase();
+  const plan = document.getElementById('newDomainPlan').value;
+  if (!name || !name.includes('.')) { showToast('올바른 도메인 이름을 입력해주세요.', false); return; }
+  const btn = document.getElementById('addDomainBtn');
+  btn.disabled = true; btn.textContent = '추가 중...';
+  const resEl = document.getElementById('addDomainResult');
+  resEl.innerHTML = '';
+  try {
+    const res = await CP.apiFetch('/api/dns/zones', { method:'POST', body:JSON.stringify({ name, plan }) });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || '도메인 추가 실패');
+    const ns = data.nameservers || [];
+    resEl.innerHTML = `<div style="background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.2);border-radius:8px;padding:12px;font-size:.82rem">
+      <div style="color:#16a34a;font-weight:700;margin-bottom:8px">✅ 도메인이 추가되었습니다!</div>
+      ${ns.length ? `<div style="margin-bottom:6px;color:var(--muted)">아래 네임서버로 변경하세요:</div>
+      ${ns.map(n=>`<div style="font-family:monospace;font-weight:600;font-size:.82rem;padding:2px 0">${esc(n)}</div>`).join('')}` : ''}
+    </div>`;
+    await loadZones();
+    setTimeout(closeAddDomainModal, 3000);
+  } catch(e) {
+    resEl.innerHTML = `<div style="background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:10px;font-size:.82rem;color:var(--error)">${esc(e.message)}</div>`;
+  }
+  btn.disabled = false; btn.textContent = '추가하기';
+}
+
+function esc(s){ return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+// ── 초기화 ────────────────────────────────────────────────────────────────────
+(async () => {
+  const u = await CP.requireAuth();
+  if (!u) return;
+  // 사이드바 사용자 정보
+  document.getElementById('sbAvatar').textContent = (u.name||u.email||'?')[0].toUpperCase();
+  document.getElementById('sbName').textContent = u.name || '사용자';
+  document.getElementById('sbEmail').textContent = u.email || '';
+  if (u.role === 'admin') document.getElementById('adminMenu').style.display = '';
+  await loadZones();
+})();
+</script>
+</body>
+</html>
