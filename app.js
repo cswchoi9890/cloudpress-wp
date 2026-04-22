@@ -53,7 +53,7 @@ const CP = {
       ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       ...(opts.headers || {}),
     };
-    const res = await fetch('/api' + path, { ...opts, headers });
+    const res = await fetch(path, { ...opts, headers });
     if (res.status === 401) { this.clearAuth(); this._redirectToLogin(); }
     return res;
   },
