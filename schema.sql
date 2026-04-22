@@ -293,6 +293,35 @@ CREATE TABLE IF NOT EXISTS wp_cron_events (
 -- wp_posts + wp_postmeta 활용 (WordPress 표준 방식)
 
 -- ══════════════════════════════════════════════════════════════════
+-- 채팅 / 상담봇 테이블
+-- ══════════════════════════════════════════════════════════════════
+
+-- ── chat_tickets (상담 티켓) ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS chat_tickets (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id),
+  subject      TEXT NOT NULL DEFAULT '문의',
+  status       TEXT NOT NULL DEFAULT 'open',   -- open | answered | closed
+  is_read_user INTEGER DEFAULT 0,              -- 사용자 미확인 답변 있음
+  is_read_admin INTEGER DEFAULT 0,             -- 어드민 미확인 문의 있음
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ── chat_messages (상담 메시지) ───────────────────────────────────
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id          TEXT PRIMARY KEY,
+  ticket_id   TEXT NOT NULL REFERENCES chat_tickets(id),
+  sender_role TEXT NOT NULL DEFAULT 'user',    -- user | admin | bot
+  content     TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_tickets_user   ON chat_tickets(user_id);
+CREATE INDEX IF NOT EXISTS idx_chat_tickets_status ON chat_tickets(status);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_ticket ON chat_messages(ticket_id);
+
+-- ══════════════════════════════════════════════════════════════════
 -- 인덱스
 -- ══════════════════════════════════════════════════════════════════
 CREATE INDEX IF NOT EXISTS idx_sites_domain     ON sites(primary_domain);
