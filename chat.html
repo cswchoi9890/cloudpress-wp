@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=5.0"/>
+  <title>상담 문의 — CloudPress</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
+  <link rel="alternate icon" href="/favicon.ico"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="dashboard.css"/>
+  <style>
+    .chat-wrap{display:flex;flex-direction:column;height:calc(100vh - 120px);max-width:760px;margin:0 auto}
+    .chat-messages{flex:1;overflow-y:auto;padding:16px 0;display:flex;flex-direction:column;gap:12px}
+    .msg{display:flex;gap:10px;align-items:flex-end;max-width:90%}
+    .msg.bot{align-self:flex-start}
+    .msg.user{align-self:flex-end;flex-direction:row-reverse}
+    .msg-avatar{width:30px;height:30px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:.8rem;font-weight:700}
+    .bot-avatar{background:rgba(249,115,22,.15);color:var(--accent)}
+    .user-avatar{background:rgba(99,102,241,.15);color:#6366f1}
+    .msg-bubble{padding:11px 15px;border-radius:16px;font-size:.87rem;line-height:1.6;max-width:100%}
+    .bot .msg-bubble{background:var(--surface);border:1px solid var(--border);border-bottom-left-radius:4px}
+    .user .msg-bubble{background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+    .msg-time{font-size:.68rem;color:var(--muted);margin-top:4px;text-align:right}
+    .bot .msg-time{text-align:left}
+    .chat-input-area{border-top:1px solid var(--border);padding:14px 0 0;display:flex;gap:10px;align-items:flex-end}
+    .chat-input-area textarea{flex:1;background:var(--surface);border:1px solid var(--border2);border-radius:12px;padding:11px 14px;color:var(--text);font-size:.88rem;font-family:inherit;resize:none;min-height:44px;max-height:120px;outline:none;line-height:1.5}
+    .chat-input-area textarea:focus{border-color:var(--accent)}
+    .send-btn{width:44px;height:44px;border-radius:12px;background:var(--accent);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:opacity .2s}
+    .send-btn:hover{opacity:.85}
+    .send-btn:disabled{opacity:.4;cursor:default}
+    .quick-btns{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+    .quick-btn{padding:6px 12px;background:var(--surface);border:1px solid var(--border2);border-radius:20px;font-size:.78rem;cursor:pointer;color:var(--text);transition:all .15s;white-space:nowrap}
+    .quick-btn:hover{border-color:var(--accent);color:var(--accent)}
+    .typing-indicator{display:flex;gap:4px;align-items:center;padding:8px 12px}
+    .typing-dot{width:6px;height:6px;border-radius:50%;background:var(--muted);animation:typing 1.2s infinite}
+    .typing-dot:nth-child(2){animation-delay:.2s}
+    .typing-dot:nth-child(3){animation-delay:.4s}
+    @keyframes typing{0%,80%,100%{transform:scale(.8);opacity:.5}40%{transform:scale(1.2);opacity:1}}
+    .chat-header{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:14px}
+    .chat-header-icon{width:44px;height:44px;border-radius:12px;background:rgba(249,115,22,.1);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .online-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:4px}
+    .ticket-panel{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin-top:16px}
+    .ticket-item{padding:12px 0;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:12px}
+    .ticket-item:last-child{border-bottom:none}
+    .ticket-status{padding:2px 8px;border-radius:10px;font-size:.72rem;font-weight:700;white-space:nowrap;flex-shrink:0}
+    .ts-open{background:rgba(249,115,22,.1);color:var(--accent)}
+    .ts-answered{background:rgba(34,197,94,.1);color:#16a34a}
+    .ts-closed{background:rgba(148,163,184,.1);color:var(--muted)}
+    .link-a{color:var(--accent);text-decoration:underline}
+  </style>
+</head>
+<body>
+<div class="app-wrap">
+  <aside class="sidebar" id="sidebar">
+    <a href="/dashboard.html" class="sb-logo">
+      <svg width="22" height="22" viewBox="0 0 28 28" fill="none"><path d="M14 2L26 8V20L14 26L2 20V8L14 2Z" stroke="currentColor" stroke-width="1.5"/><path d="M14 8L20 11V17L14 20L8 17V11L14 8Z" fill="currentColor" opacity=".5"/><circle cx="14" cy="14" r="2.2" fill="currentColor"/></svg>
+      CloudPress
+    </a>
+    <nav class="sb-nav">
+      <div class="sb-section">
+        <div class="sb-label">메인</div>
+        <a href="/dashboard.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>대시보드</a>
+        <a href="/create.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>사이트 추가</a>
+        <a href="/dns.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10" stroke="currentColor" stroke-width="1.5"/></svg>DNS 관리</a>
+      </div>
+      <div class="sb-section">
+        <div class="sb-label">지원</div>
+        <a href="/chat.html" class="sb-link active"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>상담 문의</a>
+        <a href="/faq.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="12" y1="17" x2="12.01" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>자주 묻는 질문</a>
+      </div>
+      <div class="sb-section">
+        <div class="sb-label">계정</div>
+        <a href="/account.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>내 계정</a>
+        <a href="/pricing.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M2 10h20" stroke="currentColor" stroke-width="1.5"/></svg>플랜 안내</a>
+      </div>
+      <div class="sb-section" id="adminMenu" style="display:none">
+        <div class="sb-label">관리자</div>
+        <a href="/admin.html" class="sb-link">어드민 패널</a>
+        <a href="/admin-chat.html" class="sb-link">문의 관리</a>
+      </div>
+      <div class="sb-section">
+        <button class="sb-link danger" onclick="CP.logout()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="16 17 21 12 16 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="21" y1="12" x2="9" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>로그아웃</button>
+      </div>
+    </nav>
+    <div class="sb-user">
+      <div class="sb-avatar" id="sbAvatar">?</div>
+      <div class="sb-uinfo"><div class="sb-uname" id="sbName">—</div><div class="sb-uemail" id="sbEmail">—</div></div>
+    </div>
+  </aside>
+  <div class="sidebar-overlay" id="overlay" onclick="closeSidebar()"></div>
+  <main class="main">
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:14px">
+        <button class="sidebar-toggle" onclick="openSidebar()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 12h18M3 6h18M3 18h18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+        <span class="topbar-title">상담 문의</span>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="loadTickets()">내 문의 내역</button>
+    </div>
+
+    <div class="content">
+      <div class="chat-header">
+        <div class="chat-header-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke="#f97316" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
+        <div>
+          <div style="font-family:var(--font-head);font-weight:700;font-size:.95rem">CloudPress 상담봇</div>
+          <div style="font-size:.78rem;color:var(--muted)"><span class="online-dot"></span>자동 답변 + 어드민 연결 지원</div>
+        </div>
+      </div>
+
+      <div class="chat-wrap">
+        <div class="chat-messages" id="chatMessages"></div>
+
+        <div>
+          <div class="quick-btns" id="quickBtns">
+            <button class="quick-btn" onclick="sendQuick('플랜 가격이 어떻게 되나요?')">💰 요금 안내</button>
+            <button class="quick-btn" onclick="sendQuick('워드프레스 사이트 만드는 방법을 알려주세요')">🚀 사이트 생성</button>
+            <button class="quick-btn" onclick="sendQuick('도메인을 연결하는 방법은?')">🌐 도메인 연결</button>
+            <button class="quick-btn" onclick="sendQuick('캐시 제거는 어떻게 하나요?')">🗑️ 캐시 제거</button>
+            <button class="quick-btn" onclick="sendQuick('플러그인 설치 방법을 알려주세요')">🔌 플러그인</button>
+            <button class="quick-btn" onclick="sendQuick('어드민에게 직접 문의하고 싶습니다')">👤 어드민 문의</button>
+          </div>
+
+          <div class="chat-input-area">
+            <textarea id="chatInput" placeholder="문의 내용을 입력하세요..." rows="1"
+              onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+            <button class="send-btn" onclick="sendMessage()" id="sendBtn">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><line x1="22" y1="2" x2="11" y2="13" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/><polygon points="22 2 15 22 11 13 2 9 22 2" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 문의 내역 패널 -->
+      <div class="ticket-panel" id="ticketPanel" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div style="font-family:var(--font-head);font-weight:700;font-size:.93rem">📋 내 문의 내역</div>
+          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('ticketPanel').style.display='none'">닫기</button>
+        </div>
+        <div id="ticketList"><div style="color:var(--muted);font-size:.85rem;text-align:center;padding:20px">불러오는 중...</div></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="app.js"></script>
+<script>
+let chatHistory = [];
+let currentUser = null;
+let ticketsLoaded = false;
+
+// ── 자동 답변 DB ──────────────────────────────────────────────────────────────
+const AUTO_ANSWERS = [
+  {
+    patterns: ['가격','요금','플랜','비용','얼마','price','plan'],
+    answer: `💰 **CloudPress 요금 안내**\n\n` +
+      `• **Free**: 무료 (1개 사이트, 기본 기능)\n` +
+      `• **Pro**: 월 9,900원 (5개 사이트, 커스텀 도메인, 우선 지원)\n` +
+      `• **Business**: 월 29,900원 (무제한 사이트, 전용 CDN, SLA 보장)\n\n` +
+      `자세한 플랜 비교는 <a href="/pricing.html" class="link-a">요금 페이지</a>에서 확인하세요.`,
+  },
+  {
+    patterns: ['사이트 만들','사이트 생성','만드는 방법','생성 방법','어떻게 만'],
+    answer: `🚀 **사이트 생성 방법**\n\n` +
+      `1. 상단 메뉴에서 **"사이트 추가"** 클릭\n` +
+      `2. 사이트 이름과 도메인 선택\n` +
+      `3. **"생성하기"** 클릭 후 약 2~3분 대기\n` +
+      `4. 생성 완료 후 WordPress 관리자 접속\n\n` +
+      `<a href="/create.html" class="link-a">지금 바로 사이트 만들기 →</a>`,
+  },
+  {
+    patterns: ['도메인','domain','연결','cname','dns','네임서버'],
+    answer: `🌐 **도메인 연결 방법**\n\n` +
+      `CloudPress는 **Cloudflare 네임서버 인증 방식**을 사용합니다.\n\n` +
+      `1. **DNS 관리** 페이지에서 도메인 추가\n` +
+      `2. 제공된 Cloudflare 네임서버로 변경\n` +
+      `3. 사이트 상세 → 도메인 관리에서 연결\n\n` +
+      `<a href="/dns.html" class="link-a">DNS 관리 페이지로 이동 →</a>`,
+  },
+  {
+    patterns: ['캐시','cache','purge','초기화'],
+    answer: `🗑️ **캐시 제거 방법**\n\n` +
+      `사이트 상세 페이지에서 **"캐시 제거"** 버튼을 클릭하면 됩니다.\n\n` +
+      `또는 WordPress 관리자 → CloudPress → 캐시 관리에서도 가능합니다.\n\n` +
+      `캐시 제거 후 변경사항이 바로 반영됩니다.`,
+  },
+  {
+    patterns: ['플러그인','plugin','테마','theme','설치'],
+    answer: `🔌 **플러그인/테마 설치 방법**\n\n` +
+      `WordPress 관리자(/wp-admin/)에 접속 후:\n\n` +
+      `• **플러그인**: 플러그인 → 새 플러그인 추가 → 검색 후 설치\n` +
+      `• **테마**: 외모 → 테마 → 새 테마 추가 → 검색 후 설치\n\n` +
+      `WordPress.org에 등록된 모든 플러그인/테마를 설치할 수 있습니다.`,
+  },
+  {
+    patterns: ['속도','성능','느림','빠름','cdn','cloudfront'],
+    answer: `⚡ **CloudPress 성능**\n\n` +
+      `CloudPress는 **Cloudflare Edge Network** 기반으로:\n\n` +
+      `• 전 세계 300+ 엣지 노드 CDN\n` +
+      `• 서울/도쿄 리전 전용 CDN 제공\n` +
+      `• Edge Cache + KV 이중 캐시 (수ms 응답)\n` +
+      `• AWS VPS+CloudFront보다 빠른 응답 속도\n\n` +
+      `WAF + DDoS 방어도 기본 포함됩니다.`,
+  },
+  {
+    patterns: ['어드민','관리자','직접','문의','사람','담당자'],
+    answer: `👤 **어드민 직접 문의**\n\n` +
+      `아래 내용을 보내주시면 어드민이 직접 확인하고 답변드립니다.\n\n` +
+      `문의 내용을 입력해주시면 티켓으로 등록되어 빠르게 처리해드리겠습니다. 보통 **영업일 기준 24시간** 이내 답변드립니다.`,
+    isEscalate: true,
+  },
+  {
+    patterns: ['비밀번호','password','초기화','분실','잊어'],
+    answer: `🔑 **비밀번호 재설정**\n\n` +
+      `• **CloudPress 계정**: 로그인 페이지 → "비밀번호 찾기" 클릭\n` +
+      `• **WordPress 관리자**: /wp-login.php → "비밀번호 분실?" 클릭\n\n` +
+      `이메일로 재설정 링크가 발송됩니다.`,
+  },
+  {
+    patterns: ['백업','backup','복구','복원'],
+    answer: `💾 **백업 및 복구**\n\n` +
+      `WordPress 관리자 → 도구 → 내보내기에서 콘텐츠 백업이 가능합니다.\n\n` +
+      `Cloudflare D1 데이터베이스는 자동으로 일별 스냅샷이 유지됩니다.\n\n` +
+      `추가 백업 기능이 필요하시면 어드민에게 문의해주세요.`,
+  },
+];
+
+function findAutoAnswer(text) {
+  const lower = text.toLowerCase();
+  for (const item of AUTO_ANSWERS) {
+    if (item.patterns.some(p => lower.includes(p))) return item;
+  }
+  return null;
+}
+
+// ── 메시지 렌더링 ─────────────────────────────────────────────────────────────
+function timeStr(d) {
+  return new Date(d).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function addMessage(role, text, time = new Date()) {
+  const el = document.getElementById('chatMessages');
+  const isBot = role === 'bot';
+  const div = document.createElement('div');
+  div.className = `msg ${isBot ? 'bot' : 'user'}`;
+  div.innerHTML = `
+    <div class="msg-avatar ${isBot ? 'bot-avatar' : 'user-avatar'}">${isBot ? '🤖' : (currentUser?.name||'?')[0].toUpperCase()}</div>
+    <div>
+      <div class="msg-bubble">${text.replace(/\n/g,'<br>').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')}</div>
+      <div class="msg-time">${timeStr(time)}</div>
+    </div>`;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function showTyping() {
+  const el = document.getElementById('chatMessages');
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.id = 'typingMsg';
+  div.innerHTML = `
+    <div class="msg-avatar bot-avatar">🤖</div>
+    <div class="msg-bubble">
+      <div class="typing-indicator">
+        <div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>
+      </div>
+    </div>`;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function removeTyping() {
+  document.getElementById('typingMsg')?.remove();
+}
+
+// ── 메시지 전송 ───────────────────────────────────────────────────────────────
+async function sendMessage() {
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  autoResize(input);
+  document.getElementById('sendBtn').disabled = true;
+
+  addMessage('user', text);
+  chatHistory.push({ role: 'user', content: text });
+
+  // 빠른 자동 답변 확인
+  showTyping();
+  const autoAns = findAutoAnswer(text);
+
+  await new Promise(r => setTimeout(r, 600 + Math.random() * 400));
+  removeTyping();
+
+  if (autoAns) {
+    addMessage('bot', autoAns.answer);
+    chatHistory.push({ role: 'bot', content: autoAns.answer });
+    if (autoAns.isEscalate) {
+      // 어드민 직접 문의 → 다음 메시지를 티켓으로 저장 안내
+      setTimeout(() => {
+        addMessage('bot', '📝 문의 내용을 아래에 상세히 입력해주시면 티켓으로 등록해드리겠습니다.');
+      }, 500);
+    }
+  } else {
+    // 자동 답변 없음 → 티켓 생성
+    await submitTicket(text);
+  }
+
+  document.getElementById('sendBtn').disabled = false;
+}
+
+async function submitTicket(message) {
+  // 티켓 저장
+  try {
+    const res = await CP.apiFetch('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      addMessage('bot',
+        `✅ 문의가 접수되었습니다! (티켓 #${data.ticketId || 'N/A'})\n\n` +
+        `어드민이 확인 후 **영업일 기준 24시간** 이내 답변드리겠습니다.\n` +
+        `답변은 이 채팅창 및 이메일로 전송됩니다.`
+      );
+    } else {
+      addMessage('bot', '죄송합니다. 문의 접수 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+    }
+  } catch (e) {
+    addMessage('bot', '네트워크 오류로 문의 접수에 실패했습니다: ' + e.message);
+  }
+}
+
+function sendQuick(text) {
+  document.getElementById('chatInput').value = text;
+  sendMessage();
+}
+
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+// ── 문의 내역 ─────────────────────────────────────────────────────────────────
+async function loadTickets() {
+  const panel = document.getElementById('ticketPanel');
+  panel.style.display = panel.style.display === 'none' ? '' : 'none';
+  if (panel.style.display === 'none') return;
+  if (ticketsLoaded) return;
+  ticketsLoaded = false;
+
+  const listEl = document.getElementById('ticketList');
+  listEl.innerHTML = '<div style="color:var(--muted);font-size:.85rem;text-align:center;padding:20px">불러오는 중...</div>';
+
+  try {
+    const res = await CP.apiFetch('/api/chat?type=tickets');
+    const data = await res.json();
+    const tickets = data.tickets || [];
+    if (!tickets.length) {
+      listEl.innerHTML = '<div style="color:var(--muted);font-size:.85rem;text-align:center;padding:20px">문의 내역이 없습니다.</div>';
+      return;
+    }
+    listEl.innerHTML = tickets.map(t => `
+      <div class="ticket-item">
+        <div style="flex:1">
+          <div style="font-size:.87rem;font-weight:600;margin-bottom:4px">${esc(t.message.slice(0,80))}${t.message.length>80?'…':''}</div>
+          <div style="font-size:.75rem;color:var(--muted)">${new Date(t.created_at).toLocaleString('ko-KR')}</div>
+          ${t.reply ? `<div style="margin-top:8px;padding:8px 10px;background:rgba(34,197,94,.07);border-radius:6px;font-size:.82rem"><strong>답변:</strong> ${esc(t.reply)}</div>` : ''}
+        </div>
+        <span class="ticket-status ${t.status==='answered'?'ts-answered':t.status==='closed'?'ts-closed':'ts-open'}">${t.status==='answered'?'답변완료':t.status==='closed'?'종료':'대기중'}</span>
+      </div>`).join('');
+  } catch(e) {
+    listEl.innerHTML = `<div style="color:var(--error);font-size:.85rem;text-align:center;padding:20px">오류: ${esc(e.message)}</div>`;
+  }
+}
+
+function esc(s){ return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+// ── 초기화 ────────────────────────────────────────────────────────────────────
+(async () => {
+  const u = await CP.requireAuth();
+  if (!u) return;
+  currentUser = u;
+  document.getElementById('sbAvatar').textContent = (u.name||u.email||'?')[0].toUpperCase();
+  document.getElementById('sbName').textContent = u.name || '사용자';
+  document.getElementById('sbEmail').textContent = u.email || '';
+  if (u.role === 'admin') document.getElementById('adminMenu').style.display = '';
+
+  // 환영 메시지
+  addMessage('bot', `안녕하세요, ${u.name || '고객'}님! 👋\n\nCloudPress 상담봇입니다. 아래 자주 묻는 질문을 선택하거나, 직접 입력해주세요.\n\n어드민에게 직접 문의하고 싶으시면 "어드민 문의"를 클릭하세요.`);
+})();
+</script>
+</body>
+</html>
