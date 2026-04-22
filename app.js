@@ -45,6 +45,19 @@ const CP = {
   put:  (p, b) => CP.api(p, { method: 'PUT',    body: JSON.stringify(b) }),
   del:  (p, b) => CP.api(p, { method: 'DELETE', body: JSON.stringify(b || {}) }),
 
+  // apiFetch: raw Response 반환 (dns.html, chat.html 등에서 사용)
+  async apiFetch(path, opts = {}) {
+    const token = this.getToken();
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      ...(opts.headers || {}),
+    };
+    const res = await fetch('/api' + path, { ...opts, headers });
+    if (res.status === 401) { this.clearAuth(); this._redirectToLogin(); }
+    return res;
+  },
+
   async login(email, password, twofaCode) {
     const body = { email, password };
     if (twofaCode) body.twofa_code = twofaCode;
