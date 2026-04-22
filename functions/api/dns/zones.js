@@ -1,0 +1,124 @@
+// functions/api/dns/zones.js — CloudPress DNS 관리 API
+// Cloudflare DNS 존 목록 조회 / 새 도메인(존) 추가
+
+import { CORS, _j, ok, err, getUser, loadAllSettings, settingVal } from '../_shared.js';
+
+const CF_API = 'https://api.cloudflare.com/client/v4';
+
+export const onRequestOptions = () => new Response(null, { status: 204, headers: CORS });
+
+function cfHeaders(token, email) {
+  if (email) return { 'Content-Type': 'application/json', 'X-Auth-Key': token, 'X-Auth-Email': email };
+  return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token };
+}
+
+async function cfReq(auth, path, method = 'GET', body) {
+  const opts = { method, headers: cfHeaders(auth.token, auth.email) };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  try {
+    const res = await fetch(CF_API + path, opts);
+    return await res.json();
+  } catch (e) {
+    return { success: false, errors: [{ message: e.message }] };
+  }
+}
+
+function cfErrMsg(json) {
+  return (json?.errors || []).map(e => (e.code ? `[${e.code}] ` : '') + (e.message || '')).join('; ') || 'unknown';
+}
+
+export async function onRequest({ request, env }) {
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
+
+  const user = await getUser(env, request);
+  if (!user) return err('로그인이 필요합니다.', 401);
+
+  // 사용자 CF 자격증명 조회
+  let userRow;
+  try {
+    userRow = await env.DB.prepare(
+      'SELECT cf_global_api_key, cf_account_email, cf_account_id FROM users WHERE id=?'
+    ).bind(user.id).first();
+  } catch (e) {
+    return err('DB 조회 오류: ' + e.message, 500);
+  }
+
+  // 관리자 설정 fallback
+  let settings = {};
+  try {
+    const rows = await env.DB.prepare('SELECT key,value FROM settings').all();
+    for (const r of rows.results || []) settings[r.key] = r.value;
+  } catch {}
+
+  const cfToken  = userRow?.cf_global_api_key || settingVal(settings, 'cf_api_token') || '';
+  const cfEmail  = userRow?.cf_account_email  || settingVal(settings, 'cf_account_email') || '';
+  const cfAccId  = userRow?.cf_account_id     || settingVal(settings, 'cf_account_id') || '';
+
+  if (!cfToken) return err('Cloudflare API 키가 설정되지 않았습니다. 계정 설정에서 등록해주세요.', 400);
+
+  const auth = { token: cfToken, email: cfEmail || undefined };
+
+  // ── GET: 존 목록 조회 ─────────────────────────────────────────────────────
+  if (request.method === 'GET') {
+    // 페이지네이션 포함, 최대 500개
+    let allZones = [];
+    let page = 1;
+    while (true) {
+      const res = await cfReq(auth, `/zones?per_page=50&page=${page}&account.id=${cfAccId}`);
+      if (!res.success) return err('Cloudflare 존 조회 실패: ' + cfErrMsg(res), 502);
+      const items = res.result || [];
+      allZones = allZones.concat(items.map(z => ({
+        id: z.id,
+        name: z.name,
+        status: z.status,
+        plan: { name: z.plan?.name || 'Free' },
+        nameservers: z.name_servers || [],
+        original_nameservers: z.original_name_servers || [],
+        paused: z.paused,
+        type: z.type,
+        created_on: z.created_on,
+      })));
+      if (items.length < 50) break;
+      page++;
+      if (page > 10) break; // 최대 500개
+    }
+    return ok({ zones: allZones });
+  }
+
+  // ── POST: 새 도메인(존) 추가 ──────────────────────────────────────────────
+  if (request.method === 'POST') {
+    let body;
+    try { body = await request.json(); } catch { return err('잘못된 요청 형식', 400); }
+    const { name, plan = 'free' } = body;
+    if (!name || !name.includes('.')) return err('올바른 도메인을 입력해주세요.', 400);
+
+    const planMap = { free: { id: 'free' }, pro: { id: 'pro' }, business: { id: 'business' } };
+    const res = await cfReq(auth, '/zones', 'POST', {
+      name: name.toLowerCase().trim(),
+      account: { id: cfAccId },
+      jump_start: true,
+      plan: planMap[plan] || { id: 'free' },
+    });
+
+    if (!res.success) {
+      const errMsg = cfErrMsg(res);
+      // 이미 존재하는 존이면 OK
+      if (errMsg.includes('1061') || errMsg.toLowerCase().includes('already exists')) {
+        const listRes = await cfReq(auth, `/zones?name=${encodeURIComponent(name)}`);
+        if (listRes.success && listRes.result?.[0]) {
+          const z = listRes.result[0];
+          return ok({ zone: { id: z.id, name: z.name, status: z.status }, nameservers: z.name_servers || [], existed: true });
+        }
+      }
+      return err('도메인 추가 실패: ' + errMsg, 502);
+    }
+
+    const z = res.result;
+    return ok({
+      zone: { id: z.id, name: z.name, status: z.status },
+      nameservers: z.name_servers || [],
+    }, 201);
+  }
+
+  return err('허용되지 않는 메서드', 405);
+}
