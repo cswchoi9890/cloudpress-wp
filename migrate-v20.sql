@@ -25,3 +25,7 @@ UPDATE sites SET wp_installed = 1 WHERE status = 'active';
 
 -- 인덱스
 CREATE INDEX IF NOT EXISTS idx_sites_custom_domain ON sites(custom_domain);
+
+-- v20.1 — 관리자 계정 컬럼 추가
+ALTER TABLE sites ADD COLUMN wp_admin_username TEXT DEFAULT 'admin';
+ALTER TABLE sites ADD COLUMN wp_admin_password TEXT;
