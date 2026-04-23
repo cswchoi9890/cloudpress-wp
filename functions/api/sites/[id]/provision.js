@@ -491,26 +491,43 @@ async function uploadWordPressWorker(auth, accountId, workerName, opts) {
   const metadata = {
     main_module: 'worker.js',
     compatibility_date: '2025-04-01',
-    compatibility_flags: ['nodejs_compat'],
     bindings,
   };
 
-  // worker.js 소스: env.WORKER_SOURCE → KV → GitHub → 내장 fallback
+  // worker.js 소스: env.WORKER_SOURCE → 관리자 GitHub 설정 → 기본 GitHub → 내장 fallback
   let workerSource = '';
-  // [1] 환경변수 직접 주입 (wrangler secrets으로 WORKER_SOURCE 배포 시)
+  // [1] 환경변수 직접 주입
   if (opts.workerSourceEnv && opts.workerSourceEnv.length > 500) {
     workerSource = opts.workerSourceEnv;
   }
-  // [2] GitHub에서 최신 worker.js 가져오기
+  // [2] 관리자 설정의 GitHub 레포에서 worker.js 가져오기 (최우선)
+  if (!workerSource || workerSource.length < 500) {
+    const repo   = opts.githubRepo   || '';
+    const branch = opts.githubBranch || 'main';
+    const token  = opts.githubToken  || '';
+    if (repo && repo.includes('/')) {
+      try {
+        const ghUrl = `https://raw.githubusercontent.com/${repo}/${branch}/worker.js`;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10000);
+        const ghHeaders = { 'User-Agent': 'CloudPress-Provision/20' };
+        if (token) ghHeaders['Authorization'] = `token ${token}`;
+        const ghRes = await fetch(ghUrl, { headers: ghHeaders, signal: controller.signal });
+        clearTimeout(timer);
+        if (ghRes.ok) {
+          const src = await ghRes.text();
+          if (src && src.length > 1000) workerSource = src;
+        }
+      } catch {}
+    }
+  }
+  // [3] 기본 GitHub fallback (관리자 레포 미설정 또는 실패 시)
   if (!workerSource || workerSource.length < 500) {
     try {
       const ghUrl = 'https://raw.githubusercontent.com/cloudpress-wp/cloudpress-wp/main/worker.js';
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 8000);
-      const ghRes = await fetch(ghUrl, {
-        headers: { 'User-Agent': 'CloudPress-Provision/20' },
-        signal: controller.signal,
-      });
+      const ghRes = await fetch(ghUrl, { headers: { 'User-Agent': 'CloudPress-Provision/20' }, signal: controller.signal });
       clearTimeout(timer);
       if (ghRes.ok) {
         const src = await ghRes.text();
@@ -518,7 +535,7 @@ async function uploadWordPressWorker(auth, accountId, workerName, opts) {
       }
     } catch {}
   }
-  // [3] 내장 fallback (최소 동작 보장)
+  // [4] 내장 fallback (최소 동작 보장)
   if (!workerSource || workerSource.length < 500) {
     workerSource = getBuiltinWorkerSource(opts);
   }
@@ -1280,12 +1297,14 @@ export async function onRequestPost({ request, env, params }) {
     siteDomain:     domain,
     supabaseUrl, supabaseKey, supabaseUrl2, supabaseKey2,
     storageBucket, storageBucket2,
-    // WORKER_SOURCE: 환경변수로 실제 worker.js 소스를 주입 가능
-    // wrangler secret put WORKER_SOURCE < worker.js 로 배포 시 사용
     workerSourceEnv: (env.WORKER_SOURCE && env.WORKER_SOURCE.length > 500) ? env.WORKER_SOURCE : '',
     cacheKv:        cacheKvId,
     cfAuth,
     cfAccountId:    cfAccount,
+    // 관리자 설정에서 읽어온 GitHub 레포 정보
+    githubRepo:     settingVal(settings, 'cms_github_repo',   ''),
+    githubBranch:   settingVal(settings, 'cms_github_branch', 'main'),
+    githubToken:    settingVal(settings, 'cms_github_token',  ''),
   });
 
   if (!upRes.ok) {
