@@ -250,15 +250,25 @@ async function loadSite(){
       <div class="info-title">🔐 WordPress 로그인 정보</div>
       ${(site.wp_admin_url||siteUrl)?`
       <div class="info-row">
-        <div class="info-label">관리자 URL</div>
-        <div class="info-val"><a href="${esc(site.wp_admin_url||siteUrl+'/wp-admin/')}" target="_blank" style="color:var(--accent)">${esc(site.wp_admin_url||siteUrl+'/wp-admin/')}</a></div>
+        <div class="info-label">아이디 (Username)</div>
+        <div class="info-val">
+          <code style="background:rgba(34,113,177,.08);padding:2px 8px;border-radius:4px;font-size:.9rem;user-select:all">${esc(site.wp_admin_username||'admin')}</code>
+          <button onclick="navigator.clipboard.writeText('${esc(site.wp_admin_username||'admin')}');this.textContent='✅';setTimeout(()=>this.textContent='복사',1200)" style="margin-left:6px;padding:2px 8px;background:none;border:1px solid var(--border);border-radius:4px;cursor:pointer;font-size:.75rem;color:var(--muted)">복사</button>
+        </div>
+      </div>
+      <div class="info-row">
+        <div class="info-label">비밀번호 (Password)</div>
+        <div class="info-val" id="pwRow">
+          <code id="pwVal" style="background:rgba(34,113,177,.08);padding:2px 8px;border-radius:4px;font-size:.9rem;user-select:all;letter-spacing:.05em">${esc(site.wp_admin_password||'—')}</code>
+          <button onclick="navigator.clipboard.writeText('${esc(site.wp_admin_password||'')}');this.textContent='✅';setTimeout(()=>this.textContent='복사',1200)" style="margin-left:6px;padding:2px 8px;background:none;border:1px solid var(--border);border-radius:4px;cursor:pointer;font-size:.75rem;color:var(--muted)">복사</button>
+        </div>
       </div>
       <div style="background:rgba(34,113,177,.07);border:1px solid rgba(34,113,177,.18);border-radius:8px;padding:14px;font-size:.82rem;color:var(--muted);margin-top:12px;line-height:1.6">
-        ℹ️ 위 <strong>관리자 URL</strong>로 접속하여 WordPress ID/PW로 로그인하세요.<br>
-        초기 로그인 후 <strong>비밀번호를 변경</strong>하시길 권장합니다.
+        🔑 위 아이디/비밀번호로 <a href="${esc(site.wp_admin_url||siteUrl+'/wp-admin/')}" target="_blank" style="color:var(--accent)">WordPress 관리자</a>에 로그인하세요.<br>
+        보안을 위해 로그인 후 <strong>비밀번호를 즉시 변경</strong>하시길 강력히 권장합니다.
       </div>`:`
       <div style="color:var(--muted);font-size:.85rem;padding:12px 0">
-        ⏳ 프로비저닝 완료 후 관리자 URL이 표시됩니다.
+        ⏳ 프로비저닝 완료 후 로그인 정보가 표시됩니다.
       </div>`}
     </div>
 
