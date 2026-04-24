@@ -151,7 +151,7 @@ export async function onRequestPost({ request, env }) {
         id, user_id, name,
         primary_domain, domain_status,
         site_prefix,
-        wp_username, wp_password, wp_admin_email,
+        wp_admin_username, wp_admin_password, wp_admin_email,
         wp_admin_url,
         status, provision_step, plan
       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
