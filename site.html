@@ -65,6 +65,39 @@
       .info-row{flex-direction:column;gap:4px}
       .info-label{width:100%;padding-bottom:2px}
     }
+
+    /* ── Loword Bridge 색상 체계 ── */
+    :root{
+      --accent:#4F6EF7;
+      --accent2:#6C47FF;
+      --success:#22C55E;
+      --warning:#F59E0B;
+      --error:#EF4444;
+      --bg:#0D0F1A;
+      --bg2:#13162B;
+      --card:#181C35;
+      --border:rgba(79,110,247,.18);
+      --border2:rgba(79,110,247,.32);
+      --text:#E8EAFF;
+      --muted:#8892B0;
+    }
+    .ip-badge{display:inline-flex;align-items:center;gap:5px;background:rgba(79,110,247,.1);border:1px solid rgba(79,110,247,.25);border-radius:6px;padding:3px 10px;font-size:.76rem;font-weight:700;color:#4F6EF7;font-family:monospace;cursor:pointer}
+    .ip-badge:hover{background:rgba(79,110,247,.2)}
+    .setting-section{border:1px solid var(--border);border-radius:12px;padding:0;overflow:hidden;margin-bottom:16px}
+    .setting-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:rgba(79,110,247,.04);border-bottom:1px solid var(--border);cursor:pointer}
+    .setting-header:hover{background:rgba(79,110,247,.08)}
+    .setting-title{font-size:.88rem;font-weight:700;color:var(--text)}
+    .setting-body{padding:14px 16px}
+    .setting-row{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(79,110,247,.07)}
+    .setting-row:last-child{border:none}
+    .setting-label{font-size:.82rem;color:var(--muted)}
+    .toggle-switch{position:relative;width:36px;height:20px;flex-shrink:0}
+    .toggle-switch input{opacity:0;width:0;height:0}
+    .toggle-slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#2a2d4a;border-radius:20px;transition:.3s}
+    .toggle-slider:before{position:absolute;content:"";height:14px;width:14px;left:3px;bottom:3px;background:var(--muted);border-radius:50%;transition:.3s}
+    input:checked+.toggle-slider{background:var(--accent)}
+    input:checked+.toggle-slider:before{transform:translateX(16px);background:#fff}
+  </style>
   </style>
 </head>
 <body>
@@ -292,6 +325,63 @@ async function loadSite(){
         <div id="addDomainResult" style="display:none"></div>
       </div>
     </div>`:''}
+
+    <div class="info-card">
+      <div class="info-title">⚙️ 사이트 설정 (Cloudways 스타일)</div>
+
+      <div class="setting-section">
+        <div class="setting-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+          <span class="setting-title">🚀 성능 최적화</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
+        <div class="setting-body">
+          <div class="setting-row"><span class="setting-label">Edge Cache (KV 캐시)</span><label class="toggle-switch"><input type="checkbox" checked onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+          <div class="setting-row"><span class="setting-label">정적 파일 압축 (Brotli/Gzip)</span><label class="toggle-switch"><input type="checkbox" checked onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+          <div class="setting-row"><span class="setting-label">이미지 최적화 (WebP 변환)</span><label class="toggle-switch"><input type="checkbox" onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+          <div class="setting-row"><span class="setting-label">Minify HTML/CSS/JS</span><label class="toggle-switch"><input type="checkbox" checked onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+          <div class="setting-row"><span class="setting-label">Lazy Load 이미지</span><label class="toggle-switch"><input type="checkbox" checked onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+        </div>
+      </div>
+
+      <div class="setting-section">
+        <div class="setting-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+          <span class="setting-title">🔒 보안 설정</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
+        <div class="setting-body">
+          <div class="setting-row"><span class="setting-label">DDoS 방어 (Cloudflare WAF)</span><label class="toggle-switch"><input type="checkbox" checked onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+          <div class="setting-row"><span class="setting-label">봇 차단 (Bad Bot Filter)</span><label class="toggle-switch"><input type="checkbox" checked onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+          <div class="setting-row"><span class="setting-label">로그인 시도 제한 (Rate Limit)</span><label class="toggle-switch"><input type="checkbox" checked onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+          <div class="setting-row"><span class="setting-label">XML-RPC 비활성화</span><label class="toggle-switch"><input type="checkbox" checked onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+          <div class="setting-row"><span class="setting-label">HTTP → HTTPS 강제 리다이렉트</span><label class="toggle-switch"><input type="checkbox" checked onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+        </div>
+      </div>
+
+      <div class="setting-section">
+        <div class="setting-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+          <span class="setting-title">📊 모니터링 & 알림</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
+        <div class="setting-body">
+          <div class="setting-row"><span class="setting-label">업타임 모니터링</span><label class="toggle-switch"><input type="checkbox" checked onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+          <div class="setting-row"><span class="setting-label">에러 알림 (이메일)</span><label class="toggle-switch"><input type="checkbox" onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+          <div class="setting-row"><span class="setting-label">트래픽 급증 알림</span><label class="toggle-switch"><input type="checkbox" onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+          <div class="setting-row"><span class="setting-label">WordPress 자동 업데이트</span><label class="toggle-switch"><input type="checkbox" checked onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+        </div>
+      </div>
+
+      <div class="setting-section">
+        <div class="setting-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+          <span class="setting-title">🗄️ 백업 & 복원</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
+        <div class="setting-body">
+          <div class="setting-row"><span class="setting-label">자동 백업 (일 1회)</span><label class="toggle-switch"><input type="checkbox" checked onchange="showToast('설정 저장됨','success')"><span class="toggle-slider"></span></label></div>
+          <div class="setting-row"><span class="setting-label">백업 보존 기간</span><span style="font-size:.82rem;color:var(--text)">30일</span></div>
+          <div class="setting-row"><span class="setting-label">원클릭 복원</span><button class="btn btn-ghost btn-sm" onclick="showToast('복원 기능은 Enterprise 플랜에서 사용 가능합니다','warning')">복원 요청</button></div>
+        </div>
+      </div>
+    </div>
 
     <div class="info-card">
       <div class="info-title" style="color:var(--error)">⚠️ 위험 구역</div>
