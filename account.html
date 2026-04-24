@@ -32,7 +32,7 @@
       </div>
       <div class="sb-section"><div class="sb-label">계정</div>
         <a href="/account.html" class="sb-link active"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>내 계정</a>
-        <a href="/pricing.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M2 10h20" stroke="currentColor" stroke-width="1.5"/></svg>요금제 변경</a>
+        <a href="https://cloud-press.co.kr/pricing.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M2 10h20" stroke="currentColor" stroke-width="1.5"/></svg>요금제 변경</a>
       </div>
       <div class="sb-section">
         <div class="sb-label">서비스</div>
@@ -183,7 +183,7 @@ async function init(){
   document.getElementById('pEmail').value=u.email;
   document.getElementById('siteCount').textContent=u.site_count||0;
   const plan=CP.planInfo(u.plan);
-  document.getElementById('planInfo').innerHTML=`<span class="plan-badge" style="background:${plan.color}18;color:${plan.color}">${plan.name}</span>${u.plan!=='free'?` <a href="/pricing.html" style="font-size:.78rem;color:var(--accent);text-decoration:none;margin-left:8px">변경 →</a>`:'<a href="/pricing.html" style="font-size:.78rem;color:var(--accent);text-decoration:none;margin-left:8px">업그레이드 →</a>'}`;
+  document.getElementById('planInfo').innerHTML=`<span class="plan-badge" style="background:${plan.color}18;color:${plan.color}">${plan.name}</span>${u.plan!=='free'?` <a href="https://cloud-press.co.kr/pricing.html" style="font-size:.78rem;color:var(--accent);text-decoration:none;margin-left:8px">변경 →</a>`:'<a href="https://cloud-press.co.kr/pricing.html" style="font-size:.78rem;color:var(--accent);text-decoration:none;margin-left:8px">업그레이드 →</a>'}`;
 
   // 🔧 CF API 상태 표시 개선
   if(u.has_cf_api){
