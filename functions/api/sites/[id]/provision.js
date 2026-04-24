@@ -1092,32 +1092,57 @@ export async function onRequestPost({ request, env, params }) {
 
   // worker.js 소스 로드
   // 1순위: env.WORKER_SOURCE (secret으로 주입된 경우)
-  // 2순위: Pages 자신의 /worker.js 정적 파일에서 fetch (항상 최신 배포 버전)
+  // 2순위: Cloudflare Workers API에서 플랫폼 메인 Worker(cloudpress-wp) 스크립트 다운로드
   let workerSource = (env.WORKER_SOURCE && env.WORKER_SOURCE.length > 200)
     ? env.WORKER_SOURCE
     : null;
 
   if (!workerSource) {
     try {
-      const baseUrl = new URL(request.url);
-      const workerJsUrl = `${baseUrl.protocol}//${baseUrl.host}/worker.js`;
-      console.log(`[provision] worker.js fetch: ${workerJsUrl}`);
-      const fetchRes = await fetch(workerJsUrl);
-      if (fetchRes.ok) {
-        const text = await fetchRes.text();
+      const platformWorkerName = env.PLATFORM_WORKER_NAME || 'cloudpress-wp';
+      const token = typeof cfAuth === 'string' ? cfAuth : cfAuth.token;
+      const email = typeof cfAuth === 'object' ? cfAuth.email : null;
+      const scriptUrl = `${CF_API}/accounts/${cfAccount}/workers/scripts/${platformWorkerName}`;
+      const headers = email
+        ? { 'X-Auth-Key': token, 'X-Auth-Email': email }
+        : { 'Authorization': `Bearer ${token}` };
+      console.log(`[provision] CF Workers API에서 worker.js 다운로드: ${scriptUrl}`);
+      const scriptRes = await fetch(scriptUrl, { headers });
+      if (scriptRes.ok) {
+        // 멀티파트 응답일 수 있으므로 Content-Type 확인
+        const ct = scriptRes.headers.get('content-type') || '';
+        let text = '';
+        if (ct.includes('multipart')) {
+          // multipart/form-data → 첫 번째 파트(worker.js)만 추출
+          const raw = await scriptRes.text();
+          // Content-Disposition: form-data; name="worker.js" 다음 파트
+          const match = raw.match(/Content-Type:[^
+]*
+
+([\s\S]*?)(?:
+--)/);
+          text = match ? match[1].trim() : raw;
+        } else {
+          text = await scriptRes.text();
+        }
         if (text && text.length > 200) {
           workerSource = text;
-          console.log(`[provision] worker.js fetch 성공: ${text.length} bytes`);
+          console.log(`[provision] worker.js 다운로드 성공: ${text.length} bytes`);
+        } else {
+          console.warn('[provision] worker.js 다운로드: 응답이 비어있음', scriptRes.status);
         }
+      } else {
+        const errText = await scriptRes.text().catch(() => '');
+        console.error('[provision] worker.js 다운로드 실패:', scriptRes.status, errText.slice(0, 200));
       }
     } catch (e) {
-      console.error('[provision] worker.js fetch 실패:', e.message);
+      console.error('[provision] worker.js CF API 다운로드 오류:', e.message);
     }
   }
 
   if (!workerSource) {
-    await failSite(env.DB, siteId, 'worker_upload', 'worker.js 소스를 불러올 수 없습니다.');
-    return err('worker.js 소스 로드 실패: Pages에 worker.js가 배포되어 있는지 확인하세요.', 500);
+    await failSite(env.DB, siteId, 'worker_upload', 'worker.js 소스를 불러올 수 없습니다. env.WORKER_SOURCE secret을 설정하거나 CF_API_TOKEN/CF_ACCOUNT_ID를 확인하세요.');
+    return err('worker.js 소스 로드 실패: WORKER_SOURCE secret 또는 Cloudflare API 키를 확인하세요.', 500);
   }
 
   const cfApiTokenForWorker = typeof cfAuth === 'string' ? '' : cfAuth.token;
