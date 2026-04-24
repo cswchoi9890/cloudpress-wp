@@ -758,12 +758,11 @@ async function uploadWordPressWorker(auth, accountId, workerName, opts) {
   if (cfApiToken)   bindings.push({ type: 'secret_text', name: 'CF_API_TOKEN',  text: cfApiToken });
 
   // ── Worker 소스 로드 ──────────────────────────────────────────────────────
-  // 우선순위: opts.workerSource → env.WORKER_SOURCE (wrangler secret)
-  // GitHub fetch, static fallback 완전 없음 (자체 CMS 제거)
+  // opts.workerSource는 provision 핸들러에서 이미 fetch/검증된 소스
   let src = workerSource || '';
 
   if (!src || src.length < 200) {
-    return { ok: false, error: 'Worker 소스가 없습니다. WORKER_SOURCE secret을 설정하세요: wrangler secret put WORKER_SOURCE < worker.js' };
+    return { ok: false, error: 'Worker 소스가 비어 있습니다.' };
   }
 
   // ── 메타데이터 ────────────────────────────────────────────────────────────
@@ -1091,15 +1090,34 @@ export async function onRequestPost({ request, env, params }) {
   siteState.set({ provision_step: 'worker_upload' });
   console.log(`[provision] WordPress Worker 업로드: ${workerName}`);
 
-  // worker.js 소스: env.WORKER_SOURCE만 사용 (자체 CMS 코드 없음)
-  // deploy.sh에서 `wrangler secret put WORKER_SOURCE < worker.js`로 주입됨
-  const workerSource = (env.WORKER_SOURCE && env.WORKER_SOURCE.length > 200)
+  // worker.js 소스 로드
+  // 1순위: env.WORKER_SOURCE (secret으로 주입된 경우)
+  // 2순위: Pages 자신의 /worker.js 정적 파일에서 fetch (항상 최신 배포 버전)
+  let workerSource = (env.WORKER_SOURCE && env.WORKER_SOURCE.length > 200)
     ? env.WORKER_SOURCE
     : null;
 
   if (!workerSource) {
-    await failSite(env.DB, siteId, 'worker_upload', 'WORKER_SOURCE가 설정되지 않았습니다. deploy.sh를 실행하거나 wrangler secret put WORKER_SOURCE < worker.js를 실행하세요.');
-    return err('WORKER_SOURCE 없음. deploy.sh를 실행하거나 wrangler secret put WORKER_SOURCE < worker.js를 실행하세요.', 500);
+    try {
+      const baseUrl = new URL(request.url);
+      const workerJsUrl = `${baseUrl.protocol}//${baseUrl.host}/worker.js`;
+      console.log(`[provision] worker.js fetch: ${workerJsUrl}`);
+      const fetchRes = await fetch(workerJsUrl);
+      if (fetchRes.ok) {
+        const text = await fetchRes.text();
+        if (text && text.length > 200) {
+          workerSource = text;
+          console.log(`[provision] worker.js fetch 성공: ${text.length} bytes`);
+        }
+      }
+    } catch (e) {
+      console.error('[provision] worker.js fetch 실패:', e.message);
+    }
+  }
+
+  if (!workerSource) {
+    await failSite(env.DB, siteId, 'worker_upload', 'worker.js 소스를 불러올 수 없습니다.');
+    return err('worker.js 소스 로드 실패: Pages에 worker.js가 배포되어 있는지 확인하세요.', 500);
   }
 
   const cfApiTokenForWorker = typeof cfAuth === 'string' ? '' : cfAuth.token;
