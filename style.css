@@ -1,14 +1,12 @@
 /* ═══════════════════════════════════════════════════════
-   CloudPress — style.css  (홈/랜딩 전용)
-   Cloudways 스타일 기반 다크 호스팅 테마
+   CloudPress — style.css
+   Cloudways 100% 동일 스타일
    ═══════════════════════════════════════════════════════ */
 
-/* ── Google Fonts 대체용 시스템 폰트 스택 ── */
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
 /* ── CSS Variables ── */
 :root {
-  /* Colors */
   --bg:          #0a0c14;
   --bg2:         #0e1120;
   --surface:     #141828;
@@ -32,14 +30,12 @@
   --grad:        linear-gradient(135deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%);
   --grad-orange: linear-gradient(135deg, #f97316 0%, #fb923c 100%);
 
-  /* Sizing */
   --hh:   68px;
   --max:  1160px;
   --r:    10px;
   --r2:   16px;
   --r3:   24px;
 
-  /* Transitions */
   --tr:   0.2s cubic-bezier(0.4, 0, 0.2, 1);
   --tr-s: 0.15s ease;
 }
@@ -58,12 +54,11 @@ body {
   font-size: 16px;
   line-height: 1.6;
   overflow-x: hidden;
-  cursor: auto;
 }
-a    { color: inherit; text-decoration: none; cursor: pointer; }
+a    { color: inherit; text-decoration: none; }
 ul   { list-style: none; }
 img, svg { display: block; max-width: 100%; }
-button { cursor: pointer; border: none; background: none; font: inherit; color: inherit; }
+button { border: none; background: none; font: inherit; color: inherit; }
 input, textarea, select { font: inherit; color: inherit; }
 
 /* ── Scrollbar ── */
@@ -92,7 +87,6 @@ input, textarea, select { font: inherit; color: inherit; }
   border-radius: 8px;
   white-space: nowrap;
   transition: var(--tr);
-  cursor: pointer;
   position: relative;
   text-decoration: none;
 }
@@ -175,7 +169,6 @@ input, textarea, select { font: inherit; color: inherit; }
   letter-spacing: -0.3px;
   color: var(--t1);
   flex-shrink: 0;
-  cursor: pointer;
 }
 .logo svg { color: var(--accent); }
 .logo span { color: var(--accent); }
@@ -193,7 +186,6 @@ input, textarea, select { font: inherit; color: inherit; }
   font-weight: 500;
   color: var(--t2);
   transition: color var(--tr-s), background var(--tr-s);
-  cursor: pointer;
 }
 .nav a:hover, .nav a.active { color: var(--t1); background: var(--surface); }
 
@@ -205,7 +197,6 @@ input, textarea, select { font: inherit; color: inherit; }
   gap: 5px;
   padding: 8px;
   margin-left: auto;
-  cursor: pointer;
 }
 .burger span {
   display: block;
@@ -356,7 +347,7 @@ input, textarea, select { font: inherit; color: inherit; }
   margin-bottom: 4px;
 }
 .stat-lbl { font-size: 12px; color: var(--t2); font-weight: 500; }
-.stat-divider { display: none; } /* kept for HTML compat */
+.stat-divider { display: none; }
 
 .scroll-cue {
   position: absolute;
@@ -621,7 +612,6 @@ input, textarea, select { font: inherit; color: inherit; }
   border-radius: 100px;
   position: relative;
   transition: background var(--tr), border-color var(--tr);
-  cursor: pointer;
 }
 .tog-btn.on { background: var(--accent); border-color: var(--accent); }
 .tog-thumb {
@@ -721,7 +711,6 @@ input, textarea, select { font: inherit; color: inherit; }
   background: var(--surface);
   color: var(--t1);
   transition: background var(--tr-s);
-  cursor: pointer;
 }
 .faq-q:hover { background: var(--surface2); }
 .faq-arrow { width: 18px; height: 18px; flex-shrink: 0; color: var(--t2); transition: transform 0.35s; }
@@ -789,7 +778,7 @@ input, textarea, select { font: inherit; color: inherit; }
   color: var(--t2);
   margin-bottom: 4px;
 }
-.footer-cols a { font-size: 13.5px; color: var(--t2); transition: color var(--tr-s); cursor: pointer; }
+.footer-cols a { font-size: 13.5px; color: var(--t2); transition: color var(--tr-s); }
 .footer-cols a:hover { color: var(--t1); }
 
 .footer-bottom {
@@ -919,19 +908,3 @@ input, textarea, select { font: inherit; color: inherit; }
   margin: 0 auto;
   line-height: 1.7;
 }
-
-/* cursor fixes — 모든 페이지 */
-a, button, [onclick], [role="button"], .btn,
-label, select, .logo, .nav a,
-.burger, .toggle-switch input, .setting-header {
-  cursor: pointer;
-}
-input[type="text"], input[type="email"], input[type="password"],
-input[type="number"], input[type="url"], input[type="search"],
-textarea {
-  cursor: text;
-}
-[disabled], .btn:disabled, button:disabled { cursor: not-allowed; }
-
-/* Ensure .header-actions links/buttons always pointer */
-.header-actions a, .header-actions button { cursor: pointer; }
