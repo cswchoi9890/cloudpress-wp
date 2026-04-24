@@ -99,11 +99,17 @@ export async function onRequestPost({ request, env }) {
   }
 
   // ── 사이트 생성 ────────────────────────────────────────────────
-  const { siteName, adminLogin, personalDomain, sitePlan } = body;
+  const { siteName, adminLogin, personalDomain, sitePlan, paidOrderId } = body;
   if (!siteName?.trim())        return err('사이트 이름을 입력해주세요.');
   if (!adminLogin || adminLogin.length < 3) return err('관리자 아이디는 3자 이상 입력해주세요.');
   if (!/^[a-zA-Z0-9_]+$/.test(adminLogin)) return err('관리자 아이디는 영문/숫자/언더바만 사용 가능합니다.');
   if (!personalDomain?.trim())  return err('개인 도메인을 입력해주세요.');
+  if (!sitePlan || !['starter', 'pro', 'enterprise'].includes(sitePlan)) {
+    return err('호스팅 플랜을 선택해주세요.');
+  }
+  if (!paidOrderId?.trim()) {
+    return err('선결제 확인 정보가 없습니다. 결제를 먼저 진행해주세요.');
+  }
 
   // 도메인 정규화 [FIX] www 제거 후 검증
   const domain = personalDomain.trim().toLowerCase()
@@ -133,10 +139,26 @@ export async function onRequestPost({ request, env }) {
   if (existingDomain) return err('이미 사용 중인 도메인입니다.');
 
   // 플랜 한도 확인 (메모리 settings에서, D1 쿼리 없음)
-  const effectivePlan = sitePlan || user.plan || 'free';
-  const maxSites = getMaxSitesFromSettings(settings, user.plan);
+  const effectivePlan = sitePlan;
+  const maxSites = getMaxSitesFromSettings(settings, effectivePlan);
   if (maxSites !== -1 && siteCount >= maxSites) {
-    return err(`플랜(${user.plan})의 최대 사이트 수(${maxSites}개)를 초과했습니다.`, 403);
+    return err(`선택한 호스팅 플랜(${effectivePlan})의 최대 사이트 수(${maxSites}개)를 초과했습니다.`, 403);
+  }
+
+  // 결제 완료 검증 (v23 orders 기반)
+  const ord = await env.DB.prepare(
+    `SELECT id, status, product_id
+     FROM orders WHERE id=? AND user_id=? LIMIT 1`
+  ).bind(paidOrderId.trim(), user.id).first().catch(() => null);
+  if (!ord || ord.status !== 'paid') {
+    return err('결제 검증에 실패했습니다. 입금 확인 후 다시 시도해주세요.', 403);
+  }
+  const prd = await env.DB.prepare(
+    `SELECT id, name FROM products WHERE id=? LIMIT 1`
+  ).bind(ord.product_id).first().catch(() => null);
+  if (!prd) return err('결제 상품 정보를 찾을 수 없습니다.', 404);
+  if (!String(prd.name || '').toLowerCase().includes(effectivePlan)) {
+    return err('결제한 상품과 선택한 플랜이 일치하지 않습니다.', 400);
   }
 
   const siteId     = genId();
@@ -163,6 +185,11 @@ export async function onRequestPost({ request, env }) {
       wpAdminUrl,
       'pending', 'init', effectivePlan
     ).run();
+    await env.DB.prepare(
+      `UPDATE orders
+       SET verify_tx_id=COALESCE(verify_tx_id,''), updated_at=datetime('now')
+       WHERE id=?`
+    ).bind(ord.id).run();
   } catch (e) {
     return err('사이트 레코드 생성 실패: ' + e.message, 500);
   }
