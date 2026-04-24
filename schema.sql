@@ -528,3 +528,13 @@ CREATE TABLE IF NOT EXISTS cp_install_lock (
   CONSTRAINT one_row CHECK (id = 1)
 );
 INSERT OR IGNORE INTO cp_install_lock (id, installed_at, version) VALUES (1, datetime('now'), '20.0');
+
+
+-- ── site_settings (사이트별 개별 설정) — v22 추가 ──────────────────────
+CREATE TABLE IF NOT EXISTS site_settings (
+  site_id    TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  key        TEXT NOT NULL,
+  value      TEXT NOT NULL DEFAULT '1',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (site_id, key)
+);
