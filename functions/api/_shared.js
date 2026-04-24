@@ -12,7 +12,7 @@ export const CORS = {
 export const _j  = (d, s = 200) => new Response(JSON.stringify(d), {
   status: s, headers: { 'Content-Type': 'application/json', ...CORS },
 });
-export const ok  = (d = {}) => _j({ ok: true,  ...d });
+export const ok  = (d = {}, s = 200) => _j({ ok: true,  ...d }, s);
 export const err = (msg, s = 400) => _j({ ok: false, error: msg }, s);
 export const handleOptions = () => new Response(null, { status: 204, headers: CORS });
 
