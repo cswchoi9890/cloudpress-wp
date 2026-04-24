@@ -462,11 +462,55 @@ async function cachePut(ctx, request, response, ttl = CACHE_TTL_HTML) {
 }
 
 // ── 메인 fetch 핸들러 ─────────────────────────────────────────────────────────
+// ── 도메인별 호스트 라우팅 (IP 방식, Host 헤더 기반) ──────────────────────
+// 3개 서브도메인으로 분리:
+//   cloud-press.co.kr                  → 홈/랜딩 (index.html)
+//   hosting-console.cloud-press.co.kr → 대시보드+어드민 (dashboard.html)
+//   status.cloud-press.co.kr           → 실시간 서버 상태 (status.html)
+// IP 방식: 모든 도메인이 같은 IP(104.21.0.1 proxied)를 사용
+// Cloudflare Worker가 Host 헤더로 도메인 구별
+const PLATFORM_HOSTS = {
+  home:    ['cloud-press.co.kr', 'www.cloud-press.co.kr'],
+  console: ['hosting-console.cloud-press.co.kr'],
+  status:  ['status.cloud-press.co.kr'],
+};
+
+function getPlatformRoute(hostname) {
+  if (!hostname) return 'home';
+  const h = hostname.toLowerCase();
+  if (PLATFORM_HOSTS.console.some(x => h === x)) return 'console';
+  if (PLATFORM_HOSTS.status.some(x => h === x))  return 'status';
+  if (PLATFORM_HOSTS.home.some(x => h === x))     return 'home';
+  return null; // 사이트 도메인 (사용자 WordPress 사이트)
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const pathname = url.pathname;
     const method   = request.method;
+    const hostname = url.hostname;
+
+    // ── Host 헤더 기반 플랫폼 도메인 식별 ──────────────────────────────────
+    // IP 방식: Cloudflare가 Host 헤더를 그대로 전달 → Worker가 구별
+    const platformRoute = getPlatformRoute(hostname);
+    if (platformRoute !== null) {
+      // 플랫폼 도메인 (cloud-press.co.kr, hosting-console, status)
+      // → CloudPress 관리 플랫폼으로 처리 (Pages가 HTML 서빙)
+      return handlePlatformRoute(request, env, url, platformRoute);
+    }
+
+    // ── 사용자 WordPress 사이트 도메인 ─────────────────────────────────────
+    // ALLOWED_HOST 바인딩으로 허용 도메인 확인 (이중 검증)
+    const allowedHost    = env.ALLOWED_HOST    || '';
+    const allowedHostWww = env.ALLOWED_HOST_WWW || '';
+    if (allowedHost && hostname !== allowedHost && hostname !== allowedHostWww) {
+      // 허용되지 않은 도메인 요청 → 403
+      return new Response('허용되지 않은 도메인입니다.', {
+        status: 403,
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+      });
+    }
 
     // 1. WAF
     const waf = wafCheck(request, url);
@@ -573,15 +617,63 @@ export default {
   },
 };
 
-// ── CloudPress 관리 플랫폼 (사이트 없는 경우) ──────────────────────────────
-async function handleCloudPressAdmin(request, env, url) {
-  // /api/* → Cloudflare Pages Functions로 처리
-  // 그 외 → 플랫폼 정적 HTML (account.html, dashboard.html 등)
+// ── CloudPress 관리 플랫폼 (IP 방식, Host 헤더 기반) ────────────────────────
+// 도메인별 라우팅:
+//   home:    cloud-press.co.kr → index.html, pricing.html, features.html 등
+//   console: hosting-console.cloud-press.co.kr → dashboard.html, create.html 등
+//   status:  status.cloud-press.co.kr → 실시간 서버 상태
+async function handlePlatformRoute(request, env, url, route) {
+  // /api/* → Cloudflare Pages Functions가 처리
   if (url.pathname.startsWith('/api/')) {
     return new Response('API not found', { status: 404 });
   }
-  // 플랫폼 홈 페이지 (index.html)은 Cloudflare Pages가 서빙
-  return new Response('CloudPress Platform', { status: 200 });
+
+  // 실시간 상태 API (status 도메인)
+  if (route === 'status') {
+    if (url.pathname === '/api/health' || url.pathname === '/health') {
+      return new Response(JSON.stringify({
+        status: 'ok',
+        uptime: Date.now(),
+        version: VERSION,
+        region: request.cf?.colo || 'unknown',
+        timestamp: new Date().toISOString(),
+      }), {
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
+      });
+    }
+  }
+
+  // 콘솔 도메인 → 대시보드 페이지들만 허용
+  if (route === 'console') {
+    const consolePaths = ['/dashboard', '/create', '/site', '/account', '/chat',
+      '/admin', '/auth', '/dns', '/payment', '/pricing'];
+    const isConsolePath = consolePaths.some(p => url.pathname === p + '.html' ||
+      url.pathname.startsWith(p));
+    if (!isConsolePath && url.pathname !== '/' && !url.pathname.includes('.')) {
+      // 콘솔 루트 → 대시보드로 리다이렉트
+      return new Response(null, { status: 302, headers: { Location: '/dashboard.html' } });
+    }
+  }
+
+  // 홈 도메인 → 랜딩, pricing, features 등만 허용
+  if (route === 'home') {
+    const consolePaths = ['/dashboard', '/create', '/site', '/account', '/chat', '/admin'];
+    if (consolePaths.some(p => url.pathname.startsWith(p))) {
+      // 홈 도메인에서 콘솔 경로 접근 → 콘솔 도메인으로 리다이렉트
+      return new Response(null, {
+        status: 302,
+        headers: { Location: 'https://hosting-console.cloud-press.co.kr' + url.pathname + url.search },
+      });
+    }
+  }
+
+  // Pages가 정적 HTML 서빙 (Worker는 라우팅만 담당)
+  return new Response('CloudPress Platform — ' + route, { status: 200 });
+}
+
+// 하위 호환성
+async function handleCloudPressAdmin(request, env, url) {
+  return handlePlatformRoute(request, env, url, 'home');
 }
 
 // ── WordPress 로그인 페이지 (오리진 없을 때 기본 표시) ─────────────────────
