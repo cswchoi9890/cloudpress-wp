@@ -1,5 +1,10 @@
-# CloudPress v20.0 — Cloudflare Pages _headers
-# Edge 보안 헤더 + WAF 지원
+# CloudPress v21.0 — Cloudflare Pages _headers
+# 3개 도메인 분리:
+#   cloud-press.co.kr                  (홈/랜딩)
+#   hosting-console.cloud-press.co.kr (대시보드+어드민)
+#   status.cloud-press.co.kr          (실시간 서버 상태)
+# IP 방식: A 레코드(104.21.0.1, proxied) + Worker Route
+# Host 헤더 기반 사이트 구별
 
 /*
   X-Frame-Options: SAMEORIGIN
@@ -9,7 +14,10 @@
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
   Content-Security-Policy: default-src 'self' https: data: 'unsafe-inline' 'unsafe-eval'; img-src 'self' https: data: blob:; font-src 'self' https: data:; frame-ancestors 'self'
   Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
-  X-CloudPress-Version: 20.0
+  X-CloudPress-Version: 21.0
+  # IP 방식 도메인 식별 헤더 (Cloudflare가 Host 헤더를 Worker에 전달)
+  X-CP-Proxy-IP: 104.21.0.1
+  X-CP-Domain-Method: ip-a-record
 
 # 정적 자산 캐시 헤더
 /*.css
@@ -31,11 +39,11 @@
   Cache-Control: public, max-age=31536000, immutable
   Access-Control-Allow-Origin: *
 
-# API: CORS
+# API: CORS (모든 플랫폼 도메인 허용)
 /api/*
   Access-Control-Allow-Origin: *
   Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS
-  Access-Control-Allow-Headers: Content-Type, Authorization, X-WP-Nonce
+  Access-Control-Allow-Headers: Content-Type, Authorization, X-WP-Nonce, Host
 
 # 인증 페이지: 캐시 없음
 /auth.html
@@ -51,5 +59,9 @@
   X-Robots-Tag: noindex
 
 /account.html
+  Cache-Control: no-store, private
+  X-Robots-Tag: noindex
+
+/admin*.html
   Cache-Control: no-store, private
   X-Robots-Tag: noindex
