@@ -187,7 +187,72 @@
             <input type="password" id="toss_secret_key" placeholder="test_sk_..."/>
           </div>
         </div>
+        <div class="field-row">
+          <div class="field">
+            <label>정산 은행명</label>
+            <input type="text" id="settlement_bank_name" placeholder="예: 국민은행"/>
+          </div>
+          <div class="field">
+            <label>예금주</label>
+            <input type="text" id="settlement_account_holder" placeholder="예: (주)클라우드프레스"/>
+          </div>
+        </div>
+        <div class="field">
+          <label>토스 가상계좌 번호(표시용)</label>
+          <input type="text" id="toss_virtual_account_number" placeholder="예: 123-456-789012"/>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>플랫폼 수수료율 (0~1)</label>
+            <input type="number" id="platform_fee_rate" min="0" max="1" step="0.01" placeholder="0.20"/>
+          </div>
+          <div class="field">
+            <label>결제 검증 Webhook Secret</label>
+            <input type="password" id="payment_webhook_secret" placeholder="서명 검증 시크릿"/>
+          </div>
+        </div>
         <button class="btn btn-primary" onclick="savePaymentSettings()">결제 설정 저장</button>
+      </div>
+
+      <!-- 상품 관리 -->
+      <div class="settings-section">
+        <div class="settings-title">🛍️ 결제 상품 관리</div>
+        <div class="field-row">
+          <div class="field">
+            <label>상품 ID (선택)</label>
+            <input type="text" id="prd_id" placeholder="비우면 자동 생성"/>
+          </div>
+          <div class="field">
+            <label>상품명</label>
+            <input type="text" id="prd_name" placeholder="예: starter-hosting"/>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>가격 (KRW)</label>
+            <input type="number" id="prd_price" min="1" placeholder="9900"/>
+          </div>
+          <div class="field">
+            <label>활성화</label>
+            <select id="prd_active">
+              <option value="1">활성</option>
+              <option value="0">비활성</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>설명</label>
+          <input type="text" id="prd_desc" placeholder="상품 설명"/>
+        </div>
+        <button class="btn btn-primary" onclick="saveProduct()">상품 저장</button>
+        <button class="btn btn-ghost" onclick="loadProducts()" style="margin-left:8px">목록 새로고침</button>
+
+        <div style="margin-top:14px;border:1px solid var(--border);border-radius:10px;overflow:hidden">
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr><th style="padding:10px;text-align:left;font-size:.78rem">ID</th><th style="padding:10px;text-align:left;font-size:.78rem">이름</th><th style="padding:10px;text-align:left;font-size:.78rem">가격</th><th style="padding:10px;text-align:left;font-size:.78rem">상태</th><th style="padding:10px;text-align:left;font-size:.78rem">작업</th></tr></thead>
+            <tbody id="productsTbody"></tbody>
+          </table>
+        </div>
       </div>
 
       <!-- 유지보수 모드 -->
@@ -268,6 +333,15 @@ async function loadSettings() {
 
   // 결제
   setVal('toss_client_key', 'toss_client_key');
+  setVal('settlement_bank_name', 'settlement_bank_name');
+  setVal('settlement_account_holder', 'settlement_account_holder');
+  setVal('toss_virtual_account_number', 'toss_virtual_account_number');
+  setVal('platform_fee_rate', 'platform_fee_rate', '0.2');
+  const webhookSecretEl = document.getElementById('payment_webhook_secret');
+  if (webhookSecretEl) {
+    webhookSecretEl.value = '';
+    webhookSecretEl.placeholder = settings.payment_webhook_secret ? '••••••••  (이미 저장됨)' : 'Webhook Secret';
+  }
   const tossSecretEl = document.getElementById('toss_secret_key');
   if (tossSecretEl) {
     tossSecretEl.value = '';
@@ -366,10 +440,68 @@ async function saveCfSettings() {
 }
 
 async function savePaymentSettings() {
-  const updates = { toss_client_key: document.getElementById('toss_client_key').value.trim() };
+  const updates = {
+    toss_client_key: document.getElementById('toss_client_key').value.trim(),
+    settlement_bank_name: document.getElementById('settlement_bank_name').value.trim(),
+    settlement_account_holder: document.getElementById('settlement_account_holder').value.trim(),
+    toss_virtual_account_number: document.getElementById('toss_virtual_account_number').value.trim(),
+    platform_fee_rate: document.getElementById('platform_fee_rate').value.trim() || '0.2',
+  };
   const sk = document.getElementById('toss_secret_key').value;
   if (sk && !sk.startsWith('••')) updates.toss_secret_key = sk;
+  const wh = document.getElementById('payment_webhook_secret').value;
+  if (wh && !wh.startsWith('••')) updates.payment_webhook_secret = wh;
   await saveSettings(updates);
+}
+
+async function loadProducts() {
+  const token = CP.getToken();
+  const res = await fetch('/api/payments/products', { headers: { 'Authorization': 'Bearer ' + token } });
+  const d = await res.json().catch(() => ({ ok: false }));
+  const body = document.getElementById('productsTbody');
+  if (!d.ok) { body.innerHTML = '<tr><td colspan="5" style="padding:10px;color:var(--error)">로드 실패</td></tr>'; return; }
+  const rows = d.products || [];
+  if (!rows.length) { body.innerHTML = '<tr><td colspan="5" style="padding:10px;color:var(--muted)">등록된 상품 없음</td></tr>'; return; }
+  window.__productsCache = rows;
+  body.innerHTML = rows.map((p, idx) => `
+    <tr>
+      <td style="padding:10px;font-size:.8rem">${p.id}</td>
+      <td style="padding:10px;font-size:.8rem">${p.name}</td>
+      <td style="padding:10px;font-size:.8rem">${Number(p.price||0).toLocaleString('ko-KR')}원</td>
+      <td style="padding:10px;font-size:.8rem">${p.active ? '활성' : '비활성'}</td>
+      <td style="padding:10px"><button class="btn btn-ghost btn-sm" onclick="fillProductByIndex(${idx})">불러오기</button></td>
+    </tr>
+  `).join('');
+}
+
+function fillProductByIndex(idx){
+  const p = (window.__productsCache || [])[idx];
+  if (!p) return;
+  document.getElementById('prd_id').value = p.id || '';
+  document.getElementById('prd_name').value = p.name || '';
+  document.getElementById('prd_price').value = p.price || '';
+  document.getElementById('prd_desc').value = p.description || '';
+  document.getElementById('prd_active').value = p.active ? '1' : '0';
+}
+
+async function saveProduct() {
+  const payload = {
+    id: document.getElementById('prd_id').value.trim() || undefined,
+    name: document.getElementById('prd_name').value.trim(),
+    description: document.getElementById('prd_desc').value.trim(),
+    price: Number(document.getElementById('prd_price').value || 0),
+    active: document.getElementById('prd_active').value === '1',
+  };
+  const token = CP.getToken();
+  const r = await fetch('/api/payments/products', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify(payload),
+  });
+  const d = await r.json().catch(() => ({ ok: false, error: '요청 실패' }));
+  if (!d.ok) { showToast('상품 저장 실패: ' + (d.error || ''), false); return; }
+  showToast('상품 저장 완료');
+  loadProducts();
 }
 
 async function saveMaintenanceSettings() {
@@ -382,6 +514,7 @@ async function saveMaintenanceSettings() {
   const u = await CP.requireAuth(true);
   if (!u) return;
   await loadSettings();
+  await loadProducts();
 })();
 </script>
 </body>
