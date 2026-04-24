@@ -258,6 +258,8 @@ async function loadZones() {
     </div>`;
   try {
     const res = await CP.apiFetch('/api/dns/zones');
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) throw new Error('서버 응답 오류 (JSON이 아닙니다). 로그인 상태를 확인해주세요.');
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || '도메인 목록 불러오기 실패');
     zones = data.zones || [];
@@ -353,6 +355,8 @@ async function loadRecords(zoneId) {
   if (!el) return;
   try {
     const res = await CP.apiFetch(`/api/dns/zones/${zoneId}/records`);
+    const ct2 = res.headers.get('content-type') || '';
+    if (!ct2.includes('application/json')) throw new Error('서버 응답 오류 (JSON이 아닙니다).');
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || '레코드 조회 실패');
     recordsByZone[zoneId] = data.records || [];
@@ -518,6 +522,8 @@ async function addDomain() {
   resEl.innerHTML = '';
   try {
     const res = await CP.apiFetch('/api/dns/zones', { method:'POST', body:JSON.stringify({ name, plan }) });
+    const ctA = res.headers.get('content-type') || '';
+    if (!ctA.includes('application/json')) throw new Error('서버 응답 오류 (JSON이 아닙니다).');
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || '도메인 추가 실패');
     const ns = data.nameservers || [];
