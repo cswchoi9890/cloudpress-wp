@@ -715,7 +715,7 @@ async function uploadWordPressFilesToKV(auth, accountId, kvId, sitePrefix, wpVer
 // ── Worker 업로드 ─────────────────────────────────────────────────────────────
 // 진짜 worker.js 소스를 CF Workers API로 업로드
 // - getBuiltinWorkerSource() 완전 제거 (자체 CMS 코드 embed 없음)
-// - worker.js는 항상 env.WORKER_SOURCE에서 로드 (wrangler text_blobs)
+// - worker.js는 항상 env.WORKER_SOURCE에서 로드 (wrangler secret put으로 주입)
 // - GitHub fallback 없음 (항상 배포된 버전 사용)
 async function uploadWordPressWorker(auth, accountId, workerName, opts) {
   const {
@@ -758,12 +758,12 @@ async function uploadWordPressWorker(auth, accountId, workerName, opts) {
   if (cfApiToken)   bindings.push({ type: 'secret_text', name: 'CF_API_TOKEN',  text: cfApiToken });
 
   // ── Worker 소스 로드 ──────────────────────────────────────────────────────
-  // 우선순위: opts.workerSource → env.WORKER_SOURCE (text_blob)
+  // 우선순위: opts.workerSource → env.WORKER_SOURCE (wrangler secret)
   // GitHub fetch, static fallback 완전 없음 (자체 CMS 제거)
   let src = workerSource || '';
 
   if (!src || src.length < 200) {
-    return { ok: false, error: 'Worker 소스가 없습니다. wrangler text_blobs로 WORKER_SOURCE를 설정하세요.' };
+    return { ok: false, error: 'Worker 소스가 없습니다. WORKER_SOURCE secret을 설정하세요: wrangler secret put WORKER_SOURCE < worker.js' };
   }
 
   // ── 메타데이터 ────────────────────────────────────────────────────────────
@@ -1092,13 +1092,14 @@ export async function onRequestPost({ request, env, params }) {
   console.log(`[provision] WordPress Worker 업로드: ${workerName}`);
 
   // worker.js 소스: env.WORKER_SOURCE만 사용 (자체 CMS 코드 없음)
+  // deploy.sh에서 `wrangler secret put WORKER_SOURCE < worker.js`로 주입됨
   const workerSource = (env.WORKER_SOURCE && env.WORKER_SOURCE.length > 200)
     ? env.WORKER_SOURCE
     : null;
 
   if (!workerSource) {
-    await failSite(env.DB, siteId, 'worker_upload', 'WORKER_SOURCE가 설정되지 않았습니다. wrangler text_blobs를 확인하세요.');
-    return err('WORKER_SOURCE 없음. wrangler.toml의 [text_blobs] 설정을 확인하세요.', 500);
+    await failSite(env.DB, siteId, 'worker_upload', 'WORKER_SOURCE가 설정되지 않았습니다. deploy.sh를 실행하거나 wrangler secret put WORKER_SOURCE < worker.js를 실행하세요.');
+    return err('WORKER_SOURCE 없음. deploy.sh를 실행하거나 wrangler secret put WORKER_SOURCE < worker.js를 실행하세요.', 500);
   }
 
   const cfApiTokenForWorker = typeof cfAuth === 'string' ? '' : cfAuth.token;
