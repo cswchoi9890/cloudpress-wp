@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>호스팅 결제 — CloudPress</title>
+  <link rel="stylesheet" href="/dashboard.css" />
+</head>
+<body>
+  <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">
+    <div class="card" style="max-width:620px;width:100%">
+      <h1 style="font-family:var(--font-head);font-size:1.2rem;margin-bottom:14px">호스팅 결제 (가상계좌)</h1>
+      <div class="field">
+        <label>상품 선택</label>
+        <select id="productSelect"></select>
+      </div>
+
+      <div class="info-box" id="priceText">상품 정보를 불러오는 중...</div>
+      <div id="err" class="warn-box" style="display:none"></div>
+
+      <div style="display:flex;gap:10px;margin-top:14px">
+        <button class="btn btn-primary" id="orderBtn" onclick="createOrder()">입금 주문 생성</button>
+        <a href="/pricing.html" class="btn btn-ghost">요금표 보기</a>
+      </div>
+
+      <div id="orderGuide" style="display:none;margin-top:16px" class="section-card">
+        <div class="section-title">입금 안내</div>
+        <div class="cred-row"><span class="cred-label">주문번호</span><span class="cred-val" id="gOrderId">-</span></div>
+        <div class="cred-row"><span class="cred-label">입금은행</span><span class="cred-val" id="gBank">-</span></div>
+        <div class="cred-row"><span class="cred-label">예금주</span><span class="cred-val" id="gHolder">-</span></div>
+        <div class="cred-row"><span class="cred-label">가상계좌</span><span class="cred-val" id="gAccount">-</span></div>
+        <div class="cred-row"><span class="cred-label">입금금액</span><span class="cred-val" id="gAmount">-</span></div>
+        <div class="cred-row"><span class="cred-label">입금자명</span><span class="cred-val" id="gMemo">주문번호와 함께 전달</span></div>
+        <div class="warn-box" style="margin-top:10px">
+          입금 확인 후 결제 상태가 `paid`로 변경됩니다. 결제 완료 후 `create.html?orderId=...`로 이동해 사이트를 생성하세요.
+        </div>
+        <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" id="checkBtn" onclick="checkOrderPaid()">입금 확인</button>
+          <a class="btn btn-ghost btn-sm" id="goCreateBtn" href="#" style="display:none">사이트 생성으로 이동</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    let products = [];
+    const q = new URLSearchParams(location.search);
+    const plan = q.get('plan');
+
+    function showErr(msg) {
+      const el = document.getElementById('err');
+      el.textContent = msg;
+      el.style.display = '';
+    }
+
+    async function loadProducts() {
+      const r = await CP.get('/payments/products');
+      if (!r.ok) return showErr(r.error || '상품 조회 실패');
+      products = r.products || [];
+      const sel = document.getElementById('productSelect');
+      if (!products.length) {
+        sel.innerHTML = '<option value="">등록된 상품 없음</option>';
+        document.getElementById('priceText').textContent = '관리자에게 상품 등록을 요청하세요.';
+        return;
+      }
+      sel.innerHTML = products.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
+      if (plan) {
+        const hit = products.find((p) => p.name.toLowerCase().includes(plan.toLowerCase()));
+        if (hit) sel.value = hit.id;
+      }
+      refreshPrice();
+      sel.addEventListener('change', refreshPrice);
+    }
+
+    function refreshPrice() {
+      const pid = document.getElementById('productSelect').value;
+      const p = products.find((x) => x.id === pid);
+      if (!p) return;
+      document.getElementById('priceText').className = 'info-box';
+      document.getElementById('priceText').textContent =
+        `${p.name} 결제금액: ${Number(p.price).toLocaleString('ko-KR')}원`;
+    }
+
+    function inferPlanFromProductName(name){
+      const n = String(name || '').toLowerCase();
+      if (n.includes('enterprise')) return 'enterprise';
+      if (n.includes('pro')) return 'pro';
+      return 'starter';
+    }
+
+    async function createOrder() {
+      document.getElementById('err').style.display = 'none';
+      const pid = document.getElementById('productSelect').value;
+      if (!pid) return showErr('상품을 선택해주세요.');
+      const btn = document.getElementById('orderBtn');
+      btn.disabled = true;
+      btn.textContent = '생성 중...';
+      const r = await CP.post('/payments/orders', { product_id: pid, quantity: 1 });
+      btn.disabled = false;
+      btn.textContent = '입금 주문 생성';
+      if (!r.ok) return showErr(r.error || '주문 생성 실패');
+
+      const o = r.order;
+      const g = r.payment_guide || {};
+      document.getElementById('gOrderId').textContent = o.id;
+      document.getElementById('gBank').textContent = g.bank_name || '-';
+      document.getElementById('gHolder').textContent = g.account_holder || '-';
+      document.getElementById('gAccount').textContent = g.virtual_account_no || '-';
+      document.getElementById('gAmount').textContent = Number(o.total_amount || 0).toLocaleString('ko-KR') + '원';
+      document.getElementById('gMemo').textContent = o.id;
+      document.getElementById('orderGuide').style.display = '';
+      const plan = inferPlanFromProductName((products.find((x) => x.id === pid) || {}).name || '');
+      const go = document.getElementById('goCreateBtn');
+      go.href = `/create.html?orderId=${encodeURIComponent(o.id)}&plan=${encodeURIComponent(plan)}`;
+      go.style.display = 'none';
+      document.getElementById('checkBtn').disabled = false;
+      document.getElementById('checkBtn').textContent = '입금 확인';
+    }
+
+    async function checkOrderPaid() {
+      const orderId = document.getElementById('gOrderId').textContent.trim();
+      if (!orderId || orderId === '-') return;
+      const btn = document.getElementById('checkBtn');
+      btn.disabled = true;
+      btn.textContent = '확인 중...';
+      const r = await CP.paymentOrder(orderId);
+      btn.disabled = false;
+      btn.textContent = '입금 확인';
+      if (!r.ok) return showErr(r.error || '주문 조회 실패');
+      if (r.order.status === 'paid') {
+        document.getElementById('priceText').className = 'info-box';
+        document.getElementById('priceText').textContent = '입금 확인 완료! 사이트 생성 단계로 이동할 수 있습니다.';
+        document.getElementById('goCreateBtn').style.display = '';
+      } else {
+        showErr('아직 입금 확인 전입니다. 잠시 후 다시 확인해주세요.');
+      }
+    }
+
+    loadProducts();
+  </script>
+</body>
+</html>
