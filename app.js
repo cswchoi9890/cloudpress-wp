@@ -1,6 +1,12 @@
 /* CloudPress CMS app.js v4.0 */
 'use strict';
 
+// 일부 페이지에서 커서가 사라지는 현상 방지
+document.addEventListener('DOMContentLoaded', () => {
+  document.documentElement.style.cursor = 'auto';
+  if (document.body) document.body.style.cursor = 'auto';
+});
+
 const CP = {
   TOKEN_KEY: 'cp_token',
   USER_KEY:  'cp_user',
@@ -150,6 +156,10 @@ const CP = {
   // Payments
   paymentCheckout: (plan) => CP.post('/payments/checkout', { plan }),
   paymentConfirm:  (b)    => CP.post('/payments/confirm', b),
+  paymentProducts: ()     => CP.get('/payments/products'),
+  paymentOrders:   ()     => CP.get('/payments/orders'),
+  createOrder:     (b)    => CP.post('/payments/orders', b),
+  paymentOrder:    (id)   => CP.get('/payments/orders/' + encodeURIComponent(id)),
 
   // Util
   formatDate(ts) {
@@ -161,12 +171,11 @@ const CP = {
     return Number(n || 0).toLocaleString('ko-KR') + '원';
   },
   planInfo(plan) {
-    // 모든 요금제 무료 — 플랜은 어드민이 사용자별로 설정
     const p = {
       free:       { name: '무료', price: 0, color: '#6b7280', sites: 1  },
-      starter:    { name: '무료', price: 0, color: '#6366f1', sites: 3  },
-      pro:        { name: '무료', price: 0, color: '#f97316', sites: 10 },
-      enterprise: { name: '무료', price: 0, color: '#ec4899', sites: -1 },
+      starter:    { name: 'Starter', price: 9900, color: '#6366f1', sites: 3  },
+      pro:        { name: 'Pro', price: 29900, color: '#f97316', sites: 10 },
+      enterprise: { name: 'Enterprise', price: 99000, color: '#ec4899', sites: -1 },
     };
     return p[plan] || p.free;
   },
