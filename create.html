@@ -7,6 +7,23 @@
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="dashboard.css"/>
   <style>
+    /* ── Loword Bridge 색상 체계 ── */
+    :root{
+      --accent:#4F6EF7;         /* 로워드 브릿지 블루 */
+      --accent2:#6C47FF;        /* 퍼플 포인트 */
+      --accent-glow:rgba(79,110,247,.18);
+      --success:#22C55E;
+      --warning:#F59E0B;
+      --error:#EF4444;
+      --bg:#0D0F1A;             /* 로워드 브릿지 딥 다크 */
+      --bg2:#13162B;
+      --card:#181C35;
+      --border:rgba(79,110,247,.18);
+      --border2:rgba(79,110,247,.32);
+      --text:#E8EAFF;
+      --muted:#8892B0;
+      --font-head:'Syne',sans-serif;
+    }
     .wizard{max-width:660px;margin:0 auto}
     .steps{display:flex;align-items:center;margin-bottom:32px}
     .stp{display:flex;align-items:center;gap:7px;font-size:.82rem;font-weight:500;color:var(--muted)}
@@ -15,7 +32,7 @@
     .stp.done .stp-num{display:none}.stp-ck{display:none}
     .stp.done .stp-ck{display:flex;width:24px;height:24px;border-radius:50%;background:var(--success);align-items:center;justify-content:center}
     .stp-sep{flex:1;height:1px;background:var(--border);margin:0 8px}
-    .spin{width:52px;height:52px;border-radius:50%;border:3px solid var(--border2);border-top-color:var(--accent);animation:sp 1s linear infinite;margin:0 auto 20px}
+    .spin{width:52px;height:52px;border-radius:50%;border:3px solid rgba(79,110,247,.2);border-top-color:var(--accent);animation:sp 1s linear infinite;margin:0 auto 20px;box-shadow:0 0 20px rgba(79,110,247,.15)}
     @keyframes sp{to{transform:rotate(360deg)}}
     .log{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px;font-size:.78rem;font-family:monospace;color:var(--muted);height:180px;overflow-y:auto;margin-top:18px;line-height:2;text-align:left}
     .log .ok{color:var(--success)}.log .cur{color:var(--accent)}.log .warn{color:var(--warning)}.log .err{color:var(--error)}
@@ -270,30 +287,40 @@
           <div class="card" style="padding:32px;text-align:center">
             <div class="spin"></div>
             <h3 style="font-family:var(--font-head);font-size:1.05rem;font-weight:700;margin-bottom:8px" id="progressTitle">인프라 구성 중...</h3>
-            <p style="color:var(--muted);font-size:.85rem;margin-bottom:16px" id="progressDesc">Cloudflare Worker · D1 · KV를 설정하고 도메인을 연결합니다.<br><small style="opacity:.7">다른 탭으로 이동해도 계속 진행됩니다.</small></p>
+            <p style="color:var(--muted);font-size:.85rem;margin-bottom:16px" id="progressDesc">Cloudflare Worker · D1 · KV 설정 및 WordPress 파일 업로드 중입니다.<br><small style="opacity:.8">⏱️ <strong>예상 시간: 13~15분</strong> — 안정적인 설치를 위해 충분한 시간을 사용합니다. 다른 탭으로 이동해도 계속 진행됩니다.</small></p>
 
+            <!-- 타이머 -->
+            <div id="installTimer" style="display:flex;align-items:center;justify-content:center;gap:10px;margin:12px 0;padding:10px 16px;background:rgba(79,110,247,.08);border:1px solid rgba(79,110,247,.2);border-radius:10px;font-size:.82rem;color:var(--text)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#4F6EF7" stroke-width="1.5"/><path d="M12 6v6l4 2" stroke="#4F6EF7" stroke-width="1.5" stroke-linecap="round"/></svg>
+              <span>경과 시간: <strong id="timerDisplay" style="color:#4F6EF7;font-variant-numeric:tabular-nums">00:00</strong></span>
+              <span style="color:var(--muted)">|</span>
+              <span style="color:var(--muted)">예상: 13~15분</span>
+              <span id="timerBar" style="flex:1;height:4px;background:rgba(79,110,247,.15);border-radius:2px;overflow:hidden;min-width:60px">
+                <div id="timerFill" style="height:100%;background:linear-gradient(90deg,#4F6EF7,#6C47FF);width:0%;transition:width 1s linear;border-radius:2px"></div>
+              </span>
+            </div>
             <div style="margin:16px 0;text-align:left">
               <div class="provision-step" id="pstep1">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">1단계: 사이트 전용 D1 데이터베이스 생성</span>
+                <span class="pstep-name">1단계: D1 데이터베이스 + KV 네임스페이스 생성</span>
               </div>
               <div class="provision-step" id="pstep2">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">2단계: 사이트 전용 KV 네임스페이스 생성</span>
+                <span class="pstep-name">2단계: WordPress D1 스키마 초기화 (테이블·관리자 계정)</span>
               </div>
               <div class="provision-step" id="pstep3">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">3단계: 도메인 매핑 + WordPress 초기화 (테이블·관리자·설정)</span>
+                <span class="pstep-name">3단계: WordPress 파일 KV 업로드 (CSS·JS·테마 등, 13~15분)</span>
               </div>
               <div class="provision-step" id="pstep4">
                 <span class="pstep-icon">⏳</span>
-                <span class="pstep-name">4단계: DNS + Worker 업로드 + Route 등록</span>
+                <span class="pstep-name">4단계: Worker 업로드 + IP 방식 도메인 연결 (A 레코드)</span>
               </div>
             </div>
 
             <div class="status-polling">
               <div class="pulse-dot" style="width:8px;height:8px;border-radius:50%;background:var(--accent);flex-shrink:0;animation:pulse 1.2s ease-in-out infinite"></div>
-              <span id="statusText">인프라 구성 중... (보통 30초 이내 완료)</span>
+              <span id="statusText">WordPress 파일 업로드 중... (약 13~15분 소요, 다른 탭으로 이동해도 계속 진행됩니다)</span>
             </div>
 
             <div class="log" id="logBox">
@@ -453,6 +480,7 @@ async function startCreation() {
   WD.personalDomain = personalDomain;
   document.getElementById('createBtn').disabled = true;
   goStep(3);
+  startInstallTimer(); // 13~15분 타이머 시작
 
   const token = CP.getToken();
 
@@ -591,7 +619,7 @@ function updateProvisionSteps(provStep, status) {
 function startPolling(siteId) {
   let prevStep = null;
   let count    = 0;
-  const MAX    = 90; // provision await 중 UI 업데이트용 (90 * 2s = 3분)
+  const MAX    = 450; // provision await 중 UI 업데이트용 (450 * 2s = 15분)
 
   pollInterval = setInterval(async () => {
     count++;
@@ -638,6 +666,10 @@ function startPolling(siteId) {
 
 function showSuccess(site, provData) {
   goStep(4);
+  stopInstallTimer();
+
+  // 브라우저 알림 (크롬 Push Notification)
+  sendBrowserNotification(site);
 
   // 모든 URL을 개인 도메인 기준으로
   const domain   = site.primary_domain || WD.personalDomain;
@@ -658,23 +690,24 @@ function showSuccess(site, provData) {
   document.getElementById('successDesc').textContent =
     `"${site.name}" 사이트가 성공적으로 구성되었습니다.`;
 
-  // DNS 수동 설정 안내 (CNAME 값 명시)
+  // DNS/IP 설정 안내
   const dnsEl = document.getElementById('dnsNotice');
+  const proxyIp = (provData && provData.proxy_ip) || '104.21.0.1';
   if (site.domain_status === 'manual_required') {
-    const ci = (typeof provData !== 'undefined' && provData.cname_instructions) || null;
-    const cnameVal = ci ? ci.root.value : (site.worker_name ? site.worker_name + '.workers.dev' : '설정 중...');
+    const ci = (typeof provData !== 'undefined' && provData.ip_instructions) || null;
     dnsEl.innerHTML =
-      `⚠️ <strong>외부 DNS 수동 설정 필요</strong><br>` +
-      `DNS 제공업체(가비아, 후이즈 등)에서 아래 CNAME 레코드를 추가해주세요.<br><br>` +
+      `⚠️ <strong>외부 DNS 수동 설정 필요 (IP 방식)</strong><br>` +
+      `DNS 제공업체(가비아, 후이즈 등)에서 아래 <strong>A 레코드</strong>를 추가해주세요.<br>` +
+      `<span style="font-size:.79rem;color:#8892B0">Cloudflare Proxied(주황 구름) 활성화 필수 — Cloudflare가 실제 IP로 교체해 사이트를 구별합니다.</span><br><br>` +
       `<table style="width:100%;border-collapse:collapse;font-size:.8rem;margin-top:4px">` +
-      `<tr style="background:rgba(0,0,0,.04)"><th style="padding:5px 8px;text-align:left">구분</th><th style="padding:5px 8px;text-align:left">타입</th><th style="padding:5px 8px;text-align:left">호스트(이름)</th><th style="padding:5px 8px;text-align:left">값(대상)</th><th style="padding:5px 8px;text-align:left">TTL</th></tr>` +
-      `<tr><td style="padding:5px 8px">루트</td><td style="padding:5px 8px">CNAME</td><td style="padding:5px 8px">@</td><td style="padding:5px 8px;font-weight:600;word-break:break-all">${cnameVal}</td><td style="padding:5px 8px">3600</td></tr>` +
-      `<tr style="background:rgba(0,0,0,.02)"><td style="padding:5px 8px">www</td><td style="padding:5px 8px">CNAME</td><td style="padding:5px 8px">www</td><td style="padding:5px 8px;font-weight:600;word-break:break-all">${cnameVal}</td><td style="padding:5px 8px">3600</td></tr>` +
+      `<tr style="background:rgba(79,110,247,.08)"><th style="padding:5px 8px;text-align:left">구분</th><th style="padding:5px 8px;text-align:left">타입</th><th style="padding:5px 8px;text-align:left">호스트(이름)</th><th style="padding:5px 8px;text-align:left">값(IP)</th><th style="padding:5px 8px;text-align:left">Proxied</th><th style="padding:5px 8px;text-align:left">TTL</th></tr>` +
+      `<tr><td style="padding:5px 8px">루트</td><td style="padding:5px 8px;font-weight:700">A</td><td style="padding:5px 8px">@</td><td style="padding:5px 8px;font-weight:600;font-family:monospace">${proxyIp}</td><td style="padding:5px 8px">✅ ON</td><td style="padding:5px 8px">자동</td></tr>` +
+      `<tr style="background:rgba(0,0,0,.02)"><td style="padding:5px 8px">www</td><td style="padding:5px 8px;font-weight:700">A</td><td style="padding:5px 8px">www</td><td style="padding:5px 8px;font-weight:600;font-family:monospace">${proxyIp}</td><td style="padding:5px 8px">✅ ON</td><td style="padding:5px 8px">자동</td></tr>` +
       `</table>`;
     dnsEl.style.background   = 'rgba(234,179,8,.06)';
     dnsEl.style.borderColor  = 'rgba(234,179,8,.3)';
-  } else if (site.domain_status === 'dns_propagating') {
-    dnsEl.innerHTML = '🌐 <strong>DNS 전파 중:</strong> Cloudflare DNS가 자동으로 설정되었습니다. 최대 48시간(보통 1~2시간) 내 접속 가능합니다.';
+  } else if (site.domain_status === 'dns_propagating' || site.domain_status === 'active') {
+    dnsEl.innerHTML = `🌐 <strong>DNS 자동 설정 완료 (IP 방식)</strong><br>Cloudflare A 레코드(proxied) 및 Worker Route가 자동으로 등록되었습니다.<br><small style="color:#8892B0">연결 IP: <code style="background:rgba(79,110,247,.1);padding:1px 6px;border-radius:4px">${proxyIp}</code> → Cloudflare Anycast로 자동 처리됩니다.</small>`;
     dnsEl.style.background   = 'rgba(34,197,94,.04)';
     dnsEl.style.borderColor  = 'rgba(34,197,94,.2)';
   }
@@ -715,7 +748,93 @@ function copyText(id, isInput = false) {
   });
 }
 
+/* ── 설치 타이머 (13~15분) ── */
+let installTimerInterval = null;
+let installTimerSeconds  = 0;
+const ESTIMATED_SECONDS  = 14 * 60; // 14분 기준
+
+function startInstallTimer() {
+  installTimerSeconds = 0;
+  if (installTimerInterval) clearInterval(installTimerInterval);
+  installTimerInterval = setInterval(() => {
+    installTimerSeconds++;
+    const m = Math.floor(installTimerSeconds / 60).toString().padStart(2, '0');
+    const s = (installTimerSeconds % 60).toString().padStart(2, '0');
+    const el = document.getElementById('timerDisplay');
+    if (el) el.textContent = `${m}:${s}`;
+    // 진행바 업데이트
+    const pct = Math.min((installTimerSeconds / ESTIMATED_SECONDS) * 100, 100);
+    const fill = document.getElementById('timerFill');
+    if (fill) fill.style.width = pct + '%';
+  }, 1000);
+}
+
+function stopInstallTimer() {
+  if (installTimerInterval) { clearInterval(installTimerInterval); installTimerInterval = null; }
+}
+
+/* ── 브라우저 Push 알림 ── */
+async function sendBrowserNotification(site) {
+  try {
+    const domain   = site.primary_domain || '';
+    const adminUrl = domain ? 'https://' + domain + '/wp-admin/' : 'https://hosting-console.cloud-press.co.kr/dashboard.html';
+    // Service Worker 알림 (브라우저 Push Notification)
+    if ('serviceWorker' in navigator && 'Notification' in window) {
+      let perm = Notification.permission;
+      if (perm === 'default') perm = await Notification.requestPermission();
+      if (perm === 'granted') {
+        const reg = await navigator.serviceWorker.ready;
+        if (reg) {
+          // SW에 메시지 전달 → SW가 알림 표시 + Supabase 이메일 발송
+          if (reg.active) {
+            // 사용자 이메일 가져오기 (Supabase 이메일 발송용)
+            let userEmail = '';
+            try {
+              const u = await CP.getUser?.();
+              userEmail = u?.email || '';
+            } catch {}
+
+            // SW에 SITE_CREATED 메시지 발송
+            reg.active.postMessage({
+              type: 'SITE_CREATED',
+              payload: {
+                site,
+                adminUrl,
+                email:       userEmail,
+                supabaseUrl: '', // wrangler secret의 SUPABASE_URL (필요시 설정)
+                supabaseKey: '', // wrangler secret의 SUPABASE_KEY (필요시 설정)
+              },
+            });
+          }
+
+          if (reg.showNotification) {
+            await reg.showNotification('🎉 WordPress 사이트 구축 완료!', {
+              body: `"${site.name || domain}" 사이트가 준비되었습니다. 지금 바로 접속하세요!`,
+              icon: '/favicon-32.png',
+              badge: '/favicon-32.png',
+              tag: 'site-created-' + (site.id || ''),
+              requireInteraction: true,
+              vibrate: [200, 100, 200, 100, 200],
+              data: { url: adminUrl, siteId: site.id },
+              actions: [
+                { action: 'open-admin',     title: '🔑 WP 관리자 열기' },
+                { action: 'open-dashboard', title: '📊 대시보드' },
+              ],
+            });
+          } else {
+            new Notification('🎉 WordPress 사이트 구축 완료!', {
+              body: `"${site.name || domain}" 사이트가 준비되었습니다.`,
+              icon: '/favicon-32.png',
+            });
+          }
+        }
+      }
+    }
+  } catch (e) { console.warn('[알림] 브라우저 알림 실패:', e); }
+}
+
 function resetWizard() {
+  stopInstallTimer();
   clearInterval(pollInterval); pollInterval = null;
   currentSiteId = null;
   Object.keys(WD).forEach(k => WD[k] = '');
@@ -736,6 +855,10 @@ function resetWizard() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Service Worker 등록 (Push 알림용)
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw-push.js').catch(e => console.warn('[SW]', e));
+  }
   if (typeof CP !== 'undefined' && CP.requireAuth) {
     const u = await CP.requireAuth();
     if (u?.role === 'admin') {
