@@ -2,16 +2,35 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=5.0"/>
-  <title>대시보드 — CloudPress CMS</title>
+  <title>호스팅 콘솔 — CloudPress (hosting-console.cloud-press.co.kr)</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
   <link rel="alternate icon" href="/favicon.ico"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="dashboard.css"/>
   <style>
+    /* ── Loword Bridge 색상 체계 (bridge-console.loword.co.kr 기반) ── */
+    :root{
+      --accent:#4F6EF7;
+      --accent2:#6C47FF;
+      --accent-hover:#6481F9;
+      --success:#22C55E;
+      --warning:#F59E0B;
+      --error:#EF4444;
+      --bg:#0D0F1A;
+      --surface:#181C35;
+      --surface2:#1E2240;
+      --border:rgba(79,110,247,.18);
+      --border2:rgba(79,110,247,.38);
+      --text:#E8EAFF;
+      --muted:#8892B0;
+      --font-head:'Syne',sans-serif;
+      --sidebar-bg:#0A0C18;
+      --sidebar-accent:rgba(79,110,247,.12);
+    }
     .site-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 20px;display:flex;align-items:center;gap:14px;transition:border-color .2s}
     .site-card:hover{border-color:var(--border2)}
-    .site-icon{width:42px;height:42px;border-radius:10px;background:rgba(249,115,22,.1);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .site-icon{width:42px;height:42px;border-radius:10px;background:rgba(79,110,247,.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid rgba(79,110,247,.2)}
     .site-info{flex:1;min-width:0}
     .site-name{font-family:var(--font-head);font-weight:700;font-size:.92rem;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .site-url{font-size:.77rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -33,9 +52,10 @@
 <div class="app-wrap">
   <aside class="sidebar" id="sidebar">
     <a href="/dashboard.html" class="sb-logo">
-      <svg width="22" height="22" viewBox="0 0 28 28" fill="none"><path d="M14 2L26 8V20L14 26L2 20V8L14 2Z" stroke="currentColor" stroke-width="1.5"/><path d="M14 8L20 11V17L14 20L8 17V11L14 8Z" fill="currentColor" opacity=".5"/><circle cx="14" cy="14" r="2.2" fill="currentColor"/></svg>
-      CloudPress
+      <svg width="22" height="22" viewBox="0 0 28 28" fill="none"><path d="M14 2L26 8V20L14 26L2 20V8L14 2Z" stroke="#4F6EF7" stroke-width="1.5"/><path d="M14 8L20 11V17L14 20L8 17V11L14 8Z" fill="#4F6EF7" opacity=".5"/><circle cx="14" cy="14" r="2.2" fill="#4F6EF7"/></svg>
+      CloudPress Console
     </a>
+    <div style="padding:6px 16px 0;font-size:.68rem;color:rgba(79,110,247,.6);font-family:monospace;letter-spacing:.02em">hosting-console.cloud-press.co.kr</div>
     <nav class="sb-nav">
       <div class="sb-section">
         <div class="sb-label">메인</div>
