@@ -640,9 +640,9 @@ async function uploadWordPressFilesToKV(auth, accountId, kvId, sitePrefix, wpVer
 
   let uploaded = 0;
   let failed   = 0;
-  const BATCH_SIZE = 5;   // 한 번에 최대 5개 병렬
-  const DELAY_MS   = 600; // 배치 간 간격 (rate limit 방지)
-  const FILE_DELAY = 100; // 파일 간 개별 간격
+  const BATCH_SIZE = 2;   // 한 번에 최대 2개 (subrequest 한도 방지)
+  const DELAY_MS   = 4500; // 배치 간 간격 4.5s (13~15분 분산)
+  const FILE_DELAY = 1200; // 파일 간 개별 간격 1.2s (rate limit 방지)
 
   for (let i = 0; i < allFiles.length; i += BATCH_SIZE) {
     const batch = allFiles.slice(i, i + BATCH_SIZE);
@@ -750,6 +750,9 @@ async function uploadWordPressWorker(auth, accountId, workerName, opts) {
   bindings.push({ type: 'plain_text', name: 'CF_ACCOUNT_ID', text: cfAccountId || '' });
   bindings.push({ type: 'plain_text', name: 'WP_VERSION',    text: wpVersion   || '6.7.1' });
   bindings.push({ type: 'plain_text', name: 'WP_ADMIN_USER', text: adminUser   || 'admin' });
+  // Host 헤더 기반 사이트 식별 (IP 방식에서 Cloudflare가 사이트 구별 가능하도록)
+  bindings.push({ type: 'plain_text', name: 'ALLOWED_HOST',  text: siteDomain  || '' });
+  bindings.push({ type: 'plain_text', name: 'ALLOWED_HOST_WWW', text: 'www.' + (siteDomain || '') });
 
   // 시크릿
   if (adminPass)    bindings.push({ type: 'secret_text', name: 'WP_ADMIN_PASS', text: adminPass });
@@ -869,11 +872,42 @@ async function enableWorkersDev(auth, accountId, workerName) {
   return false;
 }
 
+// ── IP 방식 도메인 연결 (Custom Domain 대신 A 레코드 + Worker Route) ────────
+// Cloudflare 자체 IP (104.21.x.x / 172.67.x.x) 사용
+// Host 헤더로 Worker가 사이트 구별
+const CLOUDFLARE_PROXY_IPS = [
+  '104.21.0.1',   // Cloudflare Anycast IP (proxied A record)
+];
+
 async function addWorkerCustomDomain(auth, accountId, workerName, hostname) {
-  const res = await cfReq(auth, `/accounts/${accountId}/workers/domains`, 'PUT', {
-    hostname, service: workerName, environment: 'production',
-  });
-  return res.success ? { ok: true, id: res.result?.id } : { ok: false, error: cfErrMsg(res) };
+  // IP 방식: Custom Domain API 대신 A 레코드 + Worker Route 조합 사용
+  // Cloudflare proxied A 레코드에 임의 IP를 넣으면 CF가 실제 IP를 anycast로 처리
+  // Worker Route로 요청을 Worker에 라우팅
+  // 결과적으로 도메인은 Cloudflare IP로 노출되어 혼동 방지
+  const proxyIp = CLOUDFLARE_PROXY_IPS[0];
+
+  // Zone 확인
+  const zone = await cfGetZone(auth, hostname);
+  if (!zone.ok) {
+    // Zone이 없으면 workers/domains API fallback 시도
+    const res = await cfReq(auth, `/accounts/${accountId}/workers/domains`, 'PUT', {
+      hostname, service: workerName, environment: 'production',
+    });
+    return res.success ? { ok: true, id: res.result?.id, method: 'custom_domain' } : { ok: false, error: cfErrMsg(res) };
+  }
+
+  const zoneId = zone.zoneId;
+
+  // A 레코드 등록 (proxied=true → CF anycast IP로 노출)
+  const dnsRes = await cfUpsertDns(auth, zoneId, 'A', hostname, proxyIp, true);
+
+  // Worker Route 등록
+  const routeRes = await cfUpsertRoute(auth, zoneId, hostname + '/*', workerName);
+
+  if (dnsRes.ok && routeRes.ok) {
+    return { ok: true, method: 'ip_a_record', proxyIp, zoneId, recordId: dnsRes.recordId, routeId: routeRes.routeId };
+  }
+  return { ok: false, error: `A record: ${dnsRes.ok}, Route: ${routeRes.ok}` };
 }
 
 async function resolveMainBindingIds(auth, accountId) {
@@ -1152,6 +1186,10 @@ export async function onRequestPost({ request, env, params }) {
     wp_installed:  1,
     status:        'active',
     suspended:     0,
+    // IP 방식 식별 정보
+    allowed_host:  domain,
+    allowed_host_www: 'www.' + domain,
+    cf_proxy_ip:   '104.21.0.1',
   });
 
   if (cacheKvId && cfAccount) {
@@ -1169,54 +1207,50 @@ export async function onRequestPost({ request, env, params }) {
   let cfZoneId = null, dnsRecordId = null, dnsRecordWwwId = null;
   let routeId = null, routeWwwId = null, cnameTarget = '';
 
-  const [cdRoot, cdWww] = await Promise.all([
-    addWorkerCustomDomain(cfAuth, cfAccount, workerName, domain),
-    addWorkerCustomDomain(cfAuth, cfAccount, workerName, wwwDomain),
-  ]);
+  // ── IP 방식 도메인 연결 (Custom Domain 대신 A 레코드 + Worker Route) ──────
+  // Cloudflare proxied A 레코드로 IP 노출 → 혼동 방지
+  // Host 헤더로 Worker가 사이트 구별
+  const CF_PROXY_IP = '104.21.0.1'; // Cloudflare Anycast (proxied 시 실제 CF IP로 교체됨)
 
-  if (cdRoot.ok || cdWww.ok) {
-    domainStatus = 'active';
-    console.log(`[provision] Custom Domain 등록: ${domain}`);
-    siteState.set({ worker_route: domain + '/*', worker_route_www: wwwDomain + '/*' });
-  } else {
-    const [workerSubdomain, zone] = await Promise.all([
-      getWorkerSubdomain(cfAuth, cfAccount, workerName),
-      cfGetZone(cfAuth, domain),
+  const zone = await cfGetZone(cfAuth, domain);
+  if (zone.ok) {
+    cfZoneId = zone.zoneId;
+
+    // A 레코드 등록 (proxied=true)
+    const [drRoot, drWww] = await Promise.all([
+      cfUpsertDns(cfAuth, cfZoneId, 'A', domain,    CF_PROXY_IP, true),
+      cfUpsertDns(cfAuth, cfZoneId, 'A', wwwDomain, CF_PROXY_IP, true),
     ]);
+    if (drRoot.ok) dnsRecordId    = drRoot.recordId;
+    if (drWww.ok)  dnsRecordWwwId = drWww.recordId;
+
+    // Worker Route 등록
+    const [rr, rw] = await Promise.all([
+      cfUpsertRoute(cfAuth, cfZoneId, domain + '/*',    workerName),
+      cfUpsertRoute(cfAuth, cfZoneId, wwwDomain + '/*', workerName),
+    ]);
+    if (rr.ok) routeId    = rr.routeId;
+    if (rw.ok) routeWwwId = rw.routeId;
+
+    siteState.set({
+      worker_route:        domain + '/*',
+      worker_route_www:    wwwDomain + '/*',
+      worker_route_id:     routeId    || null,
+      worker_route_www_id: routeWwwId || null,
+      cf_zone_id:          cfZoneId,
+      dns_record_id:       dnsRecordId    || null,
+      dns_record_www_id:   dnsRecordWwwId || null,
+    });
+
+    if ((rr.ok || rw.ok) && (drRoot.ok || drWww.ok)) domainStatus = 'active';
+    else if (rr.ok || rw.ok)                          domainStatus = 'dns_propagating';
+
+    console.log(`[provision] IP 방식 도메인 연결: ${domain} → ${CF_PROXY_IP} (proxied), Route: ${rr.ok}`);
+  } else {
+    // Zone이 없으면 workers.dev 서브도메인으로 대체
+    const workerSubdomain = await getWorkerSubdomain(cfAuth, cfAccount, workerName);
     cnameTarget = workerSubdomain;
-
-    if (zone.ok) {
-      cfZoneId = zone.zoneId;
-      const [rr, rw] = await Promise.all([
-        cfUpsertRoute(cfAuth, cfZoneId, domain + '/*',    workerName),
-        cfUpsertRoute(cfAuth, cfZoneId, wwwDomain + '/*', workerName),
-      ]);
-      if (rr.ok) routeId    = rr.routeId;
-      if (rw.ok) routeWwwId = rw.routeId;
-
-      siteState.set({
-        worker_route:       domain + '/*',
-        worker_route_www:   wwwDomain + '/*',
-        worker_route_id:    routeId    || null,
-        worker_route_www_id:routeWwwId || null,
-        cf_zone_id:         cfZoneId,
-      });
-
-      const [dr, drw] = await Promise.all([
-        cfUpsertDns(cfAuth, cfZoneId, 'CNAME', domain,    cnameTarget, true),
-        cfUpsertDns(cfAuth, cfZoneId, 'CNAME', wwwDomain, cnameTarget, true),
-      ]);
-      if (dr.ok)  dnsRecordId    = dr.recordId;
-      if (drw.ok) dnsRecordWwwId = drw.recordId;
-
-      if ((rr.ok || rw.ok) && (dr.ok || drw.ok)) domainStatus = 'active';
-      else if (rr.ok || rw.ok)                    domainStatus = 'dns_propagating';
-
-      siteState.set({
-        dns_record_id:     dnsRecordId    || null,
-        dns_record_www_id: dnsRecordWwwId || null,
-      });
-    }
+    console.log(`[provision] Zone 없음 — workers.dev 서브도메인 사용: ${cnameTarget}`);
   }
 
   // ── Step 7: 완료 ─────────────────────────────────────────────────────────
@@ -1256,11 +1290,15 @@ export async function onRequestPost({ request, env, params }) {
     wp_version:    wpVersion,
     files_uploaded: uploadRes.uploaded,
     install_locked: true,
-    cname_instructions: domainStatus === 'manual_required' ? {
-      type: 'CNAME',
-      root: { host: '@',   value: workerDevUrl },
-      www:  { host: 'www', value: workerDevUrl },
-      note: `DNS 전파 후 ${adminUrl} 에서 WordPress를 사용하세요.`,
+    domain_method: 'ip_a_record',
+    proxy_ip: '104.21.0.1',
+    host_header_note: `Host: ${domain} 헤더로 Cloudflare Worker가 사이트를 식별합니다.`,
+    ip_instructions: domainStatus === 'manual_required' ? {
+      type: 'A',
+      proxy_ip: '104.21.0.1',
+      root: { host: '@',   value: '104.21.0.1', type: 'A', proxied: true },
+      www:  { host: 'www', value: '104.21.0.1', type: 'A', proxied: true },
+      note: `Cloudflare DNS에서 A 레코드(proxied)로 104.21.0.1 등록 후 ${adminUrl} 접속 가능합니다.`,
     } : null,
   });
 }
