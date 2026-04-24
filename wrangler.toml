@@ -1,6 +1,8 @@
-# CloudPress v20.0 — wrangler.toml
-# Originless Edge CMS (WordPress on Cloudflare Workers)
-# 스토리지: Supabase (Primary + Secondary) + D1 (쓰기 전용) + KV (캐시)
+# CloudPress v21.0 — wrangler.toml
+# 3개 도메인 분리 구성:
+#   홈/랜딩:      cloud-press.co.kr
+#   대시보드:     hosting-console.cloud-press.co.kr
+#   서버 상태:    status.cloud-press.co.kr
 
 name = "cloudpress-wp"
 main = "worker.js"
@@ -18,38 +20,38 @@ database_id   = "02d86436-b49f-4efa-a93b-baa90f3ee095"
 binding = "SESSIONS"
 id      = "7486ca3c985b41ee8e2d24589ab2be6d"
 
-# ── KV: 이중 캐시 (Edge + KV) ─────────────────────────────────────────────────
-# Edge Cache (Cache API) + KV 이중 레이어 캐시
-# KV: page:{prefix}:{path} → HTML 캐시
-# KV: site_domain:{hostname} → 사이트 정보 캐시
-# KV: opt:{prefix}:{key} → WordPress 옵션 캐시
-# KV: rl:{ip}:{window} → Rate Limit 카운터
-# KV: ddos_ban:{ip} → DDoS 밴 목록
-# KV: wp_session:{token} → WordPress 로그인 세션
-# KV: media:{path} → 소형 미디어 D1 fallback
+# ── KV: 이중 캐시 ─────────────────────────────────────────────────────────────
 [[kv_namespaces]]
 binding = "CACHE"
 id      = "e1acf814c1244a59bbc24865723e479d"
 
 # ── 환경 변수 ─────────────────────────────────────────────────────────────────
-# CF_ACCOUNT_ID, CF_API_TOKEN → wrangler secret put
-# SUPABASE_URL, SUPABASE_KEY  → wrangler secret put (Primary)
-# SUPABASE_URL2, SUPABASE_KEY2 → wrangler secret put (Secondary)
-# PURGE_KEY → wrangler secret put (캐시 Purge 인증)
-# ENCRYPTION_KEY → wrangler secret put
-# WORKER_SOURCE → wrangler secret put (provision 시 worker.js 소스 주입)
 [vars]
 CF_ACCOUNT_ID  = ""
 CF_API_TOKEN   = ""
 PURGE_KEY      = ""
 ENCRYPTION_KEY = ""
 
+# ── 도메인 라우팅 분리 ────────────────────────────────────────────────────────
+# IP 방식: A 레코드(proxied) + Worker Route 조합
+# Host 헤더로 도메인 구별 (Custom Domain 대신 IP 방식)
+#
+# 설정할 A 레코드 (Cloudflare DNS, proxied=true):
+#   cloud-press.co.kr         → A  104.21.0.1  (Proxied)
+#   hosting-console.cloud-press.co.kr → A  104.21.0.1  (Proxied)
+#   status.cloud-press.co.kr  → A  104.21.0.1  (Proxied)
+#
+# Worker Routes:
+#   cloud-press.co.kr/*               → cloudpress-wp (홈/랜딩)
+#   www.cloud-press.co.kr/*           → cloudpress-wp
+#   hosting-console.cloud-press.co.kr/* → cloudpress-wp (대시보드+어드민)
+#   status.cloud-press.co.kr/*        → cloudpress-wp (실시간 서버 상태)
+
 # ── CPU 한도 ───────────────────────────────────────────────────────────────────
 [limits]
 cpu_ms = 50000
 
-# ── Scheduled (ISR 캐시 갱신 cron) ────────────────────────────────────────────
-# 매 5분마다 활성 사이트 홈 페이지 캐시 예열
+# ── Scheduled ─────────────────────────────────────────────────────────────────
 [[triggers.crons]]
 crons = ["*/5 * * * *"]
 
