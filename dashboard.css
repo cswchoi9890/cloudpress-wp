@@ -332,3 +332,28 @@ img, video, svg { max-width: 100%; height: auto; }
   .main { margin-left: 0 !important; }
   .card { border: 1px solid #ddd; box-shadow: none; }
 }
+
+/* ── cursor fixes (dashboard 전용) ── */
+* { cursor: auto; }
+a, button, [onclick], [role="button"], .btn, .btn-primary, .btn-ghost, .btn-danger,
+.sb-link, label, select, .logo, .toggle-switch, .setting-header,
+.purge-btn, .copy-btn, .eye-btn { cursor: pointer; }
+input[type="text"], input[type="email"], input[type="password"],
+input[type="number"], input[type="url"], input[type="search"], textarea { cursor: text; }
+[disabled], .btn:disabled, button:disabled { cursor: not-allowed; }
+
+/* ── site settings toggle (실제 동작) ── */
+.setting-section { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 12px; overflow: hidden; }
+.setting-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; cursor: pointer; user-select: none; background: var(--surface); transition: background var(--tr); }
+.setting-header:hover { background: var(--surface2); }
+.setting-title { font-weight: 600; font-size: .9rem; }
+.setting-body { padding: 0 18px; background: var(--surface); border-top: 1px solid var(--border); }
+.setting-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.setting-row:last-child { border-bottom: none; }
+.setting-label { font-size: .85rem; color: var(--text); }
+.toggle-switch { position: relative; display: inline-flex; width: 40px; height: 22px; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; inset: 0; background: var(--surface3); border-radius: 22px; transition: background .2s; cursor: pointer; }
+.toggle-slider::before { content: ''; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform .2s; }
+.toggle-switch input:checked + .toggle-slider { background: var(--accent); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); }
