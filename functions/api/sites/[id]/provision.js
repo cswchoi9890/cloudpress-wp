@@ -16,6 +16,7 @@
 //    - WordPress 자체의 wp.apiFetch 사용 (진짜 WordPress)
 
 import { CORS, _j, ok, err, getToken, getUser, loadAllSettings, settingVal } from '../../_shared.js';
+import { WORKER_SOURCE as BUNDLED_WORKER_SOURCE } from '../../_worker_source.js';
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
 
@@ -1092,28 +1093,18 @@ export async function onRequestPost({ request, env, params }) {
 
   // worker.js 소스 로드
   // 1순위: env.WORKER_SOURCE (secret으로 주입된 경우)
-  // 2순위: CACHE KV의 'platform:worker_source' 키 (deploy.sh에서 자동 저장)
-  let workerSource = (env.WORKER_SOURCE && env.WORKER_SOURCE.length > 200)
+  // 2순위: 빌드 시 번들에 포함된 BUNDLED_WORKER_SOURCE (build.js가 생성한 _worker_source.js)
+  const workerSource = (env.WORKER_SOURCE && env.WORKER_SOURCE.length > 200)
     ? env.WORKER_SOURCE
-    : null;
+    : (BUNDLED_WORKER_SOURCE && BUNDLED_WORKER_SOURCE.length > 200)
+      ? BUNDLED_WORKER_SOURCE
+      : null;
 
-  if (!workerSource && env.CACHE) {
-    try {
-      const cached = await env.CACHE.get('platform:worker_source');
-      if (cached && cached.length > 200) {
-        workerSource = cached;
-        console.log(`[provision] CACHE KV에서 worker.js 로드 성공: ${cached.length} bytes`);
-      } else {
-        console.warn('[provision] CACHE KV platform:worker_source 없음 또는 너무 짧음');
-      }
-    } catch (e) {
-      console.error('[provision] CACHE KV worker.js 로드 오류:', e.message);
-    }
-  }
+  console.log(`[provision] workerSource 길이: ${workerSource ? workerSource.length : 0}`);
 
   if (!workerSource) {
-    await failSite(env.DB, siteId, 'worker_upload', 'worker.js 소스가 없습니다. deploy.sh를 다시 실행하세요.');
-    return err('worker.js 소스 없음: deploy.sh를 실행하면 자동으로 CACHE KV에 저장됩니다.', 500);
+    await failSite(env.DB, siteId, 'worker_upload', 'worker.js 소스가 없습니다.');
+    return err('worker.js 소스 없음', 500);
   }
 
   const cfApiTokenForWorker = typeof cfAuth === 'string' ? '' : cfAuth.token;
