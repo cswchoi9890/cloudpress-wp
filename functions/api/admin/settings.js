@@ -134,6 +134,11 @@ const ALLOWED_KEYS = [
   // 결제
   'toss_client_key',
   'toss_secret_key',
+  'toss_virtual_account_number',
+  'settlement_bank_name',
+  'settlement_account_holder',
+  'payment_webhook_secret',
+  'platform_fee_rate',
 
   // 일반
   'maintenance_mode',
