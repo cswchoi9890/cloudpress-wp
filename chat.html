@@ -47,6 +47,13 @@
     .ts-answered{background:rgba(34,197,94,.1);color:#16a34a}
     .ts-closed{background:rgba(148,163,184,.1);color:var(--muted)}
     .link-a{color:var(--accent);text-decoration:underline}
+
+  <style>
+    @keyframes slideInRight {
+      from { transform: translateX(100px); opacity: 0; }
+      to   { transform: translateX(0);     opacity: 1; }
+    }
+  </style>
   </style>
 </head>
 <body>
@@ -385,6 +392,63 @@ async function loadTickets() {
     listEl.innerHTML = `<div style="color:var(--error);font-size:.85rem;text-align:center;padding:20px">오류: ${esc(e.message)}</div>`;
   }
 }
+
+
+// ── 알림 폴링 (관리자 답변 감지) ─────────────────────────────────────────
+let lastNotifCheck = 0;
+async function checkNotifications() {
+  try {
+    const res = await CP.apiFetch('/api/chat/notifications');
+    if (!res.ok) return;
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) return;
+    const data = await res.json();
+    if (data.ok && data.notification) {
+      const n = data.notification;
+      showNotificationBanner(n.title, n.message, n.ticketId);
+    }
+  } catch (_) {}
+}
+
+function showNotificationBanner(title, message, ticketId) {
+  // 이미 열린 배너가 있으면 제거
+  const existing = document.getElementById('replyNotifBanner');
+  if (existing) existing.remove();
+
+  const banner = document.createElement('div');
+  banner.id = 'replyNotifBanner';
+  banner.style.cssText = `
+    position:fixed;top:80px;right:24px;z-index:9999;
+    background:#1a2035;border:1px solid rgba(34,197,94,.4);
+    border-radius:12px;padding:16px 20px;max-width:320px;
+    box-shadow:0 8px 32px rgba(0,0,0,.4);
+    animation:slideInRight .3s ease;
+  `;
+  banner.innerHTML = `
+    <div style="font-weight:700;color:#22c55e;margin-bottom:6px;font-size:.9rem">${esc(title)}</div>
+    <div style="font-size:.83rem;color:#8b95a8;line-height:1.5">${esc(message)}</div>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      <button onclick="document.getElementById('replyNotifBanner').remove();loadTickets();"
+        style="padding:6px 14px;background:#22c55e;border:none;border-radius:6px;color:#fff;font-size:.8rem;font-weight:600;cursor:pointer">
+        답변 확인
+      </button>
+      <button onclick="document.getElementById('replyNotifBanner').remove()"
+        style="padding:6px 10px;background:transparent;border:1px solid rgba(255,255,255,.15);border-radius:6px;color:#8b95a8;font-size:.8rem;cursor:pointer">
+        닫기
+      </button>
+    </div>
+  `;
+  document.body.appendChild(banner);
+  setTimeout(() => { if (banner.parentNode) banner.remove(); }, 10000);
+
+  // 브라우저 알림 (권한 있을 경우)
+  if (Notification.permission === 'granted') {
+    new Notification(title, { body: message, icon: '/favicon-32.png' });
+  }
+}
+
+// 30초마다 새 답변 확인
+setInterval(checkNotifications, 30000);
 
 function esc(s){ return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
