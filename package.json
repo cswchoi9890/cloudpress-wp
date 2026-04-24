@@ -4,12 +4,14 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "build": "node build.js"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^0.0.7"
   },
   "devDependencies": {
     "wrangler": "^3.0.0"
-  }
+  },
+  "type": "module"
 }
