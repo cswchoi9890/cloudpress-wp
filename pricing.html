@@ -57,14 +57,22 @@
   <section class="page-hero">
     <div class="container">
       <h1>CloudPress 플랜</h1>
-      <p>플랜은 관리자가 각 사용자에게 직접 배정합니다. 셀프 결제 없이 관리자 승인 방식으로 운영됩니다.</p>
+      <p>호스팅 생성 전에 플랜을 선결제하고, 결제 검증 완료 후 생성이 진행됩니다.</p>
+    </div>
+  </section>
+
+  <section style="padding:40px 0;background:#0a0a0f;border-top:1px solid rgba(255,255,255,.08)">
+    <div class="container">
+      <div class="section-title">실시간 결제 상품</div>
+      <div class="section-sub" style="margin-bottom:18px">관리자 상품 설정과 동기화됩니다</div>
+      <div id="liveProducts" class="plan-grid"></div>
     </div>
   </section>
 
   <section style="padding:80px 0;background:#0a0a0f">
     <div class="container">
       <div class="section-title">플랜별 기능 비교</div>
-      <div class="section-sub" style="margin-bottom:48px">모든 플랜은 관리자가 사용자별로 직접 설정합니다</div>
+      <div class="section-sub" style="margin-bottom:48px">결제 완료 후 해당 플랜으로 호스팅을 생성할 수 있습니다</div>
 
       <div class="plan-grid">
         <!-- 스타터 -->
@@ -81,6 +89,7 @@
             <li><span class="ck">✓</span> 커스텀 도메인 1개</li>
             <li><span class="ck">✓</span> 기본 DDoS 방어</li>
           </ul>
+          <a href="/payment.html?plan=starter" class="btn primary sm" style="margin-top:14px">Starter 결제</a>
         </div>
 
         <!-- 프로 -->
@@ -98,6 +107,7 @@
             <li><span class="ck">✓</span> 커스텀 도메인 3개</li>
             <li><span class="ck">✓</span> 우선 지원</li>
           </ul>
+          <a href="/payment.html?plan=pro" class="btn primary sm" style="margin-top:14px">Pro 결제</a>
         </div>
 
         <!-- 엔터프라이즈 -->
@@ -114,13 +124,14 @@
             <li><span class="pk">★</span> <strong style="color:#818cf8">전용 지원 채널</strong> — 슬랙/이메일 전담 대응</li>
             <li><span class="ck">✓</span> 커스텀 도메인 무제한</li>
           </ul>
+          <a href="/payment.html?plan=enterprise" class="btn primary sm" style="margin-top:14px">Enterprise 결제</a>
         </div>
       </div>
 
       <div class="admin-notice">
-        <strong>🔒 플랜은 관리자만 배정할 수 있습니다</strong><br>
-        셀프 결제 또는 자동 업그레이드 없이, 관리자가 각 사용자의 플랜을 직접 설정·변경합니다.<br>
-        플랜 변경이 필요하다면 관리자에게 문의하세요.
+        <strong>🔒 결제 보안 안내</strong><br>
+        모든 결제는 서버에서 토스 승인 검증을 거친 뒤에만 유효 처리됩니다.<br>
+        결제 완료 후 자동으로 사이트 생성 단계로 이동합니다.
       </div>
     </div>
   </section>
@@ -135,6 +146,27 @@
       </nav>
     </div>
   </footer>
+  <script src="app.js"></script>
   <script src="script.js"></script>
+  <script>
+  (async function(){
+    const wrap = document.getElementById('liveProducts');
+    if (!wrap) return;
+    const r = await fetch('/api/payments/products');
+    const d = await r.json().catch(() => ({ ok:false }));
+    if (!d.ok || !(d.products||[]).length) {
+      wrap.innerHTML = '<div class="admin-notice">현재 결제 가능한 상품이 없습니다.</div>';
+      return;
+    }
+    wrap.innerHTML = d.products.map((p) => `
+      <div class="plan-card">
+        <div class="plan-name">${CP.escHtml(p.name)}</div>
+        <p class="plan-desc">${CP.escHtml(p.description || '호스팅 결제 상품')}</p>
+        <div style="font-size:1.2rem;font-weight:800;margin-bottom:12px">${Number(p.price||0).toLocaleString('ko-KR')}원</div>
+        <a href="/payment.html" class="btn primary sm">이 상품 결제</a>
+      </div>
+    `).join('');
+  })();
+  </script>
 </body>
 </html>
