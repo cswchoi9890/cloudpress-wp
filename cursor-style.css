@@ -1,11 +1,25 @@
-/* CloudPress - 공통 커서 스타일 */
+/* CloudPress - 커서 스타일 (표준 시스템 커서 사용) */
 * {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="%23667eea" opacity="0.3"/><circle cx="12" cy="12" r="3" fill="%23667eea"/></svg>') 12 12, auto;
+  cursor: auto;
 }
 
-a, button, input[type="submit"], input[type="button"], select, 
-textarea, input[type="text"], input[type="email"], input[type="password"], 
-input[type="number"], input[type="url"], input[type="search"], 
-.clickable, [onclick], [role="button"] {
-  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="%23764ba2" opacity="0.5"/><circle cx="12" cy="12" r="4" fill="%23764ba2"/></svg>') 12 12, pointer;
+a, button, input[type="submit"], input[type="button"], select,
+.clickable, [onclick], [role="button"],
+label[for], .btn, .sb-link, .nav a, .logo,
+.site-card, .setting-header, .toggle-switch {
+  cursor: pointer;
+}
+
+input[type="text"], input[type="email"], input[type="password"],
+input[type="number"], input[type="url"], input[type="search"],
+textarea {
+  cursor: text;
+}
+
+input[type="range"] {
+  cursor: ew-resize;
+}
+
+[disabled], .btn:disabled, button:disabled {
+  cursor: not-allowed;
 }
