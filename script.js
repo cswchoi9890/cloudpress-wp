@@ -1,6 +1,12 @@
 /* CloudPress — script.js */
 'use strict';
 
+// 일부 랜딩/정적 페이지 커서 미표시 방지
+document.addEventListener('DOMContentLoaded', () => {
+  document.documentElement.style.cursor = 'auto';
+  if (document.body) document.body.style.cursor = 'auto';
+});
+
 const $ = (s, c = document) => c.querySelector(s);
 const $$ = (s, c = document) => Array.from(c.querySelectorAll(s));
 
