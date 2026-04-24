@@ -96,14 +96,30 @@ wrangler pages deploy . \
   --project-name="$PAGES_PROJECT" \
   --commit-dirty=true
 
-# ── WORKER_SOURCE secret 주입 ─────────────────────────────────────────────
-# [text_blobs]는 ES Module format Worker에서 지원되지 않으므로
-# worker.js 파일 전체를 Pages secret으로 주입합니다.
-echo "▶ WORKER_SOURCE secret 주입 중..."
-wrangler pages secret put WORKER_SOURCE \
-  --project-name="$PAGES_PROJECT" \
-  < worker.js
-echo "  WORKER_SOURCE 주입 완료"
+# ── worker.js → CACHE KV 저장 ────────────────────────────────────────────
+# provision.js가 사이트 생성 시 CACHE KV의 platform:worker_source 키에서 읽음
+echo "▶ worker.js를 CACHE KV에 저장 중..."
+CACHE_KV_ID=$(wrangler kv namespace list 2>/dev/null \
+  | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for ns in data:
+        if ns.get('title') == 'CACHE':
+            print(ns['id'])
+            break
+except: pass
+" 2>/dev/null || true)
+
+if [[ -n "$CACHE_KV_ID" ]]; then
+  wrangler kv key put "platform:worker_source" \
+    --namespace-id="$CACHE_KV_ID" \
+    --path=worker.js \
+    --remote
+  echo "  worker.js → CACHE KV 저장 완료 (namespace: $CACHE_KV_ID)"
+else
+  echo "  ⚠ CACHE KV를 찾을 수 없어 저장 생략 (나중에 수동 실행: wrangler kv key put platform:worker_source --namespace-id=<id> --path=worker.js --remote)"
+fi
 
 # ── Worker 배포 ───────────────────────────────────────────────────────────
 echo "▶ cloudpress-proxy Worker 배포 중..."
