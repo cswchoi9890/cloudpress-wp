@@ -894,3 +894,44 @@ input, textarea, select { font: inherit; color: inherit; }
   .hero-stats .stat   { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
   .hero-stats .stat:last-child { border-bottom: none; }
 }
+
+/* ════════════════════════════
+   PAGE CONTENT (FAQ / SLA / FEATURES / CONTACT 공통)
+════════════════════════════ */
+.page-hero {
+  padding: 120px 0 60px;
+  text-align: center;
+  background: linear-gradient(135deg, var(--bg) 0%, var(--bg2) 100%);
+}
+.page-hero h1 {
+  font-family: 'Space Grotesk', 'Syne', sans-serif;
+  font-size: clamp(2rem, 5vw, 3.2rem);
+  font-weight: 800;
+  color: var(--t1);
+  margin-bottom: 16px;
+  line-height: 1.15;
+  letter-spacing: -1px;
+}
+.page-hero p {
+  font-size: 1.1rem;
+  color: var(--t2);
+  max-width: 600px;
+  margin: 0 auto;
+  line-height: 1.7;
+}
+
+/* cursor fixes — 모든 페이지 */
+a, button, [onclick], [role="button"], .btn,
+label, select, .logo, .nav a,
+.burger, .toggle-switch input, .setting-header {
+  cursor: pointer;
+}
+input[type="text"], input[type="email"], input[type="password"],
+input[type="number"], input[type="url"], input[type="search"],
+textarea {
+  cursor: text;
+}
+[disabled], .btn:disabled, button:disabled { cursor: not-allowed; }
+
+/* Ensure .header-actions links/buttons always pointer */
+.header-actions a, .header-actions button { cursor: pointer; }
