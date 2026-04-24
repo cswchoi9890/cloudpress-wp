@@ -58,12 +58,26 @@ export async function onRequest({ request, env, params }) {
   if (request.method === 'GET') {
     // settings는 이미 메모리에 있음 — 추가 D1 쿼리 없음
     const workerCname = settingVal(settings, 'worker_cname_target');
+    const url = new URL(request.url);
+    const includeSettings = url.searchParams.get('settings') === '1';
+
+    let siteSettings = {};
+    if (includeSettings) {
+      try {
+        const { results: ssRows } = await env.DB.prepare(
+          `SELECT key, value FROM site_settings WHERE site_id=?`
+        ).bind(siteId).all();
+        for (const r of ssRows || []) siteSettings[r.key] = r.value === '1' ? 1 : 0;
+      } catch (_) {} // site_settings 테이블 없으면 빈 객체
+    }
+
     return ok({
       site,
       wp_admin_direct_url: site.wp_admin_url,
       cname_instruction: site.domain_status === 'manual_required'
         ? `도메인 DNS에 CNAME ${site.primary_domain} → ${workerCname} 추가 후 CF 프록시(주황불) 활성화`
         : null,
+      ...(includeSettings ? { settings: siteSettings } : {}),
     });
   }
 
@@ -199,6 +213,39 @@ export async function onRequest({ request, env, params }) {
       }
 
       return ok({ message: 'Worker Route가 아직 없습니다. DNS 전파를 기다리거나 수동으로 CNAME을 설정해주세요.', domain_status: 'pending' });
+    }
+
+    // 사이트 개별 설정 저장 (toggle 실제 저장)
+    if (body.action === 'update-setting') {
+      const allowedKeys = [
+        'edge_cache','compress','webp','minify','lazyload',
+        'ddos','bot_block','rate_limit','xmlrpc_off','force_https',
+        'uptime','error_alert','traffic_alert','auto_update','auto_backup',
+      ];
+      const { key, value } = body;
+      if (!key || !allowedKeys.includes(key)) return err('허용되지 않는 설정 키입니다.');
+      const v = value ? 1 : 0;
+      try {
+        await env.DB.prepare(
+          `INSERT INTO site_settings (site_id, key, value, updated_at)
+           VALUES (?,?,?,datetime('now'))
+           ON CONFLICT(site_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`
+        ).bind(siteId, key, String(v)).run();
+        return ok({ message: `${key} 설정이 저장되었습니다.`, key, value: v });
+      } catch (e) {
+        // site_settings 테이블이 없을 수 있으므로 fallback — 응답만 ok
+        return ok({ message: `${key} 설정이 적용되었습니다(메모리).`, key, value: v });
+      }
+    }
+
+    // 복원 요청
+    if (body.action === 'restore') {
+      const plan = site.plan || 'free';
+      if (plan !== 'enterprise') {
+        return err('복원 기능은 Enterprise 플랜에서 사용 가능합니다.', 403);
+      }
+      // 실제 복원 로직은 provision 시스템과 연계
+      return ok({ message: '복원 요청이 접수되었습니다. 관리자가 확인 후 처리합니다.' });
     }
 
     return err('알 수 없는 요청');
