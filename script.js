@@ -4,29 +4,6 @@
 const $ = (s, c = document) => c.querySelector(s);
 const $$ = (s, c = document) => Array.from(c.querySelectorAll(s));
 
-/* ── Custom Cursor ──────────────────────── */
-(function () {
-  const cur = $('#cursor');
-  const fol = $('#cursorFollower');
-  if (!cur || window.matchMedia('(max-width:700px)').matches) return;
-
-  let mx = 0, my = 0, fx = 0, fy = 0;
-
-  document.addEventListener('mousemove', e => {
-    mx = e.clientX; my = e.clientY;
-    cur.style.left = mx + 'px';
-    cur.style.top  = my + 'px';
-  });
-
-  (function tick() {
-    fx += (mx - fx) * 0.13;
-    fy += (my - fy) * 0.13;
-    fol.style.left = fx + 'px';
-    fol.style.top  = fy + 'px';
-    requestAnimationFrame(tick);
-  })();
-})();
-
 /* ── Header scroll ──────────────────────── */
 (function () {
   const h = $('#header');
