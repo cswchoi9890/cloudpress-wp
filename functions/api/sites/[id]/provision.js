@@ -1113,15 +1113,19 @@ export async function onRequestPost({ request, env, params }) {
         const ct = scriptRes.headers.get('content-type') || '';
         let text = '';
         if (ct.includes('multipart')) {
-          // multipart/form-data → 첫 번째 파트(worker.js)만 추출
+          // multipart/form-data → 헤더 블록 이후 첫 번째 파트 본문 추출
           const raw = await scriptRes.text();
-          // Content-Disposition: form-data; name="worker.js" 다음 파트
-          const match = raw.match(/Content-Type:[^
-]*
-
-([\s\S]*?)(?:
---)/);
-          text = match ? match[1].trim() : raw;
+          // 빈 줄(빈줄 구분자) 이후가 본문
+          const sep = raw.indexOf('\r\n\r\n') !== -1 ? '\r\n\r\n' : '\n\n';
+          const bodyStart = raw.indexOf(sep, raw.indexOf('Content-Type:'));
+          if (bodyStart !== -1) {
+            const body = raw.slice(bodyStart + sep.length);
+            // 다음 boundary 전까지만
+            const boundaryEnd = body.indexOf('\r\n--');
+            text = (boundaryEnd !== -1 ? body.slice(0, boundaryEnd) : body).trim();
+          } else {
+            text = raw;
+          }
         } else {
           text = await scriptRes.text();
         }
