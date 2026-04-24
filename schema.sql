@@ -93,6 +93,11 @@ CREATE TABLE IF NOT EXISTS sites (
   disk_used           INTEGER DEFAULT 0,
   bandwidth_used      INTEGER DEFAULT 0,
   plan                TEXT NOT NULL DEFAULT 'free',
+  billing_status      TEXT NOT NULL DEFAULT 'active',
+  billing_anchor_day  INTEGER,
+  next_billing_at     TEXT,
+  grace_expires_at    TEXT,
+  payment_method_id   TEXT,
 
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
@@ -104,6 +109,95 @@ CREATE TABLE IF NOT EXISTS settings (
   key        TEXT PRIMARY KEY,
   value      TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ── 결제수단 저장 (토큰/빌링키 기반) ───────────────────────────────────────
+CREATE TABLE IF NOT EXISTS payment_methods (
+  id                  TEXT PRIMARY KEY,
+  user_id             TEXT NOT NULL REFERENCES users(id),
+  provider            TEXT NOT NULL DEFAULT 'toss',
+  method_type         TEXT NOT NULL, -- card | easyPay | virtualAccount
+  billing_key         TEXT,
+  card_company        TEXT,
+  card_number_masked  TEXT,
+  virtual_account_no  TEXT,
+  is_default          INTEGER NOT NULL DEFAULT 0,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ── 결제 거래 로그 ──────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS payment_transactions (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id),
+  order_id      TEXT NOT NULL UNIQUE,
+  payment_key   TEXT,
+  plan_code     TEXT NOT NULL,
+  amount        INTEGER NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'READY', -- READY | DONE | FAILED | CANCELED
+  method        TEXT,
+  requested_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  approved_at   TEXT,
+  failed_at     TEXT,
+  fail_reason   TEXT,
+  receipt_url   TEXT,
+  raw_response  TEXT,
+  consumed_at   TEXT,
+  site_id       TEXT
+);
+
+-- ── products (사용자 결제 가능 상품) ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS products (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  description   TEXT,
+  price         INTEGER NOT NULL, -- KRW
+  currency      TEXT NOT NULL DEFAULT 'KRW',
+  active        INTEGER NOT NULL DEFAULT 1,
+  created_by    TEXT REFERENCES users(id),
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ── orders (가상계좌 입금 주문) ───────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS orders (
+  id                  TEXT PRIMARY KEY,
+  user_id             TEXT NOT NULL REFERENCES users(id),
+  product_id          TEXT NOT NULL REFERENCES products(id),
+  quantity            INTEGER NOT NULL DEFAULT 1,
+  unit_price          INTEGER NOT NULL,
+  gross_amount        INTEGER NOT NULL, -- 수수료 차감 전
+  fee_rate            REAL NOT NULL DEFAULT 0.2,
+  fee_amount          INTEGER NOT NULL,
+  net_amount          INTEGER NOT NULL, -- 수수료 차감 후
+  total_amount        INTEGER NOT NULL, -- 결제 금액
+  status              TEXT NOT NULL DEFAULT 'pending', -- pending|paid|failed|cancelled
+  payment_method      TEXT NOT NULL DEFAULT 'virtual_account',
+  virtual_account_no  TEXT,
+  depositor_name      TEXT,
+  verify_tx_id        TEXT,
+  paid_at             TEXT,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ── settlements (판매자 정산 관리) ───────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS settlements (
+  id                  TEXT PRIMARY KEY,
+  order_id            TEXT NOT NULL UNIQUE REFERENCES orders(id),
+  user_id             TEXT NOT NULL REFERENCES users(id),
+  gross_amount        INTEGER NOT NULL,
+  fee_rate            REAL NOT NULL DEFAULT 0.2,
+  fee_amount          INTEGER NOT NULL,
+  settlement_amount   INTEGER NOT NULL, -- 실제 정산 금액 (80%)
+  status              TEXT NOT NULL DEFAULT 'ready', -- ready|processing|done|failed
+  account_bank        TEXT,
+  account_holder      TEXT,
+  account_number      TEXT,
+  note                TEXT,
+  settled_at          TEXT,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ── notices (공지사항) ────────────────────────────────────────────
