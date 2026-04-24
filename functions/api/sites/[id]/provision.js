@@ -1092,61 +1092,28 @@ export async function onRequestPost({ request, env, params }) {
 
   // worker.js 소스 로드
   // 1순위: env.WORKER_SOURCE (secret으로 주입된 경우)
-  // 2순위: Cloudflare Workers API에서 플랫폼 메인 Worker(cloudpress-wp) 스크립트 다운로드
+  // 2순위: CACHE KV의 'platform:worker_source' 키 (deploy.sh에서 자동 저장)
   let workerSource = (env.WORKER_SOURCE && env.WORKER_SOURCE.length > 200)
     ? env.WORKER_SOURCE
     : null;
 
-  if (!workerSource) {
+  if (!workerSource && env.CACHE) {
     try {
-      const platformWorkerName = env.PLATFORM_WORKER_NAME || 'cloudpress-wp';
-      const token = typeof cfAuth === 'string' ? cfAuth : cfAuth.token;
-      const email = typeof cfAuth === 'object' ? cfAuth.email : null;
-      const scriptUrl = `${CF_API}/accounts/${cfAccount}/workers/scripts/${platformWorkerName}`;
-      const headers = email
-        ? { 'X-Auth-Key': token, 'X-Auth-Email': email }
-        : { 'Authorization': `Bearer ${token}` };
-      console.log(`[provision] CF Workers API에서 worker.js 다운로드: ${scriptUrl}`);
-      const scriptRes = await fetch(scriptUrl, { headers });
-      if (scriptRes.ok) {
-        // 멀티파트 응답일 수 있으므로 Content-Type 확인
-        const ct = scriptRes.headers.get('content-type') || '';
-        let text = '';
-        if (ct.includes('multipart')) {
-          // multipart/form-data → 헤더 블록 이후 첫 번째 파트 본문 추출
-          const raw = await scriptRes.text();
-          // 빈 줄(빈줄 구분자) 이후가 본문
-          const sep = raw.indexOf('\r\n\r\n') !== -1 ? '\r\n\r\n' : '\n\n';
-          const bodyStart = raw.indexOf(sep, raw.indexOf('Content-Type:'));
-          if (bodyStart !== -1) {
-            const body = raw.slice(bodyStart + sep.length);
-            // 다음 boundary 전까지만
-            const boundaryEnd = body.indexOf('\r\n--');
-            text = (boundaryEnd !== -1 ? body.slice(0, boundaryEnd) : body).trim();
-          } else {
-            text = raw;
-          }
-        } else {
-          text = await scriptRes.text();
-        }
-        if (text && text.length > 200) {
-          workerSource = text;
-          console.log(`[provision] worker.js 다운로드 성공: ${text.length} bytes`);
-        } else {
-          console.warn('[provision] worker.js 다운로드: 응답이 비어있음', scriptRes.status);
-        }
+      const cached = await env.CACHE.get('platform:worker_source');
+      if (cached && cached.length > 200) {
+        workerSource = cached;
+        console.log(`[provision] CACHE KV에서 worker.js 로드 성공: ${cached.length} bytes`);
       } else {
-        const errText = await scriptRes.text().catch(() => '');
-        console.error('[provision] worker.js 다운로드 실패:', scriptRes.status, errText.slice(0, 200));
+        console.warn('[provision] CACHE KV platform:worker_source 없음 또는 너무 짧음');
       }
     } catch (e) {
-      console.error('[provision] worker.js CF API 다운로드 오류:', e.message);
+      console.error('[provision] CACHE KV worker.js 로드 오류:', e.message);
     }
   }
 
   if (!workerSource) {
-    await failSite(env.DB, siteId, 'worker_upload', 'worker.js 소스를 불러올 수 없습니다. env.WORKER_SOURCE secret을 설정하거나 CF_API_TOKEN/CF_ACCOUNT_ID를 확인하세요.');
-    return err('worker.js 소스 로드 실패: WORKER_SOURCE secret 또는 Cloudflare API 키를 확인하세요.', 500);
+    await failSite(env.DB, siteId, 'worker_upload', 'worker.js 소스가 없습니다. deploy.sh를 다시 실행하세요.');
+    return err('worker.js 소스 없음: deploy.sh를 실행하면 자동으로 CACHE KV에 저장됩니다.', 500);
   }
 
   const cfApiTokenForWorker = typeof cfAuth === 'string' ? '' : cfAuth.token;
