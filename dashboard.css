@@ -11,6 +11,10 @@
   --tr:.18s ease;
 }
 html,body{height:100%;font-family:var(--font-body);background:var(--bg);color:var(--text);overflow-x:hidden}
+/* 일부 관리자/대시보드 페이지 커서 미표시 방지 */
+html, body, * { cursor: auto; }
+a, button, .btn, .sb-link, .nav-item { cursor: pointer; }
+input, textarea, select { cursor: text; }
 
 /* ── Layout ── */
 .app-wrap{display:flex;min-height:100vh}
