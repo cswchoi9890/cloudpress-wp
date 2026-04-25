@@ -1,112 +1,214 @@
-/* CloudPress create.css — Cloudways Light Theme */
-:root{
-  --accent:#1967d2;
-  --accent2:#1558b8;
-  --accent-glow:rgba(25,103,210,.12);
-  --success:#1a9e5a;
-  --warning:#e37400;
-  --error:#d93025;
-  --bg:#f5f6fa;
-  --surface:#ffffff;
-  --surface2:#f8f9fc;
-  --border:#e3e6ef;
-  --border2:#cdd1de;
-  --text:#1f2937;
-  --muted:#6b7280;
-  --font-head:'Inter',sans-serif;
-  --font-body:'Inter',sans-serif;
+/* ═══════════════════════════════════════════════════════
+   CloudPress — create.css  (Cloudways Style)
+   ═══════════════════════════════════════════════════════ */
+
+.wizard { max-width: 700px; margin: 0 auto }
+
+/* ── STEPS BAR ────────────────────────────────────────── */
+.steps { display: flex; align-items: center; margin-bottom: 28px }
+.stp { display: flex; align-items: center; gap: 7px; font-size: .82rem; font-weight: 500; color: var(--muted2) }
+.stp.active { color: var(--accent) }
+.stp.done { color: var(--success) }
+.stp-num {
+  width: 24px; height: 24px; border-radius: 50%;
+  border: 1.5px solid currentColor;
+  display: flex; align-items: center; justify-content: center;
+  font-size: .72rem; font-weight: 700; flex-shrink: 0
+}
+.stp.done .stp-num { display: none }
+.stp-ck { display: none }
+.stp.done .stp-ck {
+  display: flex; width: 24px; height: 24px; border-radius: 50%;
+  background: var(--success); align-items: center; justify-content: center
+}
+.stp-sep { flex: 1; height: 1px; background: var(--border2); margin: 0 10px }
+
+/* ── WIZARD CARD ──────────────────────────────────────── */
+.wcard {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 28px; margin-bottom: 16px; box-shadow: var(--shadow-sm)
 }
 
-.wizard{max-width:680px;margin:0 auto}
-.steps{display:flex;align-items:center;margin-bottom:32px}
-.stp{display:flex;align-items:center;gap:7px;font-size:.82rem;font-weight:500;color:var(--muted)}
-.stp.active{color:var(--accent)}
-.stp.done{color:var(--success)}
-.stp-num{width:24px;height:24px;border-radius:50%;border:1.5px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;flex-shrink:0}
-.stp.done .stp-num{display:none}
-.stp-ck{display:none}
-.stp.done .stp-ck{display:flex;width:24px;height:24px;border-radius:50%;background:var(--success);align-items:center;justify-content:center}
-.stp-sep{flex:1;height:1px;background:var(--border2);margin:0 8px}
-
-.spin{width:52px;height:52px;border-radius:50%;border:3px solid rgba(25,103,210,.15);border-top-color:var(--accent);animation:sp 1s linear infinite;margin:0 auto 20px}
-@keyframes sp{to{transform:rotate(360deg)}}
-
-.log{background:var(--bg);border:1px solid var(--border2);border-radius:10px;padding:14px;font-size:.78rem;font-family:monospace;color:var(--muted);height:180px;overflow-y:auto;margin-top:18px;line-height:2;text-align:left}
-.log .ok{color:var(--success)}
-.log .cur{color:var(--accent)}
-.log .warn{color:var(--warning)}
-.log .err{color:var(--error)}
-
-.success-icon{width:76px;height:76px;border-radius:50%;background:rgba(26,158,90,.08);border:2px solid rgba(26,158,90,.2);display:flex;align-items:center;justify-content:center;margin:0 auto 20px}
-
-.cred-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)}
-.cred-row:last-child{border:none}
-.cred-label{font-size:.78rem;color:var(--muted);width:130px;flex-shrink:0}
-.cred-val{flex:1;font-size:.85rem;font-weight:600;word-break:break-all;color:var(--text)}
-.copy-btn{padding:4px 10px;background:var(--surface2);border:1px solid var(--border2);border-radius:6px;color:var(--muted);font-size:.74rem;cursor:pointer;white-space:nowrap}
-.copy-btn:hover{border-color:var(--accent);color:var(--accent)}
-
-.pw-wrap{display:flex;align-items:center;gap:6px;flex:1}
-.pw-inp{flex:1;background:var(--bg);border:1.5px solid var(--border2);border-radius:7px;padding:8px 11px;color:var(--text);font-size:.88rem;outline:none}
-.pw-inp:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(25,103,210,.08)}
-.eye-btn{background:none;border:none;cursor:pointer;color:var(--muted);padding:4px;display:flex;align-items:center}
-.eye-btn:hover{color:var(--text)}
-
-.admin-section{background:rgba(26,158,90,.04);border:1px solid rgba(26,158,90,.18);border-radius:10px;padding:16px;margin-bottom:16px}
-.admin-section-title{font-size:.82rem;font-weight:700;color:var(--success);margin-bottom:12px}
-.domain-section{background:rgba(25,103,210,.04);border:1px solid rgba(25,103,210,.15);border-radius:10px;padding:16px;margin-bottom:16px}
-.domain-section-title{font-size:.82rem;font-weight:700;color:var(--accent);margin-bottom:10px;display:flex;align-items:center;gap:7px}
-
-.hosting-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(25,103,210,.06);border:1px solid rgba(25,103,210,.18);border-radius:8px;padding:6px 12px;font-size:.8rem;color:var(--accent);font-weight:600;margin-bottom:16px}
-.feature-list{list-style:none;padding:0;margin:0 0 16px}
-.feature-list li{padding:5px 0;font-size:.85rem;color:var(--muted);display:flex;align-items:center;gap:8px}
-.feature-list li::before{content:'✓';color:var(--success);font-weight:700;flex-shrink:0}
-
-.wp-link{display:inline-flex;align-items:center;gap:8px;padding:12px 20px;background:var(--accent);color:#fff;border-radius:10px;font-weight:700;font-size:.9rem;text-decoration:none;margin-top:4px}
-.wp-link:hover{opacity:.9;text-decoration:none;color:#fff}
-.wp-link-admin{background:var(--surface2);color:var(--text);border:1.5px solid var(--border2)}
-.wp-link-admin:hover{color:var(--text);background:var(--surface)}
-
-.status-polling{display:flex;align-items:center;gap:10px;padding:12px;background:rgba(25,103,210,.04);border:1px solid rgba(25,103,210,.15);border-radius:8px;margin-top:12px;font-size:.83rem;color:var(--text)}
-.provision-step{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;font-size:.82rem;color:var(--muted);transition:all .3s}
-.provision-step.active{background:rgba(25,103,210,.06);color:var(--accent);font-weight:600}
-.provision-step.done{background:rgba(26,158,90,.06);color:var(--success)}
-.provision-step.error{background:rgba(217,48,37,.06);color:var(--error)}
-.pstep-icon{font-size:.9rem;width:20px;text-align:center;flex-shrink:0}
-.pstep-name{flex:1}
-
-.spec-badges{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
-.spec-badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:.75rem;font-weight:700}
-.spec-badge.php{background:rgba(124,58,237,.08);color:#6d28d9}
-.spec-badge.wp{background:rgba(25,103,210,.08);color:var(--accent)}
-.spec-badge.tz{background:rgba(26,158,90,.08);color:var(--success)}
-.spec-badge.mysql{background:rgba(227,116,0,.08);color:var(--warning)}
-
-.info-box{background:rgba(25,103,210,.04);border:1px solid rgba(25,103,210,.15);border-radius:8px;padding:12px 14px;font-size:.81rem;color:var(--muted);margin-bottom:12px;line-height:1.7}
-.info-box strong{color:var(--text)}
-.warn-box{background:rgba(227,116,0,.05);border:1px solid rgba(227,116,0,.2);border-radius:8px;padding:12px 14px;font-size:.81rem;color:var(--muted);margin-bottom:12px;line-height:1.7}
-
-.step-nav{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
-
-/* Admin/Manager bypass banner */
-.bypass-banner{background:rgba(26,158,90,.06);border:1px solid rgba(26,158,90,.2);border-radius:10px;padding:12px 16px;font-size:.84rem;margin-bottom:16px;display:flex;align-items:center;gap:10px;color:var(--success)}
-
-@media(max-width:600px){
-  .wizard{padding:0 2px}
-  .steps{gap:2px;margin-bottom:20px}
-  .stp-sep{margin:0 3px}
-  .stp{font-size:.72rem;gap:4px}
-  .stp-num{width:20px;height:20px;font-size:.65rem}
-  .card{padding:18px 14px !important}
-  .provision-step{padding:6px 8px}
-  .pstep-name{font-size:.76rem}
-  .log{height:130px;font-size:.72rem}
-  .cred-label{width:90px !important;font-size:.73rem}
-  .cred-val{font-size:.8rem}
-  .pw-inp{font-size:.82rem;padding:7px 10px}
+/* ── HOSTING BADGE ────────────────────────────────────── */
+.hosting-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent-light); border: 1px solid rgba(30,107,255,.18);
+  border-radius: 7px; padding: 6px 12px; font-size: .79rem;
+  color: var(--accent); font-weight: 600; margin-bottom: 14px
 }
-@media(max-width:400px){
-  .cred-row{flex-direction:column;align-items:flex-start;gap:5px}
-  .cred-val{max-width:100%;text-align:left}
-  .copy-btn{align-self:flex-end}
+
+/* ── SPEC BADGES ──────────────────────────────────────── */
+.spec-badges { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 16px }
+.spec-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 20px; font-size: .73rem; font-weight: 700 }
+.spec-badge.php { background: rgba(112,72,232,.09); color: #5b21b6 }
+.spec-badge.wp { background: rgba(30,107,255,.08); color: var(--accent) }
+.spec-badge.tz { background: rgba(0,168,107,.08); color: var(--success) }
+.spec-badge.mysql { background: rgba(240,124,16,.08); color: var(--warning) }
+
+/* ── FEATURE LIST ─────────────────────────────────────── */
+.feature-list { list-style: none; padding: 0; margin: 0 0 14px }
+.feature-list li { padding: 4px 0; font-size: .85rem; color: var(--muted); display: flex; align-items: flex-start; gap: 8px }
+.feature-list li::before { content: '✓'; color: var(--success); font-weight: 700; flex-shrink: 0 }
+
+/* ── FORM SECTION GROUPS ──────────────────────────────── */
+.admin-section { background: rgba(0,168,107,.04); border: 1px solid rgba(0,168,107,.17); border-radius: 9px; padding: 16px; margin-bottom: 14px }
+.admin-section-title { font-size: .81rem; font-weight: 700; color: var(--success); margin-bottom: 11px }
+.domain-section { background: rgba(30,107,255,.04); border: 1px solid rgba(30,107,255,.14); border-radius: 9px; padding: 16px; margin-bottom: 14px }
+.domain-section-title { font-size: .81rem; font-weight: 700; color: var(--accent); margin-bottom: 9px; display: flex; align-items: center; gap: 7px }
+
+/* ── FIELD ────────────────────────────────────────────── */
+.field { margin-bottom: 14px }
+.field label { display: block; font-size: .82rem; font-weight: 600; color: var(--text); margin-bottom: 6px }
+.field input, .field select, .field textarea {
+  width: 100%; background: var(--surface2); border: 1.5px solid var(--border2);
+  border-radius: 7px; padding: 9px 12px; font-size: .87rem;
+  color: var(--text); outline: none; transition: border-color var(--tr); font-family: var(--font)
+}
+.field input:focus, .field select:focus, .field textarea:focus {
+  border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-light)
+}
+.field .hint { font-size: .76rem; color: var(--muted2); margin-top: 4px }
+.field-err { font-size: .77rem; color: var(--error); margin-top: 4px }
+
+/* ── PASSWORD INPUT WITH SHOW TOGGLE ──────────────────── */
+.pw-wrap { display: flex; align-items: center; gap: 6px; flex: 1 }
+.pw-inp {
+  flex: 1; background: var(--bg); border: 1.5px solid var(--border2);
+  border-radius: 7px; padding: 8px 11px; color: var(--text);
+  font-size: .87rem; outline: none; font-family: var(--font)
+}
+.pw-inp:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light) }
+.eye-btn { background: none; border: none; color: var(--muted); padding: 4px; display: flex; align-items: center }
+.eye-btn:hover { color: var(--text) }
+
+/* ── PLAN SELECT CARDS ────────────────────────────────── */
+.plan-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px }
+.plan-card {
+  border: 1.5px solid var(--border); border-radius: 9px; padding: 14px 12px;
+  transition: all var(--tr); text-align: center; position: relative
+}
+.plan-card.selected { border-color: var(--accent); background: var(--accent-light) }
+.plan-card input[type=radio] { position: absolute; opacity: 0; width: 0; height: 0 }
+.plan-card-name { font-size: .82rem; font-weight: 700; margin-bottom: 3px }
+.plan-card-price { font-size: .76rem; color: var(--muted) }
+
+/* ── SPINNER / INSTALL LOG ────────────────────────────── */
+.spin {
+  width: 48px; height: 48px; border-radius: 50%;
+  border: 3px solid rgba(30,107,255,.14); border-top-color: var(--accent);
+  animation: sp 1s linear infinite; margin: 0 auto 18px
+}
+@keyframes sp { to { transform: rotate(360deg) } }
+
+.log {
+  background: #0f172a; border: 1px solid rgba(255,255,255,.06);
+  border-radius: 9px; padding: 14px; font-size: .76rem;
+  font-family: 'DM Mono', monospace; color: #94a3b8;
+  height: 170px; overflow-y: auto; margin-top: 16px; line-height: 1.9
+}
+.log .ok { color: #4ade80 }
+.log .cur { color: #60a5fa }
+.log .warn { color: #fbbf24 }
+.log .err { color: #f87171 }
+
+/* ── PROVISION STEPS ──────────────────────────────────── */
+.provision-steps { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px }
+.provision-step {
+  display: flex; align-items: center; gap: 9px; padding: 8px 12px;
+  border-radius: 8px; font-size: .83rem; color: var(--muted); transition: all .25s
+}
+.provision-step.active { background: var(--accent-light); color: var(--accent); font-weight: 600 }
+.provision-step.done { background: rgba(0,168,107,.07); color: var(--success) }
+.provision-step.error { background: rgba(240,62,62,.07); color: var(--error) }
+.pstep-icon { font-size: .9rem; width: 20px; text-align: center; flex-shrink: 0 }
+.pstep-name { flex: 1 }
+
+/* ── STATUS POLLING ───────────────────────────────────── */
+.status-polling {
+  display: flex; align-items: center; gap: 10px; padding: 11px 13px;
+  background: var(--accent-light); border: 1px solid rgba(30,107,255,.16);
+  border-radius: 8px; margin-top: 11px; font-size: .82rem; color: var(--text)
+}
+
+/* ── SUCCESS SCREEN ───────────────────────────────────── */
+.success-icon {
+  width: 72px; height: 72px; border-radius: 50%;
+  background: rgba(0,168,107,.08); border: 2px solid rgba(0,168,107,.22);
+  display: flex; align-items: center; justify-content: center; margin: 0 auto 18px
+}
+
+/* ── CREDENTIALS ──────────────────────────────────────── */
+.cred-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 0; border-bottom: 1px solid var(--border)
+}
+.cred-row:last-child { border: none }
+.cred-label { font-size: .78rem; color: var(--muted); width: 130px; flex-shrink: 0 }
+.cred-val { flex: 1; font-size: .85rem; font-weight: 600; word-break: break-all; color: var(--text) }
+.copy-btn {
+  padding: 4px 10px; background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: 6px; color: var(--muted); font-size: .73rem; white-space: nowrap
+}
+.copy-btn:hover { border-color: var(--accent); color: var(--accent) }
+
+/* ── WP LINKS ─────────────────────────────────────────── */
+.wp-link {
+  display: inline-flex; align-items: center; gap: 8px; padding: 11px 20px;
+  background: var(--accent); color: #fff; border-radius: 9px;
+  font-weight: 700; font-size: .88rem; text-decoration: none; margin-top: 4px
+}
+.wp-link:hover { opacity: .9 }
+.wp-link-admin { background: var(--surface2); color: var(--text); border: 1.5px solid var(--border2) }
+.wp-link-admin:hover { background: var(--surface3) }
+
+/* ── INFO / WARN BOXES ────────────────────────────────── */
+.info-box {
+  background: var(--accent-light); border: 1px solid rgba(30,107,255,.15);
+  border-radius: 8px; padding: 11px 14px; font-size: .81rem; color: var(--muted);
+  margin-bottom: 12px; line-height: 1.7
+}
+.info-box strong { color: var(--text) }
+.warn-box {
+  background: rgba(240,124,16,.05); border: 1px solid rgba(240,124,16,.2);
+  border-radius: 8px; padding: 11px 14px; font-size: .81rem; color: var(--muted);
+  margin-bottom: 12px; line-height: 1.7
+}
+
+/* ── BYPASS BANNER (admin/manager) ───────────────────── */
+.bypass-banner {
+  background: rgba(0,168,107,.06); border: 1px solid rgba(0,168,107,.2);
+  border-radius: 9px; padding: 11px 15px; font-size: .84rem; margin-bottom: 14px;
+  display: none; align-items: center; gap: 10px; color: var(--success)
+}
+.bypass-banner.show { display: flex }
+
+/* ── CF API BANNER ────────────────────────────────────── */
+.cf-api-banner {
+  background: rgba(240,62,62,.07); border: 1px solid rgba(240,62,62,.22);
+  border-radius: 9px; padding: 13px 16px; margin-bottom: 16px;
+  display: none; align-items: center; gap: 12px; flex-wrap: wrap
+}
+.cf-api-banner.show { display: flex }
+
+/* ── STEP NAV ─────────────────────────────────────────── */
+.step-nav { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px }
+
+/* ── MOBILE ───────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .wizard { padding: 0 }
+  .wcard { padding: 18px 14px }
+  .steps { gap: 2px; margin-bottom: 18px }
+  .stp-sep { margin: 0 4px }
+  .stp { font-size: .71rem; gap: 4px }
+  .stp-num { width: 20px; height: 20px; font-size: .64rem }
+  .plan-cards { grid-template-columns: 1fr }
+  .provision-step { padding: 6px 9px }
+  .pstep-name { font-size: .76rem }
+  .log { height: 130px; font-size: .71rem }
+  .cred-label { width: 90px; font-size: .73rem }
+  .cred-val { font-size: .8rem }
+}
+@media (max-width: 400px) {
+  .cred-row { flex-direction: column; align-items: flex-start; gap: 5px }
+  .copy-btn { align-self: flex-end }
 }
