@@ -1,263 +1,392 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=5.0"/>
-  <title>호스팅 콘솔 — CloudPress (hosting-console.cloud-press.co.kr)</title>
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=5.0"/>
+  <title>콘솔 — CloudPress</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
   <link rel="alternate icon" href="/favicon.ico"/>
-<link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
-  <link rel="stylesheet" href="dashboard.css"/>
-  <style>
-    /* ── Loword Bridge 색상 체계 (bridge-console.loword.co.kr 기반) ── */
-    :root{
-      --accent:#1967d2;
-      --accent2:#1558b8;
-      --accent-hover:#1558b8;
-      --success:#1a9e5a;
-      --warning:#e37400;
-      --error:#d93025;
-      --bg:#f5f6fa;
-      --surface:#ffffff;
-      --surface2:#f8f9fc;
-      --border:#e3e6ef;
-      --border2:#cdd1de;
-      --text:#1f2937;
-      --muted:#6b7280;
-      --font-head:'Inter',sans-serif;
-      --sidebar-bg:#ffffff;
-      --sidebar-accent:rgba(25,103,210,.06);
-    }
-    .site-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 20px;display:flex;align-items:center;gap:14px;transition:border-color .2s}
-    .site-card:hover{border-color:var(--border2)}
-    .site-icon{width:42px;height:42px;border-radius:10px;background:rgba(79,110,247,.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid rgba(79,110,247,.2)}
-    .site-info{flex:1;min-width:0}
-    .site-name{font-family:var(--font-head);font-weight:700;font-size:.92rem;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .site-url{font-size:.77rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .site-actions{display:flex;gap:6px;flex-shrink:0}
-    .btn-icon{background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:7px;cursor:pointer;color:var(--muted);transition:all .2s;display:inline-flex;align-items:center}
-    .btn-icon:hover{border-color:var(--border2);color:var(--text)}
-    .btn-icon.danger:hover{border-color:rgba(239,68,68,.3);color:var(--error);background:rgba(239,68,68,.05)}
-    .sites-list{display:flex;flex-direction:column;gap:8px}
-    .empty-state{text-align:center;padding:56px 20px;color:var(--muted)}
-    .notice-bar{background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.2);border-radius:10px;padding:11px 16px;font-size:.85rem;margin-bottom:12px;display:flex;align-items:flex-start;gap:10px}
-    .notice-bar.warning{background:rgba(234,179,8,.08);border-color:rgba(234,179,8,.2)}
-    .notice-bar.success{background:rgba(34,197,94,.08);border-color:rgba(34,197,94,.2)}
-    .notice-bar.error{background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.2)}
-    .cf-api-warn{background:rgba(234,179,8,.07);border:1px solid rgba(234,179,8,.25);border-radius:10px;padding:12px 16px;font-size:.84rem;margin-bottom:18px;display:flex;align-items:center;gap:10px}
-    .ver-badge{display:inline-block;font-size:.68rem;padding:1px 7px;border-radius:8px;background:rgba(99,102,241,.12);color:#818cf8;font-weight:600;margin-left:6px}
-  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/dashboard.css"/>
 </head>
 <body>
 <div class="app-wrap">
+
+  <!-- ── SIDEBAR ─────────────────────────────────────── -->
   <aside class="sidebar" id="sidebar">
     <a href="/dashboard.html" class="sb-logo">
-      <svg width="22" height="22" viewBox="0 0 28 28" fill="none"><path d="M14 2L26 8V20L14 26L2 20V8L14 2Z" stroke="#4F6EF7" stroke-width="1.5"/><path d="M14 8L20 11V17L14 20L8 17V11L14 8Z" fill="#4F6EF7" opacity=".5"/><circle cx="14" cy="14" r="2.2" fill="#4F6EF7"/></svg>
-      CloudPress Console
+      <div class="sb-logo-icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2L22 7V17L12 22L2 17V7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <circle cx="12" cy="12" r="3" fill="currentColor"/>
+        </svg>
+      </div>
+      CloudPress
     </a>
-    <div style="padding:6px 16px 0;font-size:.68rem;color:rgba(79,110,247,.6);font-family:monospace;letter-spacing:.02em">hosting-console.cloud-press.co.kr</div>
     <nav class="sb-nav">
       <div class="sb-section">
         <div class="sb-label">메인</div>
-        <a href="/dashboard.html" class="sb-link active"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>대시보드</a>
-        <a href="/create.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>사이트 추가</a>
+        <a href="/dashboard.html" class="sb-link active">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>
+          대시보드
+        </a>
+        <a href="/create.html" class="sb-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          새 사이트
+        </a>
       </div>
       <div class="sb-section">
         <div class="sb-label">계정</div>
-        <a href="/account.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>내 계정</a>
-        <a href="https://cloud-press.co.kr/pricing.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M2 10h20" stroke="currentColor" stroke-width="1.5"/></svg>플랜 안내</a>
+        <a href="/account.html" class="sb-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          내 계정
+        </a>
+        <a href="/pricing.html" class="sb-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M2 10h20" stroke="currentColor" stroke-width="1.5"/></svg>
+          요금제
+        </a>
       </div>
       <div class="sb-section">
         <div class="sb-label">서비스</div>
-        <a href="/dns.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M2 12h20M12 2c-4 4-4 16 0 0s4-16 0 0" stroke="currentColor" stroke-width="1.5"/></svg>DNS 관리</a>
-        <a href="/chat.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>상담 문의</a>
+        <a href="/dns.html" class="sb-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" stroke="currentColor" stroke-width="1.5"/></svg>
+          DNS 관리
+        </a>
+        <a href="/chat.html" class="sb-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          상담 문의
+        </a>
       </div>
       <div class="sb-section" id="adminMenu" style="display:none">
         <div class="sb-label">관리자</div>
-        <a href="/admin.html" class="sb-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" stroke="currentColor" stroke-width="1.5"/></svg>어드민 패널</a>
+        <a href="/admin.html" class="sb-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" stroke="currentColor" stroke-width="1.5"/></svg>
+          어드민 패널
+        </a>
       </div>
       <div class="sb-section">
-        <button class="sb-link danger" onclick="CP.logout()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="16 17 21 12 16 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="21" y1="12" x2="9" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>로그아웃</button>
+        <button class="sb-link danger" onclick="CP.logout()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="16 17 21 12 16 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="21" y1="12" x2="9" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          로그아웃
+        </button>
       </div>
     </nav>
     <div class="sb-user">
       <div class="sb-avatar" id="sbAvatar">?</div>
-      <div class="sb-uinfo"><div class="sb-uname" id="sbName">—</div><div class="sb-uemail" id="sbEmail">—</div></div>
+      <div class="sb-uinfo">
+        <div class="sb-uname" id="sbName">—</div>
+        <div class="sb-uemail" id="sbEmail">—</div>
+      </div>
     </div>
   </aside>
+
   <div class="sidebar-overlay" id="overlay" onclick="closeSidebar()"></div>
+
+  <!-- ── MAIN ────────────────────────────────────────── -->
   <main class="main">
     <div class="topbar">
-      <div style="display:flex;align-items:center;gap:14px">
-        <button class="sidebar-toggle" onclick="openSidebar()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 12h18M3 6h18M3 18h18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="sidebar-toggle" id="sidebarToggle" onclick="openSidebar()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 12h18M3 6h18M3 18h18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
         <span class="topbar-title">대시보드</span>
       </div>
-      <a href="/create.html" class="btn btn-primary btn-sm"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>새 사이트</a>
+      <a href="/create.html" class="btn btn-primary btn-sm">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        새 사이트
+      </a>
     </div>
+
     <div class="content">
+      <!-- 공지사항 -->
       <div id="noticeArea"></div>
-      <div id="cfApiWarn" style="display:none" class="cf-api-warn">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" stroke="#eab308" stroke-width="1.5"/><line x1="12" y1="9" x2="12" y2="13" stroke="#eab308" stroke-width="1.5" stroke-linecap="round"/><line x1="12" y1="17" x2="12.01" y2="17" stroke="#eab308" stroke-width="2" stroke-linecap="round"/></svg>
-        <span>사이트 구축을 위해 <strong><a href="/account.html" style="color:#eab308">내 계정 → Cloudflare API 설정</a></strong>에서 Global API 키를 먼저 등록해주세요.</span>
+
+      <!-- CF API 경고 -->
+      <div id="cfApiWarn" style="display:none" class="notice-bar warning" style="margin-bottom:18px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="flex-shrink:0;color:var(--warning)"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" stroke="currentColor" stroke-width="1.5"/><line x1="12" y1="9" x2="12" y2="13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="12" y1="17" x2="12.01" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span>사이트 구축을 위해 <a href="/account.html" style="color:var(--warning);font-weight:700;text-decoration:underline">내 계정 → Cloudflare API 설정</a>에서 Global API 키를 먼저 등록해주세요.</span>
       </div>
-      <div style="margin-bottom:24px">
-        <h1 style="font-family:var(--font-head);font-size:1.4rem;font-weight:700;margin-bottom:4px" id="welcome">안녕하세요!</h1>
-        <p style="color:var(--muted);font-size:.88rem">CloudPress CMS 사이트 현황을 확인하세요.</p>
+
+      <!-- 인사말 -->
+      <div style="margin-bottom:22px">
+        <h1 style="font-size:1.35rem;font-weight:800;margin-bottom:3px" id="welcome">안녕하세요!</h1>
+        <p style="color:var(--muted);font-size:.87rem">CloudPress 호스팅 현황을 확인하세요.</p>
       </div>
+
+      <!-- 통계 -->
       <div class="stats-grid">
-        <div class="stat-card"><div class="sc-icon" style="background:rgba(249,115,22,.1)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="2" y="3" width="20" height="14" rx="2" stroke="#f97316" stroke-width="1.5"/><path d="M8 21h8M12 17v4" stroke="#f97316" stroke-width="1.5" stroke-linecap="round"/></svg></div><div class="sc-val" id="sSites">0</div><div class="sc-lbl">CMS 사이트</div></div>
-        <div class="stat-card"><div class="sc-icon" style="background:rgba(99,102,241,.1)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#6366f1" stroke-width="1.5" stroke-linecap="round"/></svg></div><div class="sc-val" id="sPlan">—</div><div class="sc-lbl">현재 플랜</div></div>
-        <div class="stat-card"><div class="sc-icon" style="background:rgba(34,197,94,.1)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" stroke="#22c55e" stroke-width="1.5" stroke-linecap="round"/><polyline points="22 4 12 14.01 9 11.01" stroke="#22c55e" stroke-width="1.5" stroke-linecap="round"/></svg></div><div class="sc-val" id="sActive">0</div><div class="sc-lbl">활성 사이트</div></div>
+        <div class="stat-card">
+          <div class="sc-icon blue">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 21h8M12 17v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+          <div class="sc-val" id="sSites">0</div>
+          <div class="sc-lbl">전체 사이트</div>
+        </div>
+        <div class="stat-card">
+          <div class="sc-icon green">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="22 4 12 14.01 9 11.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+          <div class="sc-val" id="sActive">0</div>
+          <div class="sc-lbl">활성 사이트</div>
+        </div>
+        <div class="stat-card">
+          <div class="sc-icon purple">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+          <div class="sc-val" id="sPlan">—</div>
+          <div class="sc-lbl">현재 플랜</div>
+        </div>
+        <div class="stat-card">
+          <div class="sc-icon orange">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M12 6v6l4 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+          <div class="sc-val" id="sPending">0</div>
+          <div class="sc-lbl">구축 중</div>
+        </div>
       </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin:28px 0 14px">
-        <h2 style="font-family:var(--font-head);font-size:1rem;font-weight:700">내 CMS 사이트</h2>
-        <a href="/create.html" class="btn btn-primary btn-sm">+ 새로 만들기</a>
+
+      <!-- 사이트 목록 -->
+      <div class="sites-header">
+        <h2>내 WordPress 사이트</h2>
+        <a href="/create.html" class="btn btn-primary btn-sm">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          새로 만들기
+        </a>
       </div>
-      <div id="sitesList" class="sites-list"><div style="color:var(--muted);font-size:.88rem;padding:20px 0">불러오는 중...</div></div>
+      <div id="sitesList">
+        <div style="color:var(--muted);font-size:.87rem;padding:20px 0">불러오는 중...</div>
+      </div>
     </div>
   </main>
 </div>
 
+<!-- 삭제 모달 -->
 <div class="modal-bg" id="delModal">
   <div class="modal">
-    <h3 style="font-family:var(--font-head);font-size:1.05rem;font-weight:700;margin-bottom:10px">사이트 삭제</h3>
-    <p id="delMsg" style="font-size:.87rem;color:var(--muted);margin-bottom:24px;line-height:1.6"></p>
-    <div style="display:flex;gap:10px">
+    <div class="modal-head">
+      <h3>사이트 삭제</h3>
+      <button class="modal-close" onclick="document.getElementById('delModal').classList.remove('open')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <p id="delMsg" style="font-size:.87rem;color:var(--muted);line-height:1.6;margin-bottom:6px"></p>
+    <div style="background:rgba(240,62,62,.06);border:1px solid rgba(240,62,62,.18);border-radius:7px;padding:10px 13px;font-size:.8rem;color:var(--error);margin-bottom:6px">
+      ⚠️ 이 작업은 되돌릴 수 없습니다. D1 데이터베이스, KV 스토리지, DNS 레코드가 모두 삭제됩니다.
+    </div>
+    <div class="modal-footer">
       <button class="btn btn-ghost" onclick="document.getElementById('delModal').classList.remove('open');delId=null">취소</button>
       <button id="delConfirmBtn" class="btn btn-danger" onclick="confirmDel()">삭제</button>
     </div>
   </div>
 </div>
 
+<div class="cp-toast" id="cpToast"></div>
+
 <script src="/app.js"></script>
 <script>
-let delId=null;
+let delId = null;
 
-async function init(){
+function showToast(msg, type = '') {
+  const t = document.getElementById('cpToast');
+  t.textContent = msg;
+  t.className = 'cp-toast' + (type ? ' ' + type : '') + ' show';
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function openSidebar() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('overlay').classList.add('show');
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('overlay').classList.remove('show');
+}
+
+function siteStatusInfo(status) {
+  const map = {
+    active:         { label: '활성', color: 'var(--success)', cls: 'active' },
+    pending:        { label: '대기 중', color: 'var(--warning)', cls: 'pending' },
+    init:           { label: '초기화', color: 'var(--warning)', cls: 'pending' },
+    provisioning:   { label: '구성 중', color: 'var(--accent)', cls: 'pending' },
+    installing_wp:  { label: 'WP 설치 중', color: 'var(--accent)', cls: 'pending' },
+    failed:         { label: '실패', color: 'var(--error)', cls: 'failed' },
+    suspended:      { label: '정지됨', color: 'var(--muted2)', cls: 'suspended' },
+  };
+  return map[status] || { label: status, color: 'var(--muted2)', cls: 'suspended' };
+}
+
+async function init() {
   try {
-    const user=await CP.requireAuth();
-    if(!user)return;
-    document.getElementById('sbAvatar').textContent=user.name[0].toUpperCase();
-    document.getElementById('sbName').textContent=user.name;
-    document.getElementById('sbEmail').textContent=user.email;
-    document.getElementById('welcome').textContent=`안녕하세요, ${user.name}님!`;
-    document.getElementById('sPlan').textContent=CP.planInfo(user.plan).name;
-    if(user.role==='admin'||user.role==='manager') document.getElementById('adminMenu').style.display='';
-    if(!user.has_cf_api) document.getElementById('cfApiWarn').style.display='flex';
+    const user = await CP.requireAuth();
+    if (!user) return;
+
+    document.getElementById('sbAvatar').textContent = user.name?.[0]?.toUpperCase() || '?';
+    document.getElementById('sbName').textContent = user.name || '—';
+    document.getElementById('sbEmail').textContent = user.email || '—';
+    document.getElementById('welcome').textContent = `안녕하세요, ${user.name}님!`;
+    document.getElementById('sPlan').textContent = CP.planInfo ? CP.planInfo(user.plan).name : (user.plan || '—');
+
+    if (user.role === 'admin' || user.role === 'manager') {
+      document.getElementById('adminMenu').style.display = '';
+    }
+    if (!user.has_cf_api) {
+      document.getElementById('cfApiWarn').style.display = 'flex';
+    }
 
     // 공지사항
     try {
-      const nd=await CP.get('/admin/notices?active=1');
-      if(nd.ok && nd.notices?.length){
-        document.getElementById('noticeArea').innerHTML=nd.notices.map(n=>
-          `<div class="notice-bar ${n.type}"><span>📢</span><span><strong>${CP.escHtml(n.title)}</strong> — ${CP.escHtml(n.content)}</span></div>`
+      const nd = await CP.get('/admin/notices?active=1');
+      if (nd.ok && nd.notices?.length) {
+        document.getElementById('noticeArea').innerHTML = nd.notices.map(n =>
+          `<div class="notice-bar ${n.type}" style="margin-bottom:10px">
+            <span>📢</span>
+            <span><strong>${CP.escHtml(n.title)}</strong> — ${CP.escHtml(n.content)}</span>
+          </div>`
         ).join('');
       }
-    } catch(e) {
-      console.error('공지사항 로드 실패:', e);
-    }
-    
+    } catch {}
+
     await loadSites();
-  } catch(e) {
+  } catch (e) {
     console.error('초기화 오류:', e);
-    showToast('초기화 중 오류가 발생했습니다.','error');
+    showToast('초기화 중 오류가 발생했습니다.', 'error');
   }
 }
 
-async function loadSites(){
+async function loadSites() {
   try {
-    const d=await CP.getSites();
-    if(!d || !d.ok){
-      console.error('사이트 로딩 실패:', d);
-      const el=document.getElementById('sitesList');
-      el.innerHTML=`<div class="empty-state" style="color:var(--error)"><div style="width:56px;height:56px;background:rgba(239,68,68,.1);border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div><p style="font-weight:600;margin-bottom:6px;color:var(--error)">사이트 로딩 실패</p><p style="font-size:.83rem;margin-bottom:18px">${CP.escHtml(d?.error || '서버에서 사이트 목록을 가져올 수 없습니다.')}</p><button class="btn btn-primary btn-sm" onclick="loadSites()">다시 시도</button></div>`;
-      showToast(d?.error || '사이트 로딩 실패','error');
+    const d = await CP.getSites();
+    if (!d?.ok) {
+      document.getElementById('sitesList').innerHTML = `
+        <div class="section-card">
+          <div class="empty-state">
+            <div class="empty-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M15 9l-6 6M9 9l6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </div>
+            <h3 style="color:var(--error)">사이트 로딩 실패</h3>
+            <p>${CP.escHtml(d?.error || '서버에서 목록을 가져올 수 없습니다.')}</p>
+            <button class="btn btn-primary btn-sm" onclick="loadSites()">다시 시도</button>
+          </div>
+        </div>`;
       return;
     }
-    
-    const sites=d.sites||[];
-    document.getElementById('sSites').textContent=sites.length;
-    document.getElementById('sActive').textContent=sites.filter(s=>s.status==='active').length;
 
-    const el=document.getElementById('sitesList');
-    if(!sites.length){
-      el.innerHTML=`<div class="empty-state"><div style="width:56px;height:56px;background:var(--surface2);border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px"><svg width="26" height="26" viewBox="0 0 24 24" fill="none"><rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 21h8M12 17v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div><p style="font-weight:600;margin-bottom:6px">사이트 없음</p><p style="font-size:.83rem;margin-bottom:18px">지금 바로 무료 CloudPress CMS 사이트를 구축하세요.</p><a href="/create.html" class="btn btn-primary btn-sm">첫 사이트 만들기</a></div>`;
+    const sites = d.sites || [];
+    const active = sites.filter(s => s.status === 'active').length;
+    const pending = sites.filter(s => ['pending','init','provisioning','installing_wp'].includes(s.status)).length;
+    document.getElementById('sSites').textContent = sites.length;
+    document.getElementById('sActive').textContent = active;
+    document.getElementById('sPending').textContent = pending;
+
+    if (!sites.length) {
+      document.getElementById('sitesList').innerHTML = `
+        <div class="section-card">
+          <div class="empty-state">
+            <div class="empty-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 21h8M12 17v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </div>
+            <h3>사이트 없음</h3>
+            <p>아직 생성된 WordPress 사이트가 없습니다.<br>지금 바로 구축을 시작하세요!</p>
+            <a href="/create.html" class="btn btn-primary">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              첫 사이트 만들기
+            </a>
+          </div>
+        </div>`;
       return;
     }
-    el.innerHTML=sites.map(s=>{
-      const st=CP.statusBadge(s.status);
-      const url=s.wp_url||(s.custom_domain?`https://${s.custom_domain}`:'—');
-      const adminUrl=s.wp_admin_url||'';
-      const ver=s.wp_version?`<span class="ver-badge">v${CP.escHtml(s.wp_version)}</span>`:'';
-      return `<div class="site-card">
-        <div class="site-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M14 2L26 8V20L14 26L2 20V8L14 2Z" stroke="#f97316" stroke-width="1.5" viewBox="0 0 28 28"/><rect x="2" y="3" width="20" height="14" rx="2" stroke="#f97316" stroke-width="1.5"/><path d="M8 21h8M12 17v4" stroke="#f97316" stroke-width="1.5" stroke-linecap="round"/></svg></div>
-        <div class="site-info">
-          <div class="site-name">${CP.escHtml(s.name)}${ver}</div>
-          <div class="site-url">${CP.escHtml(url)}</div>
-          <div style="margin-top:4px"><span class="badge" style="background:${st.color}18;color:${st.color}"><span class="status-dot" style="background:${st.color}"></span>${st.label}</span><span style="font-size:.72rem;color:var(--muted);margin-left:8px">${CP.formatDate(s.created_at)}</span></div>
-        </div>
-        <div class="site-actions">
-          ${s.status==='active'?`<a href="${CP.escHtml(adminUrl)}" target="_blank" class="btn-icon" title="CMS 관리자"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="15 3 21 3 21 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="10" y1="14" x2="21" y2="3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></a>`:''}
-          <a href="/site.html?id=${s.id}" class="btn-icon" title="관리"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="currentColor" stroke-width="1.5"/></svg></a>
-          <button class="btn-icon danger" onclick="openDel('${s.id}','${CP.escHtml(s.name)}')" title="삭제"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><polyline points="3 6 5 6 21 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M19 6l-1 14H6L5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M10 11v6M14 11v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
-        </div>
+
+    document.getElementById('sitesList').innerHTML = `
+      <div class="sites-grid">
+        ${sites.map(s => {
+          const st = siteStatusInfo(s.status);
+          const domain = s.primary_domain || '—';
+          const adminUrl = s.wp_admin_url || (s.primary_domain ? `https://${s.primary_domain}/wp-admin/` : '#');
+          const isProvisioning = ['pending','init','provisioning','installing_wp'].includes(s.status);
+          return `<div class="site-card" id="sc-${s.id}">
+            <div class="site-status">
+              <span class="status-dot ${st.cls}"></span>
+              <span class="status-lbl">${st.label}</span>
+              ${isProvisioning ? '<span style="font-size:.72rem;color:var(--accent);margin-left:4px">● 구성 중...</span>' : ''}
+            </div>
+            <div class="site-name">${CP.escHtml(s.name)}</div>
+            <div class="site-url">${CP.escHtml(domain)}</div>
+            <div class="site-meta">
+              <span class="smeta">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" stroke-width="1.5"/></svg>
+                ${(s.plan || 'free').toUpperCase()}
+              </span>
+              <span class="smeta">${CP.formatDate ? CP.formatDate(s.created_at) : (s.created_at||'').slice(0,10)}</span>
+            </div>
+            <div class="site-actions">
+              ${s.status === 'active' ? `<a href="${CP.escHtml(adminUrl)}" target="_blank" class="btn btn-ghost btn-sm">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="15 3 21 3 21 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="10" y1="14" x2="21" y2="3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                WP 관리자
+              </a>` : ''}
+              <a href="/site.html?id=${s.id}" class="btn btn-ghost btn-sm">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="currentColor" stroke-width="1.5"/></svg>
+                관리
+              </a>
+              <button class="btn btn-danger btn-sm" onclick="openDel('${s.id}','${CP.escHtml(s.name)}')">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><polyline points="3 6 5 6 21 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M19 6l-1 14H6L5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                삭제
+              </button>
+            </div>
+          </div>`;
+        }).join('')}
       </div>`;
-    }).join('');
 
-    sites.filter(s=>['provisioning','installing_wp','pending','init','starting'].includes(s.status)).forEach(s=>pollStatus(s.id));
-  } catch(e) {
+    sites.filter(s => ['provisioning','installing_wp','pending','init'].includes(s.status))
+      .forEach(s => pollStatus(s.id));
+  } catch (e) {
     console.error('사이트 로딩 오류:', e);
-    const el=document.getElementById('sitesList');
-    el.innerHTML=`<div class="empty-state" style="color:var(--error)"><p style="font-weight:600;margin-bottom:6px;color:var(--error)">오류 발생</p><p style="font-size:.83rem;margin-bottom:18px">사이트 목록을 불러올 수 없습니다. 잠시 후 다시 시도해주세요.</p><button class="btn btn-primary btn-sm" onclick="loadSites()">다시 시도</button></div>`;
-    showToast('사이트 로딩 중 오류 발생','error');
+    showToast('사이트 목록 로딩 실패', 'error');
   }
 }
 
-async function pollStatus(id){
-  const poll=async()=>{
+async function pollStatus(id) {
+  const poll = async () => {
     try {
-      const d=await CP.getSite(id);
-      if(!d.ok)return;
-      if(d.site.status==='active'||d.site.status==='failed'){
+      const d = await CP.getSite(id);
+      if (!d.ok) return;
+      if (d.site.status === 'active' || d.site.status === 'failed') {
         await loadSites();
-        if(d.site.status==='active') showToast('CMS 구축 완료! 🎉','success');
-        else showToast('구축 중 오류 발생','error');
-      } else setTimeout(poll,5000);
-    } catch(e) {
-      console.error('상태 폴링 오류:', e);
-    }
+        if (d.site.status === 'active') showToast('WordPress 구축 완료! 🎉', 'success');
+        else showToast('구축 중 오류 발생', 'error');
+      } else {
+        setTimeout(poll, 5000);
+      }
+    } catch {}
   };
-  setTimeout(poll,5000);
+  setTimeout(poll, 5000);
 }
 
-function openDel(id,name){
-  delId=id;
-  document.getElementById('delMsg').textContent=`"${name}" 사이트를 삭제하시겠습니까? CMS 데이터(D1 데이터베이스, KV 스토리지, DNS 레코드)가 모두 삭제됩니다.`;
+function openDel(id, name) {
+  delId = id;
+  document.getElementById('delMsg').textContent = `"${name}" 사이트를 삭제하시겠습니까?`;
   document.getElementById('delModal').classList.add('open');
 }
 
-async function confirmDel(){
-  if(!delId)return;
-  document.getElementById('delConfirmBtn').textContent='삭제 중...';
-  document.getElementById('delConfirmBtn').disabled=true;
+async function confirmDel() {
+  if (!delId) return;
+  const btn = document.getElementById('delConfirmBtn');
+  btn.textContent = '삭제 중...';
+  btn.disabled = true;
   try {
-    const r=await CP.deleteSite(delId);
+    const r = await CP.deleteSite(delId);
     document.getElementById('delModal').classList.remove('open');
-    delId=null;
-    document.getElementById('delConfirmBtn').textContent='삭제';
-    document.getElementById('delConfirmBtn').disabled=false;
-    if(r.ok){
-      showToast('삭제되었습니다.','success');
-      await loadSites();
-    }
-    else showToast(r.error||'삭제 실패','error');
-  } catch(e) {
-    console.error('삭제 오류:', e);
+    delId = null;
+    btn.textContent = '삭제';
+    btn.disabled = false;
+    if (r.ok) { showToast('삭제되었습니다.', 'success'); await loadSites(); }
+    else showToast(r.error || '삭제 실패', 'error');
+  } catch {
     document.getElementById('delModal').classList.remove('open');
-    delId=null;
-    document.getElementById('delConfirmBtn').textContent='삭제';
-    document.getElementById('delConfirmBtn').disabled=false;
-    showToast('삭제 중 오류 발생','error');
+    delId = null;
+    btn.textContent = '삭제';
+    btn.disabled = false;
+    showToast('삭제 중 오류 발생', 'error');
   }
 }
 
