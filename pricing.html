@@ -1,172 +1,219 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=5.0"/>
-  <title>플랜 안내 — CloudPress</title>
-  <meta name="description" content="CloudPress 플랜 안내. 관리자가 사용자별 플랜을 직접 설정합니다."/>
+  <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>요금제 — CloudPress</title>
+  <meta name="description" content="CloudPress 요금제. 합리적인 가격으로 Cloudflare 기반 고성능 호스팅을 시작하세요."/>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="style.css"/>
-  <style>
-    .page-hero{padding:120px 0 60px;text-align:center;background:linear-gradient(135deg,#0a0a0f 0%,#0f0f1a 100%)}
-    .page-hero h1{font-family:'Inter',sans-serif;font-size:clamp(2rem,5vw,3.2rem);font-weight:800;color:#fff;margin-bottom:16px}
-    .page-hero p{color:rgba(255,255,255,.6);font-size:1.05rem;max-width:560px;margin:0 auto}
-    .plan-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px;margin-top:56px}
-    .plan-card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:32px;transition:.2s}
-    .plan-card.featured{border-color:rgba(249,115,22,.4);background:rgba(249,115,22,.04)}
-    .plan-card.enterprise{border-color:rgba(99,102,241,.4);background:rgba(99,102,241,.04)}
-    .plan-name{font-family:'Inter',sans-serif;font-size:1.25rem;font-weight:800;color:#fff;margin-bottom:6px}
-    .plan-tag{display:inline-block;padding:2px 10px;border-radius:20px;font-size:.72rem;font-weight:700;margin-bottom:16px}
-    .tag-free{background:rgba(255,255,255,.08);color:rgba(255,255,255,.6)}
-    .tag-pro{background:rgba(249,115,22,.15);color:#f97316}
-    .tag-ent{background:rgba(99,102,241,.15);color:#818cf8}
-    .plan-desc{color:rgba(255,255,255,.55);font-size:.88rem;line-height:1.6;margin-bottom:24px}
-    .plan-features{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:10px}
-    .plan-features li{display:flex;align-items:flex-start;gap:10px;font-size:.85rem;color:rgba(255,255,255,.75)}
-    .plan-features li .ck{color:#22c55e;font-size:.9rem;flex-shrink:0;margin-top:1px}
-    .plan-features li .pk{color:#f97316;font-size:.9rem;flex-shrink:0;margin-top:1px}
-    .admin-notice{background:rgba(249,115,22,.07);border:1px solid rgba(249,115,22,.2);border-radius:12px;padding:24px;text-align:center;margin-top:48px;color:rgba(255,255,255,.7);font-size:.92rem;line-height:1.7}
-    .admin-notice strong{color:#f97316}
-    .section-title{font-family:'Inter',sans-serif;font-size:1.6rem;font-weight:800;color:#fff;text-align:center;margin-bottom:8px}
-    .section-sub{text-align:center;color:rgba(255,255,255,.5);font-size:.92rem;margin-bottom:0}
-    @media(max-width:600px){.plan-grid{grid-template-columns:1fr}}
-  </style>
 </head>
 <body>
-  <div class="noise"></div>
-  <header class="header" id="header">
-    <div class="container header-inner">
-      <a href="/" class="logo">
-        <svg width="26" height="26" viewBox="0 0 28 28" fill="none"><path d="M14 2L26 8V20L14 26L2 20V8L14 2Z" stroke="currentColor" stroke-width="1.5"/><path d="M14 8L20 11V17L14 20L8 17V11L14 8Z" fill="currentColor" opacity="0.5"/><circle cx="14" cy="14" r="2.2" fill="currentColor"/></svg>
-        CloudPress
-      </a>
-      <nav class="nav" id="nav">
-        <a href="/features.html">기능</a>
-        <a href="/pricing.html" style="color:#f97316">플랜</a>
-        <a href="/faq.html">FAQ</a>
-      </nav>
-      <div class="header-actions">
-        <a href="/auth.html" class="btn ghost sm">로그인</a>
-        <a href="/auth.html?tab=signup" class="btn primary sm">시작하기</a>
+
+<header class="header" id="header">
+  <div class="container header-inner">
+    <a href="/" class="logo">
+      <div class="logo-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
       </div>
-      <button class="burger" id="burger" aria-label="메뉴"><span></span><span></span><span></span></button>
+      CloudPress
+    </a>
+    <nav class="nav" id="nav">
+      <a href="/features.html">기능</a>
+      <a href="/pricing.html" class="active">요금제</a>
+      <a href="/faq.html">FAQ</a>
+      <a href="/contact.html">문의</a>
+    </nav>
+    <div class="header-actions">
+      <a href="/auth.html" class="btn ghost sm">로그인</a>
+      <a href="/auth.html?tab=signup" class="btn primary sm">무료로 시작하기</a>
     </div>
-  </header>
+    <button class="burger" id="burger" aria-label="메뉴"><span></span><span></span><span></span></button>
+  </div>
+</header>
 
-  <section class="page-hero">
-    <div class="container">
-      <h1>CloudPress 플랜</h1>
-      <p>호스팅 생성 전에 플랜을 선결제하고, 결제 검증 완료 후 생성이 진행됩니다.</p>
+<section class="page-hero">
+  <div class="container page-hero-inner">
+    <div class="breadcrumb"><a href="/">홈</a> › 요금제</div>
+    <h1>합리적인 가격, 강력한 성능</h1>
+    <p>모든 플랜에 무제한 트래픽, DDoS 방어, 글로벌 CDN이 포함됩니다.<br>신용카드 없이 3일 무료 체험 가능.</p>
+  </div>
+</section>
+
+<!-- 실시간 상품 -->
+<section class="section" style="padding-bottom:0">
+  <div class="container">
+    <div class="section-header" style="margin-bottom:32px">
+      <div class="section-label">실시간 상품</div>
+      <h2 class="section-title">현재 판매 중인 플랜</h2>
     </div>
-  </section>
+    <div id="liveProducts"></div>
+  </div>
+</section>
 
-  <section style="padding:40px 0;background:#0a0a0f;border-top:1px solid rgba(255,255,255,.08)">
-    <div class="container">
-      <div class="section-title">실시간 결제 상품</div>
-      <div class="section-sub" style="margin-bottom:18px">관리자 상품 설정과 동기화됩니다</div>
-      <div id="liveProducts" class="plan-grid"></div>
-    </div>
-  </section>
-
-  <section style="padding:80px 0;background:#0a0a0f">
-    <div class="container">
-      <div class="section-title">플랜별 기능 비교</div>
-      <div class="section-sub" style="margin-bottom:48px">결제 완료 후 해당 플랜으로 호스팅을 생성할 수 있습니다</div>
-
-      <div class="plan-grid">
-        <!-- 스타터 -->
-        <div class="plan-card">
-          <div class="plan-name">스타터</div>
-          <span class="plan-tag tag-free">기본 플랜</span>
-          <p class="plan-desc">개인 블로그, 소규모 사이트에 적합한 기본 호스팅.</p>
-          <ul class="plan-features">
-            <li><span class="ck">✓</span> Cloudflare Workers 호스팅</li>
-            <li><span class="ck">✓</span> CloudPress CMS 전체 기능</li>
-            <li><span class="ck">✓</span> D1 데이터베이스 + KV 스토리지</li>
-            <li><span class="ck">✓</span> 기본 SSL 자동화</li>
-            <li><span class="ck">✓</span> 글로벌 CDN (Cloudflare Edge)</li>
-            <li><span class="ck">✓</span> 커스텀 도메인 1개</li>
-            <li><span class="ck">✓</span> 기본 DDoS 방어</li>
-          </ul>
-          <a href="/payment.html?plan=starter" class="btn primary sm" style="margin-top:14px">Starter 결제</a>
+<!-- 요금 비교 -->
+<section class="section">
+  <div class="container">
+    <div class="pricing-grid">
+      <!-- 스타터 -->
+      <div class="pricing-card reveal">
+        <div class="pricing-name">스타터</div>
+        <div class="pricing-price">
+          <span class="currency">₩</span>
+          <span class="amount">9,900</span>
+          <span class="period">/월</span>
         </div>
-
-        <!-- 프로 -->
-        <div class="plan-card featured">
-          <div class="plan-name">프로</div>
-          <span class="plan-tag tag-pro">⚡ 추천</span>
-          <p class="plan-desc">비즈니스 사이트·쇼핑몰을 위한 고성능 보안 강화 플랜.</p>
-          <ul class="plan-features">
-            <li><span class="ck">✓</span> 스타터 전체 기능 포함</li>
-            <li><span class="pk">★</span> <strong style="color:#f97316">Cloudflare WAF</strong> — L7 방화벽 완전 지원</li>
-            <li><span class="pk">★</span> <strong style="color:#f97316">DDoS 완벽 자동 방어</strong> — 무제한 트래픽 자동 원천 차단</li>
-            <li><span class="pk">★</span> <strong style="color:#f97316">악성 트래픽 자동 차단</strong> — Bot/스캐너 실시간 탐지</li>
-            <li><span class="pk">★</span> <strong style="color:#f97316">속도 극대화</strong> — 엣지 캐싱 우선 처리 큐</li>
-            <li><span class="pk">★</span> <strong style="color:#f97316">편의성 극대화</strong> — 원클릭 배포, 자동 최적화</li>
-            <li><span class="ck">✓</span> 커스텀 도메인 3개</li>
-            <li><span class="ck">✓</span> 우선 지원</li>
-          </ul>
-          <a href="/payment.html?plan=pro" class="btn primary sm" style="margin-top:14px">Pro 결제</a>
-        </div>
-
-        <!-- 엔터프라이즈 -->
-        <div class="plan-card enterprise">
-          <div class="plan-name">엔터프라이즈</div>
-          <span class="plan-tag tag-ent">🏢 대규모</span>
-          <p class="plan-desc">멀티 사이트 운영, 대용량 트래픽, 완전 자동화가 필요한 팀을 위한 플랜.</p>
-          <ul class="plan-features">
-            <li><span class="ck">✓</span> 프로 전체 기능 포함</li>
-            <li><span class="pk">★</span> <strong style="color:#818cf8">멀티 도메인 지원</strong> — 하나의 CMS에서 여러 사이트 독립 운영</li>
-            <li><span class="pk">★</span> <strong style="color:#818cf8">사이트별 개별 D1 + KV</strong> — 완전 격리된 데이터베이스</li>
-            <li><span class="pk">★</span> <strong style="color:#818cf8">자동 캐싱 지원</strong> — 페이지·API 전체 엣지 캐시 자동 관리</li>
-            <li><span class="pk">★</span> <strong style="color:#818cf8">고급 WAF 룰셋</strong> — 커스텀 방화벽 규칙 설정</li>
-            <li><span class="pk">★</span> <strong style="color:#818cf8">전용 지원 채널</strong> — 슬랙/이메일 전담 대응</li>
-            <li><span class="ck">✓</span> 커스텀 도메인 무제한</li>
-          </ul>
-          <a href="/payment.html?plan=enterprise" class="btn primary sm" style="margin-top:14px">Enterprise 결제</a>
-        </div>
+        <p class="pricing-desc">개인 블로그, 포트폴리오, 소규모 사이트에 적합합니다.</p>
+        <a href="/payment.html?plan=starter" class="btn outline full" style="margin-bottom:24px">스타터 시작하기</a>
+        <div class="pricing-divider"></div>
+        <ul class="pricing-features">
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>Cloudflare Workers 호스팅</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>CloudPress CMS 전체 기능</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>D1 데이터베이스 + KV 스토리지</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>글로벌 CDN (300개+ 엣지)</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>무제한 트래픽</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>기본 DDoS 방어</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>SSL 자동 발급</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>커스텀 도메인 1개</li>
+        </ul>
       </div>
 
-      <div class="admin-notice">
-        <strong>🔒 결제 보안 안내</strong><br>
-        모든 결제는 서버에서 토스 승인 검증을 거친 뒤에만 유효 처리됩니다.<br>
-        결제 완료 후 자동으로 사이트 생성 단계로 이동합니다.
+      <!-- 프로 -->
+      <div class="pricing-card featured reveal">
+        <div class="pricing-popular">가장 인기</div>
+        <div class="pricing-name">프로</div>
+        <div class="pricing-price">
+          <span class="currency">₩</span>
+          <span class="amount">29,900</span>
+          <span class="period">/월</span>
+        </div>
+        <p class="pricing-desc">성장하는 비즈니스, 쇼핑몰, 전문 블로그를 위한 플랜입니다.</p>
+        <a href="/payment.html?plan=pro" class="btn primary full" style="margin-bottom:24px">프로 시작하기</a>
+        <div class="pricing-divider"></div>
+        <ul class="pricing-features">
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>스타터 모든 기능 포함</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><strong>Cloudflare WAF</strong> — L7 방화벽 완전 지원</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><strong>고급 DDoS 자동 방어</strong> — 무제한 자동 차단</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>Bot/스캐너 실시간 탐지·차단</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>엣지 캐싱 우선 처리 큐</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>원클릭 배포, 자동 최적화</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>커스텀 도메인 3개</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>우선 기술 지원</li>
+        </ul>
+      </div>
+
+      <!-- 엔터프라이즈 -->
+      <div class="pricing-card reveal">
+        <div class="pricing-name">엔터프라이즈</div>
+        <div class="pricing-price">
+          <span class="currency">₩</span>
+          <span class="amount">99,000</span>
+          <span class="period">/월</span>
+        </div>
+        <p class="pricing-desc">멀티 사이트 운영, 대용량 트래픽, 완전 자동화가 필요한 팀.</p>
+        <a href="/contact.html" class="btn outline full" style="margin-bottom:24px">영업팀 문의</a>
+        <div class="pricing-divider"></div>
+        <ul class="pricing-features">
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>프로 모든 기능 포함</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>멀티 도메인 독립 운영</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>사이트별 개별 D1 + KV</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>고급 WAF 커스텀 룰셋</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>전용 지원 채널 (슬랙/이메일)</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>커스텀 도메인 무제한</li>
+          <li class="pricing-feature"><span class="pricing-check"><svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>SLA 99.99% 보장</li>
+        </ul>
       </div>
     </div>
-  </section>
 
-  <footer class="footer">
-    <div class="container footer-inner">
-      <span class="footer-copy">© 2026 CloudPress</span>
-      <nav class="footer-nav">
-        <a href="/features.html">기능</a>
-        <a href="/faq.html">FAQ</a>
+    <!-- 결제 보안 안내 -->
+    <div class="alert info" style="max-width:700px;margin:40px auto 0;text-align:center;display:block">
+      <strong>🔒 결제 보안 안내</strong><br>
+      모든 결제는 서버에서 토스 승인 검증을 거친 뒤에만 유효 처리됩니다. 결제 완료 후 자동으로 사이트 생성 단계로 이동합니다.
+    </div>
+  </div>
+</section>
+
+<!-- FAQ 미니 -->
+<section class="section" style="background:var(--bg2)">
+  <div class="container" style="max-width:720px">
+    <div class="section-header">
+      <div class="section-label">자주 묻는 질문</div>
+      <h2 class="section-title">요금제 FAQ</h2>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:8px">언제든지 플랜을 변경할 수 있나요?</div>
+        <p style="font-size:0.9rem;color:var(--t2)">네, 언제든지 업·다운그레이드 가능합니다. 업그레이드는 즉시 적용되며, 잔여 금액은 크레딧으로 제공됩니다.</p>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:8px">트래픽 한도가 있나요?</div>
+        <p style="font-size:0.9rem;color:var(--t2)">Cloudflare Workers 플랜 기반으로 무제한 트래픽을 제공합니다. 트래픽 초과 요금이 없습니다.</p>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:8px">환불 정책은 어떻게 되나요?</div>
+        <p style="font-size:0.9rem;color:var(--t2)">구독 시작 후 7일 이내에 요청하시면 전액 환불해드립니다. 이후에는 남은 기간에 대한 비례 환불이 적용됩니다.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section">
+  <div class="container">
+    <div class="cta-inner">
+      <h2>지금 바로 시작하세요</h2>
+      <p>신용카드 없이 3일 무료 체험. 언제든지 취소 가능합니다.</p>
+      <div class="cta-btns">
+        <a href="/auth.html?tab=signup" class="btn white lg">무료로 시작하기</a>
+        <a href="/contact.html" class="btn outline-white lg">영업팀 문의</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-bottom">
+      <span class="footer-copy">© 2026 CloudPress. All rights reserved.</span>
+      <div class="footer-bottom-links">
+        <a href="/sla.html">이용약관</a>
+        <a href="/sla.html">개인정보처리방침</a>
         <a href="/contact.html">문의</a>
-      </nav>
-    </div>
-  </footer>
-  <script src="app.js"></script>
-  <script src="script.js"></script>
-  <script>
-  (async function(){
-    const wrap = document.getElementById('liveProducts');
-    if (!wrap) return;
-    const r = await fetch('/api/payments/products');
-    const d = await r.json().catch(() => ({ ok:false }));
-    if (!d.ok || !(d.products||[]).length) {
-      wrap.innerHTML = '<div class="admin-notice">현재 결제 가능한 상품이 없습니다.</div>';
-      return;
-    }
-    wrap.innerHTML = d.products.map((p) => `
-      <div class="plan-card">
-        <div class="plan-name">${CP.escHtml(p.name)}</div>
-        <p class="plan-desc">${CP.escHtml(p.description || '호스팅 결제 상품')}</p>
-        <div style="font-size:1.2rem;font-weight:800;margin-bottom:12px">${Number(p.price||0).toLocaleString('ko-KR')}원</div>
-        <a href="/payment.html" class="btn primary sm">이 상품 결제</a>
       </div>
-    `).join('');
-  })();
-  </script>
+    </div>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+<script src="script.js"></script>
+<script>
+const burger = document.getElementById('burger');
+const nav = document.getElementById('nav');
+if (burger && nav) burger.addEventListener('click', () => nav.classList.toggle('open'));
+
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); observer.unobserve(e.target); } });
+}, { threshold: 0.1 });
+document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+(async function(){
+  const wrap = document.getElementById('liveProducts');
+  if (!wrap) return;
+  try {
+    const r = await fetch('/api/payments/products');
+    const d = await r.json();
+    if (!d.ok || !(d.products||[]).length) { wrap.innerHTML = ''; return; }
+    wrap.innerHTML = '<div class="pricing-grid" style="margin-bottom:40px">' + d.products.map(p => `
+      <div class="pricing-card">
+        <div class="pricing-name">${CP.escHtml(p.name)}</div>
+        <div class="pricing-price"><span class="amount">${Number(p.price||0).toLocaleString('ko-KR')}</span><span class="period">원</span></div>
+        <p class="pricing-desc">${CP.escHtml(p.description || '호스팅 결제 상품')}</p>
+        <a href="/payment.html" class="btn primary full">이 플랜 결제</a>
+      </div>
+    `).join('') + '</div>';
+  } catch(e) { wrap.innerHTML = ''; }
+})();
+</script>
 </body>
 </html>
