@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>WordPress 사이트 구축 — CloudPress</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="dashboard.css"/>
   <link rel="stylesheet" href="create.css"/>
 </head>
@@ -66,6 +66,12 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style="flex-shrink:0;color:#ef4444"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" stroke="currentColor" stroke-width="1.5"/><line x1="12" y1="9" x2="12" y2="13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="12" y1="17" x2="12.01" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         <span style="flex:1;font-size:.88rem;color:var(--text)"><strong>Cloudflare API 키가 등록되지 않았습니다.</strong> 사이트 생성 전에 <a href="/account.html" style="color:var(--accent);text-decoration:underline">내 계정</a>에서 Global API Key를 먼저 등록해주세요.</span>
         <a href="/account.html" style="background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.3);padding:6px 14px;border-radius:6px;font-size:.82rem;font-weight:600;white-space:nowrap;text-decoration:none">API 키 등록 →</a>
+      </div>
+
+      <!-- 관리자/매니저 결제 면제 안내 배너 -->
+      <div id="adminBypassBanner" style="display:none;background:rgba(26,158,90,.06);border:1px solid rgba(26,158,90,.2);border-radius:10px;padding:12px 16px;margin-bottom:18px;align-items:center;gap:10px;font-size:.85rem;color:#1a9e5a">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="flex-shrink:0"><path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <strong>관리자/매니저 권한:</strong>&nbsp;결제 없이 사이트를 생성할 수 있습니다.
       </div>
 
       <div class="wizard">
@@ -349,7 +355,7 @@
 /* ── 상태 ── */
 let currentSiteId = null;
 let pollInterval  = null;
-const WD = { siteName: '', adminLogin: '', personalDomain: '', sitePlan: '', paidOrderId: '' };
+const WD = { siteName: '', adminLogin: '', personalDomain: '', sitePlan: '', paidOrderId: '', isPrivileged: false };
 
 /* ── 스텝 이동 ── */
 function goStep(n) {
@@ -378,7 +384,8 @@ function goToStep2() {
   if (!adminLogin || adminLogin.length < 3)  { errEl.textContent = '관리자 아이디는 3자 이상 입력해주세요.'; errEl.style.display = ''; return; }
   if (!/^[a-zA-Z0-9_]+$/.test(adminLogin))  { errEl.textContent = '관리자 아이디는 영문/숫자/언더바만 사용 가능합니다.'; errEl.style.display = ''; return; }
   if (!sitePlan)                            { errEl.textContent = '호스팅 플랜을 선택해주세요.';               errEl.style.display = ''; return; }
-  if (!WD.paidOrderId)                      { errEl.textContent = '결제 완료 정보가 없습니다. 요금제 페이지에서 먼저 결제해주세요.'; errEl.style.display = ''; return; }
+  // 관리자/매니저는 결제 없이 사이트 생성 가능
+  if (!WD.isPrivileged && !WD.paidOrderId) { errEl.textContent = '결제 완료 정보가 없습니다. 요금제 페이지에서 먼저 결제해주세요.'; errEl.style.display = ''; return; }
   WD.siteName   = siteName;
   WD.adminLogin = adminLogin;
   WD.sitePlan   = sitePlan;
@@ -791,6 +798,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (u?.role === 'admin') {
       const el = document.getElementById('adminMenu');
       if (el) el.style.display = '';
+    }
+    // 관리자/매니저는 결제 없이 사이트 생성 가능
+    if (u?.role === 'admin' || u?.role === 'manager') {
+      WD.isPrivileged = true;
+      WD.paidOrderId = 'ADMIN_BYPASS';
+      const bypassBanner = document.getElementById('adminBypassBanner');
+      if (bypassBanner) bypassBanner.style.display = '';
     }
     if (u) {
       const setEl = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
